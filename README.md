@@ -2,7 +2,7 @@
 What is Memintel?
 Memintel is a deterministic compiler for AI-driven decisions. You describe what you want to monitor in plain language. Memintel's LLM interprets that intent within a strict guardrails policy, generates a fully specified decision definition, and compiles it into an immutable, versioned execution graph. From that point, every evaluation is deterministic — the same data always produces the same decision, with a full computation trace. When decision quality needs to change, users give structured feedback. Calibration recommends adjusted parameters. A new version is created. Nothing changes automatically. The result is AI that is expressive to define, deterministic to run, and safe to govern — which is precisely what production agentic systems need.
 
-Problem that Memintel solves
+Problem that Memintel solves 
 Current agentic frameworks struggle with a specific class of problems that Memintel addresses directly:
 Condition specification. 
 Agents today typically decide when to act using the LLM's own judgment at runtime — "does this situation warrant sending an alert?" Memintel separates that question into two parts: the LLM defines what counts as a situation worth acting on at authoring time, and a deterministic evaluator answers is this situation one of those at runtime. That's a much stronger foundation for reliable automation.
