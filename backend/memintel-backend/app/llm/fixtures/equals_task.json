@@ -1,0 +1,54 @@
+{
+  "concept": {
+    "concept_id": "org.risk_category",
+    "version": "1.0",
+    "namespace": "org",
+    "output_type": "categorical",
+    "labels": ["low_risk", "medium_risk", "high_risk"],
+    "description": "Risk category label produced by the upstream ML classifier.",
+    "primitives": {
+      "risk_category_label": {
+        "type": "categorical",
+        "missing_data_policy": "zero",
+        "labels": ["low_risk", "medium_risk", "high_risk"]
+      }
+    },
+    "features": {
+      "risk_label": {
+        "op": "passthrough",
+        "inputs": { "input": "risk_category_label" },
+        "params": {}
+      }
+    },
+    "output_feature": "risk_label"
+  },
+  "condition": {
+    "condition_id": "org.is_high_risk",
+    "version": "1.0",
+    "concept_id": "org.risk_category",
+    "concept_version": "1.0",
+    "namespace": "org",
+    "strategy": {
+      "type": "equals",
+      "params": {
+        "value": "high_risk",
+        "labels": ["low_risk", "medium_risk", "high_risk"]
+      }
+    }
+  },
+  "action": {
+    "action_id": "org.trigger_intervention",
+    "version": "1.0",
+    "namespace": "org",
+    "config": {
+      "type": "notification",
+      "channel": "risk-management",
+      "message_template": "Entity {entity} classified as high_risk. Intervention workflow initiated."
+    },
+    "trigger": {
+      "fire_on": "true",
+      "condition_id": "org.is_high_risk",
+      "condition_version": "1.0"
+    }
+  }
+}

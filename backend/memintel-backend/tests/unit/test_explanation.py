@@ -1,0 +1,546 @@
+"""
+tests/unit/test_explanation.py
+──────────────────────────────────────────────────────────────────────────────
+Unit tests for ExplanationService.explain_decision().
+
+All tests run synchronously via asyncio.run() — no pytest-asyncio required.
+The ConceptExecutor and ConditionEvaluator are stubbed; their sync calls
+are wrapped inside the async explain_decision() method.
+
+Coverage:
+  1. threshold strategy → threshold_applied == params.value
+  2. z_score strategy   → threshold_applied == params.threshold
+  3. equals strategy    → threshold_applied is None; label_matched set
+  4. composite strategy → both threshold_applied and label_matched are None
+  5. drivers[].contribution sums to 1.0 (normalisation invariant)
+  6. unnormalised contributions are normalised to 1.0 by the service
+"""
+from __future__ import annotations
+
+import asyncio
+
+import pytest
+
+from app.models.condition import (
+    ConditionDefinition,
+    DecisionType,
+    DecisionValue,
+    StrategyType,
+)
+from app.models.result import (
+    ConceptExplanation,
+    ConceptOutputType,
+    ConceptResult,
+    NodeTrace,
+)
+from app.models.task import Namespace
+from app.services.explanation import ExplanationService
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def run(coro):
+    return asyncio.run(coro)
+
+
+# ── Condition body builders ────────────────────────────────────────────────────
+
+def _threshold_body(value: float = 0.75) -> dict:
+    return {
+        "condition_id": "org.test_threshold",
+        "version": "1.0",
+        "concept_id": "org.test_concept",
+        "concept_version": "1.0",
+        "strategy": {
+            "type": "threshold",
+            "params": {"direction": "above", "value": value},
+        },
+        "namespace": "personal",
+    }
+
+
+def _z_score_body(threshold: float = 2.5) -> dict:
+    return {
+        "condition_id": "org.test_zscore",
+        "version": "1.0",
+        "concept_id": "org.test_concept",
+        "concept_version": "1.0",
+        "strategy": {
+            "type": "z_score",
+            "params": {"threshold": threshold, "direction": "above", "window": "30d"},
+        },
+        "namespace": "personal",
+    }
+
+
+def _equals_body(value: str = "premium") -> dict:
+    return {
+        "condition_id": "org.test_equals",
+        "version": "1.0",
+        "concept_id": "org.test_concept",
+        "concept_version": "1.0",
+        "strategy": {
+            "type": "equals",
+            "params": {"value": value},
+        },
+        "namespace": "personal",
+    }
+
+
+def _composite_body() -> dict:
+    return {
+        "condition_id": "org.test_composite",
+        "version": "1.0",
+        "concept_id": "org.test_concept",
+        "concept_version": "1.0",
+        "strategy": {
+            "type": "composite",
+            "params": {"operator": "AND", "operands": ["cond_a", "cond_b"]},
+        },
+        "namespace": "personal",
+    }
+
+
+# ── Mock executor and evaluator ────────────────────────────────────────────────
+
+class MockConceptExecutor:
+    """Returns a preset ConceptResult on every execute() call."""
+
+    def __init__(self, concept_result: ConceptResult):
+        self._result = concept_result
+
+    def execute(
+        self,
+        concept_id,
+        version,
+        entity,
+        data_resolver,
+        timestamp=None,
+        explain=False,
+        explain_mode=None,
+        **kwargs,
+    ) -> ConceptResult:
+        return self._result
+
+
+class MockConditionEvaluator:
+    """Returns a preset DecisionValue on every evaluate() call."""
+
+    def __init__(self, decision: DecisionValue):
+        self._decision = decision
+
+    def evaluate(self, condition, entity, data_resolver, timestamp=None, **kwargs) -> DecisionValue:
+        return self._decision
+
+
+class MockDefinitionRegistry:
+    """Registry stub that serves pre-seeded condition bodies."""
+
+    def __init__(self, bodies: dict[tuple, dict] | None = None):
+        self._bodies: dict[tuple, dict] = bodies or {}
+
+    def seed(self, condition_id: str, version: str, body: dict) -> None:
+        self._bodies[(condition_id, version)] = body
+
+    async def get(self, definition_id: str, version: str) -> dict:
+        from app.models.errors import NotFoundError
+        key = (definition_id, version)
+        if key not in self._bodies:
+            raise NotFoundError(f"Condition '{definition_id}' version '{version}' not found.")
+        return self._bodies[key]
+
+
+# ── ConceptResult builders ────────────────────────────────────────────────────
+
+def _make_concept_result(
+    value: float = 0.82,
+    contributions: dict[str, float] | None = None,
+    nodes: list[NodeTrace] | None = None,
+) -> ConceptResult:
+    """Build a ConceptResult with an explanation."""
+    if contributions is None:
+        contributions = {"signal_a": 0.6, "signal_b": 0.4}
+
+    explanation = ConceptExplanation(
+        output=value,
+        contributions=contributions,
+        nodes=nodes or [],
+    )
+    return ConceptResult(
+        value=value,
+        type=ConceptOutputType.FLOAT,
+        entity="user_42",
+        version="1.0",
+        deterministic=True,
+        timestamp="2024-01-15T09:00:00Z",
+        explanation=explanation,
+    )
+
+
+def _make_categorical_result(label: str = "premium") -> ConceptResult:
+    """Build a ConceptResult for a categorical concept."""
+    explanation = ConceptExplanation(
+        output=label,
+        contributions={"signal_a": 0.7, "signal_b": 0.3},
+    )
+    return ConceptResult(
+        value=label,
+        type=ConceptOutputType.CATEGORICAL,
+        entity="user_42",
+        version="1.0",
+        deterministic=True,
+        timestamp="2024-01-15T09:00:00Z",
+        explanation=explanation,
+    )
+
+
+def _make_service(
+    *,
+    condition_id: str,
+    condition_version: str,
+    body: dict,
+    concept_result: ConceptResult,
+    decision: DecisionValue,
+) -> ExplanationService:
+    registry = MockDefinitionRegistry()
+    registry.seed(condition_id, condition_version, body)
+
+    executor = MockConceptExecutor(concept_result)
+    evaluator = MockConditionEvaluator(decision)
+
+    return ExplanationService(
+        definition_registry=registry,
+        concept_executor=executor,
+        condition_evaluator=evaluator,
+        data_resolver=None,
+    )
+
+
+def _boolean_decision(
+    condition_id: str = "org.test_threshold",
+    value: bool = True,
+) -> DecisionValue:
+    return DecisionValue(
+        value=value,
+        decision_type=DecisionType.BOOLEAN,
+        condition_id=condition_id,
+        condition_version="1.0",
+        entity="user_42",
+        timestamp="2024-01-15T09:00:00Z",
+    )
+
+
+def _categorical_decision(
+    condition_id: str = "org.test_equals",
+    label: str = "premium",
+) -> DecisionValue:
+    return DecisionValue(
+        value=label,
+        decision_type=DecisionType.CATEGORICAL,
+        condition_id=condition_id,
+        condition_version="1.0",
+        entity="user_42",
+        timestamp="2024-01-15T09:00:00Z",
+    )
+
+
+# ── Tests ─────────────────────────────────────────────────────────────────────
+
+def test_threshold_strategy_threshold_applied_equals_params_value():
+    """
+    For threshold strategy, threshold_applied must equal the params.value field.
+    """
+    body = _threshold_body(value=0.75)
+    concept_result = _make_concept_result()
+    decision = _boolean_decision(condition_id="org.test_threshold")
+
+    svc = _make_service(
+        condition_id="org.test_threshold",
+        condition_version="1.0",
+        body=body,
+        concept_result=concept_result,
+        decision=decision,
+    )
+
+    result = run(svc.explain_decision(
+        condition_id="org.test_threshold",
+        condition_version="1.0",
+        entity="user_42",
+        timestamp="2024-01-15T09:00:00Z",
+    ))
+
+    assert result.threshold_applied == 0.75, (
+        f"threshold strategy: expected threshold_applied=0.75, got {result.threshold_applied}"
+    )
+    assert result.label_matched is None
+    assert result.strategy_type == StrategyType.THRESHOLD
+
+
+def test_z_score_strategy_threshold_applied_equals_params_threshold():
+    """
+    For z_score strategy, threshold_applied must equal params.threshold
+    (NOT params.value — z_score uses a different key).
+    """
+    body = _z_score_body(threshold=2.5)
+    concept_result = _make_concept_result()
+    decision = _boolean_decision(condition_id="org.test_zscore")
+
+    svc = _make_service(
+        condition_id="org.test_zscore",
+        condition_version="1.0",
+        body=body,
+        concept_result=concept_result,
+        decision=decision,
+    )
+
+    result = run(svc.explain_decision(
+        condition_id="org.test_zscore",
+        condition_version="1.0",
+        entity="user_42",
+        timestamp="2024-01-15T09:00:00Z",
+    ))
+
+    assert result.threshold_applied == 2.5, (
+        f"z_score strategy: expected threshold_applied=2.5, got {result.threshold_applied}"
+    )
+    assert result.label_matched is None
+    assert result.strategy_type == StrategyType.Z_SCORE
+
+
+def test_equals_strategy_threshold_applied_is_none_label_matched_set():
+    """
+    For equals strategy:
+      - threshold_applied must be None (no numeric threshold)
+      - label_matched must equal the matched label from the decision value
+    """
+    body = _equals_body(value="premium")
+    concept_result = _make_categorical_result(label="premium")
+    decision = _categorical_decision(condition_id="org.test_equals", label="premium")
+
+    svc = _make_service(
+        condition_id="org.test_equals",
+        condition_version="1.0",
+        body=body,
+        concept_result=concept_result,
+        decision=decision,
+    )
+
+    result = run(svc.explain_decision(
+        condition_id="org.test_equals",
+        condition_version="1.0",
+        entity="user_42",
+        timestamp="2024-01-15T09:00:00Z",
+    ))
+
+    assert result.threshold_applied is None, (
+        f"equals strategy: threshold_applied must be None, got {result.threshold_applied}"
+    )
+    assert result.label_matched == "premium", (
+        f"equals strategy: expected label_matched='premium', got {result.label_matched}"
+    )
+    assert result.strategy_type == StrategyType.EQUALS
+
+
+def test_composite_strategy_both_threshold_and_label_are_none():
+    """
+    For composite strategy, both threshold_applied and label_matched must be None.
+    Composite uses AND/OR operator — not a scalar threshold or label match.
+    """
+    body = _composite_body()
+    concept_result = _make_concept_result()
+    decision = _boolean_decision(condition_id="org.test_composite")
+
+    svc = _make_service(
+        condition_id="org.test_composite",
+        condition_version="1.0",
+        body=body,
+        concept_result=concept_result,
+        decision=decision,
+    )
+
+    result = run(svc.explain_decision(
+        condition_id="org.test_composite",
+        condition_version="1.0",
+        entity="user_42",
+        timestamp="2024-01-15T09:00:00Z",
+    ))
+
+    assert result.threshold_applied is None, (
+        f"composite strategy: threshold_applied must be None, got {result.threshold_applied}"
+    )
+    assert result.label_matched is None, (
+        f"composite strategy: label_matched must be None, got {result.label_matched}"
+    )
+    assert result.strategy_type == StrategyType.COMPOSITE
+
+
+def test_drivers_contribution_sums_to_1():
+    """
+    INVARIANT: sum of all drivers[].contribution must equal 1.0 (within floating-
+    point tolerance) regardless of what the executor returns.
+    """
+    body = _threshold_body()
+    concept_result = _make_concept_result(
+        contributions={"signal_a": 0.6, "signal_b": 0.4}
+    )
+    decision = _boolean_decision()
+
+    svc = _make_service(
+        condition_id="org.test_threshold",
+        condition_version="1.0",
+        body=body,
+        concept_result=concept_result,
+        decision=decision,
+    )
+
+    result = run(svc.explain_decision(
+        condition_id="org.test_threshold",
+        condition_version="1.0",
+        entity="user_42",
+        timestamp="2024-01-15T09:00:00Z",
+    ))
+
+    total = sum(d.contribution for d in result.drivers)
+    assert abs(total - 1.0) < 1e-6, (
+        f"drivers contribution sum must be 1.0, got {total}"
+    )
+    assert len(result.drivers) == 2
+
+
+def test_unnormalised_contributions_are_normalised_to_1():
+    """
+    When executor returns contributions that do not sum to 1.0
+    (e.g. {a: 0.3, b: 0.45} = 0.75 total), the service normalises them.
+    """
+    body = _threshold_body()
+    # Contributions that sum to 0.75 — service must scale them to 1.0.
+    concept_result = _make_concept_result(
+        contributions={"signal_a": 0.3, "signal_b": 0.45}
+    )
+    decision = _boolean_decision()
+
+    svc = _make_service(
+        condition_id="org.test_threshold",
+        condition_version="1.0",
+        body=body,
+        concept_result=concept_result,
+        decision=decision,
+    )
+
+    result = run(svc.explain_decision(
+        condition_id="org.test_threshold",
+        condition_version="1.0",
+        entity="user_42",
+        timestamp="2024-01-15T09:00:00Z",
+    ))
+
+    total = sum(d.contribution for d in result.drivers)
+    assert abs(total - 1.0) < 1e-6, (
+        f"normalised drivers contribution sum must be 1.0, got {total}"
+    )
+
+
+def test_drivers_sorted_highest_first():
+    """
+    Drivers are listed highest contribution first.
+    """
+    body = _threshold_body()
+    concept_result = _make_concept_result(
+        contributions={"signal_b": 0.2, "signal_a": 0.8}
+    )
+    decision = _boolean_decision()
+
+    svc = _make_service(
+        condition_id="org.test_threshold",
+        condition_version="1.0",
+        body=body,
+        concept_result=concept_result,
+        decision=decision,
+    )
+
+    result = run(svc.explain_decision(
+        condition_id="org.test_threshold",
+        condition_version="1.0",
+        entity="user_42",
+        timestamp="2024-01-15T09:00:00Z",
+    ))
+
+    contributions = [d.contribution for d in result.drivers]
+    assert contributions == sorted(contributions, reverse=True), (
+        "Drivers must be sorted descending by contribution"
+    )
+    assert result.drivers[0].signal == "signal_a"
+
+
+def test_empty_contributions_returns_empty_drivers():
+    """When concept returns no contributions, drivers list is empty."""
+    body = _threshold_body()
+    concept_result = _make_concept_result(contributions={})
+    decision = _boolean_decision()
+
+    svc = _make_service(
+        condition_id="org.test_threshold",
+        condition_version="1.0",
+        body=body,
+        concept_result=concept_result,
+        decision=decision,
+    )
+
+    result = run(svc.explain_decision(
+        condition_id="org.test_threshold",
+        condition_version="1.0",
+        entity="user_42",
+        timestamp="2024-01-15T09:00:00Z",
+    ))
+
+    assert result.drivers == []
+
+
+def test_node_trace_values_used_for_driver_value():
+    """
+    When ConceptExplanation.nodes contains NodeTrace entries, their output_value
+    is used as the driver value (matched by node_id == signal_name).
+    """
+    nodes = [
+        NodeTrace(
+            node_id="signal_a",
+            op="primitive_fetch",
+            inputs={},
+            params={},
+            output_value=0.92,
+            output_type="float",
+        ),
+        NodeTrace(
+            node_id="signal_b",
+            op="primitive_fetch",
+            inputs={},
+            params={},
+            output_value=0.41,
+            output_type="float",
+        ),
+    ]
+    body = _threshold_body()
+    concept_result = _make_concept_result(
+        contributions={"signal_a": 0.7, "signal_b": 0.3},
+        nodes=nodes,
+    )
+    decision = _boolean_decision()
+
+    svc = _make_service(
+        condition_id="org.test_threshold",
+        condition_version="1.0",
+        body=body,
+        concept_result=concept_result,
+        decision=decision,
+    )
+
+    result = run(svc.explain_decision(
+        condition_id="org.test_threshold",
+        condition_version="1.0",
+        entity="user_42",
+        timestamp="2024-01-15T09:00:00Z",
+    ))
+
+    driver_map = {d.signal: d.value for d in result.drivers}
+    assert driver_map["signal_a"] == 0.92
+    assert driver_map["signal_b"] == 0.41

@@ -1,0 +1,59 @@
+{
+  "concept": {
+    "concept_id": "org.payment_failure_rate",
+    "version": "1.0",
+    "namespace": "org",
+    "output_type": "float",
+    "description": "Mean payment failure rate over recent events, used to detect anomalous spikes.",
+    "primitives": {
+      "failure_events": {
+        "type": "time_series<float>",
+        "missing_data_policy": "forward_fill"
+      }
+    },
+    "features": {
+      "failure_rate": {
+        "op": "mean",
+        "inputs": { "input": "failure_events" },
+        "params": {}
+      }
+    },
+    "output_feature": "failure_rate"
+  },
+  "condition": {
+    "condition_id": "org.payment_failure_anomaly",
+    "version": "1.0",
+    "concept_id": "org.payment_failure_rate",
+    "concept_version": "1.0",
+    "namespace": "org",
+    "strategy": {
+      "type": "z_score",
+      "params": {
+        "threshold": 2.5,
+        "direction": "above",
+        "window": "30d"
+      }
+    }
+  },
+  "action": {
+    "action_id": "org.page_oncall",
+    "version": "1.0",
+    "namespace": "org",
+    "config": {
+      "type": "webhook",
+      "endpoint": "https://hooks.example.com/oncall",
+      "method": "POST",
+      "payload_template": {
+        "alert": "payment_failure_spike",
+        "entity": "{entity}",
+        "z_score": "{value}",
+        "condition": "{condition_id}"
+      }
+    },
+    "trigger": {
+      "fire_on": "true",
+      "condition_id": "org.payment_failure_anomaly",
+      "condition_version": "1.0"
+    }
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "concept": {
+    "concept_id": "org.risk_score",
+    "version": "1.0",
+    "namespace": "org",
+    "output_type": "float",
+    "description": "Composite risk score combining churn likelihood and engagement signals.",
+    "primitives": {
+      "risk_signal": {
+        "type": "float",
+        "missing_data_policy": "zero"
+      }
+    },
+    "features": {
+      "risk_score": {
+        "op": "normalize",
+        "inputs": { "input": "risk_signal" },
+        "params": {}
+      }
+    },
+    "output_feature": "risk_score"
+  },
+  "condition": {
+    "condition_id": "org.high_value_at_risk",
+    "version": "1.0",
+    "concept_id": "org.risk_score",
+    "concept_version": "1.0",
+    "namespace": "org",
+    "strategy": {
+      "type": "composite",
+      "params": {
+        "operator": "AND",
+        "operands": [
+          "org.high_churn_risk",
+          "org.high_ltv_customer"
+        ]
+      }
+    }
+  },
+  "action": {
+    "action_id": "org.escalate_to_success",
+    "version": "1.0",
+    "namespace": "org",
+    "config": {
+      "type": "workflow",
+      "workflow_id": "customer_success_playbook",
+      "input_mapping": {
+        "customer_id": "entity",
+        "trigger_condition": "condition_id",
+        "decision_value": "value"
+      }
+    },
+    "trigger": {
+      "fire_on": "true",
+      "condition_id": "org.high_value_at_risk",
+      "condition_version": "1.0"
+    }
+  }
+}

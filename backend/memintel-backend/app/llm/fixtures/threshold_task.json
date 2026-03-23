@@ -1,0 +1,52 @@
+{
+  "concept": {
+    "concept_id": "org.churn_risk_score",
+    "version": "1.0",
+    "namespace": "org",
+    "output_type": "float",
+    "description": "Normalised churn risk score derived from user engagement signal.",
+    "primitives": {
+      "engagement_score": {
+        "type": "float",
+        "missing_data_policy": "zero"
+      }
+    },
+    "features": {
+      "churn_score": {
+        "op": "normalize",
+        "inputs": { "input": "engagement_score" },
+        "params": {}
+      }
+    },
+    "output_feature": "churn_score"
+  },
+  "condition": {
+    "condition_id": "org.high_churn_risk",
+    "version": "1.0",
+    "concept_id": "org.churn_risk_score",
+    "concept_version": "1.0",
+    "namespace": "org",
+    "strategy": {
+      "type": "threshold",
+      "params": {
+        "direction": "above",
+        "value": 0.80
+      }
+    }
+  },
+  "action": {
+    "action_id": "org.notify_team",
+    "version": "1.0",
+    "namespace": "org",
+    "config": {
+      "type": "notification",
+      "channel": "slack-alerts",
+      "message_template": "High churn risk detected for {entity} (score={value}). Review immediately."
+    },
+    "trigger": {
+      "fire_on": "true",
+      "condition_id": "org.high_churn_risk",
+      "condition_version": "1.0"
+    }
+  }
+}
