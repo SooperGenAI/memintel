@@ -80,7 +80,9 @@ Definitions are immutable once registered. All execution is version-pinned. "Lat
 backend/    — Python execution engine (FastAPI, Pydantic v2, asyncpg)
 sdk/        — TypeScript SDK (@memintel/sdk)
 ```
+---
 
+## Mimentel has been released under MIT 
 ---
 
 ## Getting Started
