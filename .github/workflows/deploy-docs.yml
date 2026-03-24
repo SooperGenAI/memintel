@@ -23,6 +23,7 @@ jobs:
     defaults:
       run:
         working-directory: memintel-site
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -33,11 +34,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
-          cache-dependency-path: memintel-site/package-lock.json
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install
 
       - name: Generate OpenAPI docs
         run: npm run gen-api-docs
