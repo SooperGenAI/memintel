@@ -1,0 +1,1 @@
+{"title":"Body","body":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["condition_id","condition_version","entity","timestamp"],"properties":{"condition_id":{"type":"string"},"condition_version":{"type":"string"},"entity":{"type":"string"},"timestamp":{"type":"string","format":"date-time"}}}}}}}
