@@ -76,3 +76,4 @@ GIT_USER=<your-github-username> npm run deploy
 - **Generated files** — never edit `docs/api-reference/generated/` by hand
 - **New pages** — add the file, then add it to the relevant sidebar in `sidebars.ts`
 - Open a PR — CI validates the build before merge
+
