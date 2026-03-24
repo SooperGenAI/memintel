@@ -21,8 +21,25 @@ from __future__ import annotations
 
 import hashlib
 import json
+from decimal import Decimal
 
 from app.models.concept import ConceptDefinition, ExecutionGraph, ExecutionPlan
+
+
+def _normalise_param_value(v: object) -> object:
+    """
+    Canonicalise a single params value for stable hashing.
+
+    Rules:
+      - Decimal → float   (Decimal("1.0") and Decimal("1.00") become the same float)
+      - list    → sorted  (order-invariant lists hash identically regardless of insertion order)
+      - other   → unchanged
+    """
+    if isinstance(v, Decimal):
+        return float(v)
+    if isinstance(v, list):
+        return sorted((_normalise_param_value(item) for item in v), key=str)
+    return v
 
 
 class IRGenerator:
@@ -49,7 +66,9 @@ class IRGenerator:
         Canonical serialisation rules:
           - Node list sorted by node_id.
           - Each node's inputs and params dicts have keys sorted.
-          - Edge list sorted by (from_node_id, to_node_id, input_slot).
+          - Each params value is normalised: Decimal → float, list → sorted.
+          - Edge list sorted by (from_node_id, to_node_id, str(input_slot)).
+          - input_slot cast to str so int/str variants hash identically.
           - Excluded fields: graph_id, ir_hash, created_at (non-semantic metadata).
           - JSON separators: no whitespace (compact, deterministic byte sequence).
           - Encoding: UTF-8.
@@ -65,7 +84,7 @@ class IRGenerator:
                         "node_id":     n.node_id,
                         "op":          n.op,
                         "inputs":      dict(sorted(n.inputs.items())),
-                        "params":      dict(sorted(n.params.items())),
+                        "params":      {k: _normalise_param_value(v) for k, v in sorted(n.params.items())},
                         "output_type": n.output_type,
                     }
                     for n in graph.nodes
@@ -77,7 +96,7 @@ class IRGenerator:
                     {
                         "from_node_id": e.from_node_id,
                         "to_node_id":   e.to_node_id,
-                        "input_slot":   e.input_slot,
+                        "input_slot":   str(e.input_slot),
                     }
                     for e in graph.edges
                 ],
