@@ -1,0 +1,70 @@
+---
+id: create-task
+title: "Create a task from natural language intent"
+description: "Submits a natural language intent to the LLM pipeline. The system classifies intent, resolves primitives, selects a strategy, resolves parameters, generates a concept + condition, binds an action, validates, compiles, and persists a version-pinned Task. Pass dry_run: true to preview without persisting."
+sidebar_label: "Create a task from natural language intent"
+hide_title: true
+hide_table_of_contents: true
+api: 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
+sidebar_class_name: "post api-method"
+info_path: docs/api-reference/generated/memintel-app-developer-api
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Create a task from natural language intent"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"post"}
+  path={"/tasks"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Submits a natural language intent to the LLM pipeline. The system classifies intent, resolves primitives, selects a strategy, resolves parameters, generates a concept + condition, binds an action, validates, compiles, and persists a version-pinned Task. Pass dry_run: true to preview without persisting.
+
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  parameters={undefined}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./create-task.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./create-task.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

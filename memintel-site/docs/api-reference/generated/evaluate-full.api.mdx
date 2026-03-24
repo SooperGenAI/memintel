@@ -1,0 +1,70 @@
+---
+id: evaluate-full
+title: "Execute concept + condition + action pipeline"
+description: "Runs the full ψ → φ → α pipeline for a given entity. Fully deterministic when timestamp is provided. No LLM involvement. Use dry_run: true to simulate without firing actions."
+sidebar_label: "Execute concept + condition + action pipeline"
+hide_title: true
+hide_table_of_contents: true
+api: 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
+sidebar_class_name: "post api-method"
+info_path: docs/api-reference/generated/memintel-app-developer-api
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Execute concept + condition + action pipeline"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"post"}
+  path={"/evaluate/full"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Runs the full ψ → φ → α pipeline for a given entity. Fully deterministic when timestamp is provided. No LLM involvement. Use dry_run: true to simulate without firing actions.
+
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  parameters={undefined}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./evaluate-full.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./evaluate-full.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

@@ -1,0 +1,1304 @@
+openapi: 3.1.0
+
+info:
+  title: Memintel App Developer API
+  version: 2.1.0
+  description: >
+    The Memintel App Developer API provides the full surface for task creation,
+    execution, explainability, calibration, feedback, and task lifecycle management.
+    All execution is deterministic. LLM processing occurs only at task creation.
+    Every definition reference is explicit — no implicit "latest" resolution.
+
+servers:
+  - url: https://api.memsdl.ai/v1
+    description: Production
+
+security:
+  - ApiKeyAuth: []
+
+components:
+
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+
+  schemas:
+
+    # ─── CORE TYPES ──────────────────────────────────────────────────────────
+
+    DeliveryConfig:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [webhook, notification, email, workflow]
+        channel:
+          type: string
+          description: For notification/email delivery types
+        endpoint:
+          type: string
+          description: For webhook delivery type
+        workflow_id:
+          type: string
+          description: For workflow delivery type
+
+    ConstraintsConfig:
+      type: object
+      properties:
+        sensitivity:
+          type: string
+          enum: [low, medium, high]
+          description: >
+            Hint to the LLM for threshold prior selection.
+            Overrides severity derived from natural language if provided.
+        namespace:
+          type: string
+          enum: [personal, team, org, global]
+
+    # ─── TASK ────────────────────────────────────────────────────────────────
+
+    Task:
+      type: object
+      properties:
+        task_id:
+          type: string
+        intent:
+          type: string
+          description: Original natural language intent as submitted by the user
+        concept_id:
+          type: string
+        concept_version:
+          type: string
+        condition_id:
+          type: string
+        condition_version:
+          type: string
+        action_id:
+          type: string
+        action_version:
+          type: string
+        entity_scope:
+          type: string
+          description: Entity or entity group this task is evaluated against
+        delivery:
+          $ref: '#/components/schemas/DeliveryConfig'
+        status:
+          type: string
+          enum: [active, paused, deleted, preview]
+          description: >
+            active — evaluated on schedule.
+            paused — skipped, no evaluation or alerts.
+            deleted — inactive, retained for audit.
+            preview — dry_run result, never persisted.
+        created_at:
+          type: string
+          format: date-time
+        last_triggered_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    TaskList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Task'
+        has_more:
+          type: boolean
+        next_cursor:
+          type: string
+          nullable: true
+        total_count:
+          type: integer
+
+    TaskUpdateRequest:
+      type: object
+      description: >
+        All fields are optional. At least one field must be provided.
+        The SDK must NOT require status or conditionVersion specifically —
+        delivery and entity_scope are equally valid standalone updates.
+        Condition logic, concept definition, strategy, and action logic
+        MUST NOT be modified via this endpoint — those require the
+        calibration flow (calibrate → apply → rebind).
+      x-ts-validation: >
+        At least one of: status, conditionVersion, delivery, entityScope must be present.
+        SDK throws parameter_error if the update object is empty.
+      properties:
+        condition_version:
+          type: string
+          description: Rebind task to a new condition version (explicit user action)
+        delivery:
+          $ref: '#/components/schemas/DeliveryConfig'
+        entity_scope:
+          type: string
+          description: Update the entity or group this task evaluates against
+        status:
+          type: string
+          enum: [active, paused]
+          description: >
+            Use to pause or resume a task.
+            Deletion must use DELETE /tasks/{id}.
+
+    # ─── EXECUTION ───────────────────────────────────────────────────────────
+
+    FullPipelineResult:
+      type: object
+      description: >
+        The result of a full pipeline execution (psi to phi to alpha).
+        result (Rt) contains the concept execution output.
+        decision (At) contains the condition evaluation output, including
+        actions_triggered[]. Actions are nested inside decision, not at
+        the top level of this object.
+      x-ts-note: >
+        SDK mapping: result (not conceptResult), decision (contains actionsTriggered[]).
+        No top-level actionsTriggered on FullPipelineResult.
+      properties:
+        result:
+          $ref: '#/components/schemas/ConceptResult'
+          description: Concept execution output (Rt).
+        decision:
+          $ref: '#/components/schemas/DecisionResult'
+          description: >
+            Condition evaluation output (At). Contains value, type, entity,
+            and actions_triggered[]. Actions are nested here.
+        dry_run:
+          type: boolean
+        entity:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+
+    ConceptResult:
+      type: object
+      description: >
+        The output of concept execution (Rt).
+        explanation is populated when explain: true is passed to the request.
+        SDK mapping: result (not conceptResult), result.value, result.deterministic,
+        result.explanation (camelCase).
+      properties:
+        value:
+          oneOf:
+            - type: number
+            - type: boolean
+            - type: string
+          description: Computed concept output. Type matches the concept's declared output type.
+        type:
+          type: string
+          enum: [float, boolean, categorical]
+        entity:
+          type: string
+        version:
+          type: string
+        deterministic:
+          type: boolean
+          description: True when timestamp was provided in the request.
+        timestamp:
+          type: string
+          format: date-time
+          nullable: true
+        explanation:
+          type: object
+          nullable: true
+          description: >
+            Populated when explain: true is passed to the request.
+            Contains node-level computation details, contribution attribution,
+            and execution trace. Null when explain is false or omitted.
+          properties:
+            output:
+              oneOf:
+                - type: number
+                - type: boolean
+                - type: string
+              description: Final output value. Matches ConceptResult.value.
+            contributions:
+              type: object
+              description: >
+                Attribution of each input signal to the final output.
+                Keys are signal names, values are contribution amounts.
+              additionalProperties:
+                type: number
+            nodes:
+              type: array
+              description: Node-level computation details in execution order.
+              items:
+                type: object
+                properties:
+                  node_id:
+                    type: string
+                  op:
+                    type: string
+                  inputs:
+                    type: object
+                  params:
+                    type: object
+                  output_value:
+                    oneOf:
+                      - type: number
+                      - type: boolean
+                      - type: string
+                  output_type:
+                    type: string
+            trace:
+              type: array
+              description: Step-by-step execution trace in topological order.
+              items:
+                type: object
+
+    DecisionResult:
+      type: object
+      description: >
+        The output of condition evaluation (At).
+        actions_triggered[] is nested here — it is NOT at the top level of FullPipelineResult.
+        SDK mapping: decision.actionsTriggered (camelCase), decision.value.
+      properties:
+        value:
+          oneOf:
+            - type: boolean
+            - type: string
+          description: >
+            The Decision (At) value.
+            boolean for threshold/percentile/change/z_score/composite strategies.
+            string (label) for equals strategy on categorical input.
+        type:
+          type: string
+          enum: [boolean, categorical]
+        entity:
+          type: string
+        condition_id:
+          type: string
+        condition_version:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+          nullable: true
+        actions_triggered:
+          type: array
+          description: >
+            Actions fired by this decision. Always nested inside DecisionResult (At),
+            never at the top level of FullPipelineResult.
+          items:
+            $ref: '#/components/schemas/ActionTriggered'
+
+    ActionTriggered:
+      type: object
+      properties:
+        action_id:
+          type: string
+        action_version:
+          type: string
+        status:
+          type: string
+          enum: [triggered, skipped, failed, would_trigger]
+        payload_sent:
+          type: object
+          nullable: true
+        error:
+          $ref: '#/components/schemas/ErrorResponse'
+          nullable: true
+
+    # ─── CONDITION ───────────────────────────────────────────────────────────
+
+    ConditionDefinition:
+      type: object
+      properties:
+        condition_id:
+          type: string
+        version:
+          type: string
+        concept_id:
+          type: string
+        concept_version:
+          type: string
+        strategy:
+          $ref: '#/components/schemas/StrategyDefinition'
+        namespace:
+          type: string
+          enum: [personal, team, org, global]
+        created_at:
+          type: string
+          format: date-time
+        deprecated:
+          type: boolean
+
+    StrategyDefinition:
+      type: object
+      required: [type, params]
+      properties:
+        type:
+          type: string
+          enum: [threshold, percentile, change, z_score, equals, composite]
+          description: >
+            The evaluation logic template for this condition.
+            Note: TypeScript SDK enum spelling is z_score (not zscore).
+          x-ts-type: >
+            export type ConditionStrategyType =
+              'threshold' | 'percentile' | 'change' | 'z_score' | 'equals' | 'composite';
+        params:
+          type: object
+          description: >
+            Parameters vary by strategy type. See strategy registry in
+            memintel.guardrails.md for full parameter schemas.
+            threshold: { direction: above|below, value: float }
+            percentile: { direction: top|bottom, value: float (0-100) }
+            change:     { direction: increase|decrease|any, value: float, window: duration }
+            z_score:    { threshold: float, direction: above|below|any, window: duration }
+            equals:     { value: string, labels?: string[] }
+            composite:  { operator: AND|OR, operands: condition_id[] }
+
+    # ─── EXPLAINABILITY ──────────────────────────────────────────────────────
+
+    ConditionExplanation:
+      type: object
+      description: Explains the logic and parameters of a condition definition
+      properties:
+        condition_id:
+          type: string
+        condition_version:
+          type: string
+        strategy:
+          $ref: '#/components/schemas/StrategyDefinition'
+        concept_id:
+          type: string
+        concept_version:
+          type: string
+        natural_language_summary:
+          type: string
+          description: Human-readable description of what this condition evaluates
+        parameter_rationale:
+          type: string
+          description: Why these parameter values were selected (from priors or user input)
+
+    DecisionExplanation:
+      type: object
+      description: >
+        Explains a specific decision result for an entity at a given timestamp.
+        Supports both boolean and categorical decision outputs.
+      x-ts-note: >
+        Naming alignment: DecisionResult uses 'value' for the decision output;
+        DecisionExplanation uses 'decision' for the same concept.
+        SDK should map both consistently: decision.value (DecisionResult) and
+        explanation.decision (DecisionExplanation) represent the same Decision (At).
+        Do not rename either — keep SDK field names as decision.value and
+        explanation.decision to match their respective schema fields.
+      properties:
+        condition_id:
+          type: string
+        condition_version:
+          type: string
+        entity:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        decision:
+          oneOf:
+            - type: boolean
+            - type: string
+          description: >
+            boolean for threshold/percentile/change/z_score/composite strategies.
+            string label for equals strategy on categorical input.
+        decision_type:
+          type: string
+          enum: [boolean, categorical]
+        concept_value:
+          oneOf:
+            - type: number
+            - type: string
+          description: The raw concept output that was evaluated
+        strategy_type:
+          type: string
+          enum: [threshold, percentile, change, z_score, equals, composite]
+        threshold_applied:
+          type: number
+          nullable: true
+          description: >
+            Present for threshold, percentile, change, z_score strategies.
+            Null for equals and composite strategies.
+        label_matched:
+          type: string
+          nullable: true
+          description: >
+            Present for equals strategy only.
+            The label that was matched (or null if no match).
+        drivers:
+          type: array
+          description: Input signals and their contribution to the concept value
+          items:
+            type: object
+            properties:
+              signal:
+                type: string
+              contribution:
+                type: number
+              value:
+                oneOf:
+                  - type: number
+                  - type: string
+                  - type: boolean
+
+    # ─── CALIBRATION ─────────────────────────────────────────────────────────
+
+    CalibrateRequest:
+      type: object
+      required: [condition_id, condition_version]
+      properties:
+        condition_id:
+          type: string
+        condition_version:
+          type: string
+        target:
+          type: object
+          properties:
+            alerts_per_day:
+              type: number
+              description: Desired alert frequency target
+        feedback_direction:
+          type: string
+          enum: [tighten, relax]
+          description: >
+            Explicit direction override. If omitted, derived from stored
+            feedback submitted via POST /feedback/decision.
+
+    CalibrationResult:
+      type: object
+      x-ts-note: >
+        SDK field mapping: recommended_params → recommendedParams (not recommended.threshold).
+        The TS type must expose cal.recommendedParams, cal.calibrationToken,
+        cal.impact.deltaAlerts — NOT cal.recommended.threshold.
+        This ensures alignment with the generic params_applied pattern used in
+        ApplyCalibrationResult (strategy-agnostic, not threshold-specific).
+      properties:
+        status:
+          type: string
+          enum: [recommendation_available, no_recommendation]
+          description: >
+            no_recommendation is returned when:
+            - No valid adjustment exists within threshold_bounds
+            - Strategy is equals (categorical — no numeric parameter to adjust)
+            - Insufficient feedback history exists
+        no_recommendation_reason:
+          type: string
+          nullable: true
+          description: >
+            Present when status is no_recommendation.
+            Values: bounds_exceeded | not_applicable_strategy | insufficient_data
+        calibration_token:
+          type: string
+          nullable: true
+          description: >
+            Present when status is recommendation_available.
+            Pass to POST /conditions/apply-calibration.
+        recommended_params:
+          type: object
+          nullable: true
+          description: >
+            Present when status is recommendation_available.
+            Key-value pairs matching the strategy's parameter schema.
+            threshold:  { value: float }
+            percentile: { value: float }
+            change:     { value: float }
+            z_score:    { threshold: float }
+            equals:     always null (not applicable)
+        current_params:
+          type: object
+          description: The current parameter values for comparison
+        impact:
+          type: object
+          nullable: true
+          description: Present when status is recommendation_available
+          properties:
+            delta_alerts:
+              type: number
+              description: Estimated change in daily alert volume
+            direction:
+              type: string
+              enum: [increase, decrease, no_change]
+
+    ApplyCalibrationRequest:
+      type: object
+      required: [calibration_token]
+      description: >
+        Applies a calibration recommendation as a new immutable condition version.
+        rebind_tasks is NOT a field on this request — rebinding is always a separate
+        explicit caller action via PATCH /tasks/{id}.
+        threshold is NOT a field — use calibration_token from the calibrate response;
+        params are resolved server-side from the token.
+      x-ts-note: >
+        SDK ApplyCalibrationParams must only expose calibrationToken and newVersion.
+        Do NOT expose rebindTasks or threshold in the public SDK interface.
+      properties:
+        calibration_token:
+          type: string
+          description: Token returned by POST /conditions/calibrate. Single-use, expires 24h.
+        new_version:
+          type: string
+          description: >
+            Optional explicit version string for the new condition version.
+            Auto-incremented if not provided.
+
+    ApplyCalibrationResult:
+      type: object
+      properties:
+        condition_id:
+          type: string
+        previous_version:
+          type: string
+        new_version:
+          type: string
+        params_applied:
+          type: object
+          description: The parameter values written to the new condition version
+        tasks_pending_rebind:
+          type: array
+          description: >
+            Tasks currently bound to previous_version that have NOT been rebound.
+            Rebinding is always an explicit user action via PATCH /tasks/{id}.
+          items:
+            type: object
+            properties:
+              task_id:
+                type: string
+              intent:
+                type: string
+
+    # ─── FEEDBACK ────────────────────────────────────────────────────────────
+
+    FeedbackRequest:
+      type: object
+      required: [condition_id, condition_version, entity, timestamp, feedback]
+      properties:
+        condition_id:
+          type: string
+        condition_version:
+          type: string
+        entity:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        feedback:
+          type: string
+          enum: [false_positive, false_negative, correct]
+          description: >
+            false_positive — condition fired but should not have (tighten).
+            false_negative — condition did not fire but should have (relax).
+            correct — expected behavior (no-op).
+          x-ts-type: "export type FeedbackValue = 'false_positive' | 'false_negative' | 'correct';"
+        note:
+          type: string
+          nullable: true
+          description: Optional free-text note for audit purposes
+
+    # ─── DRY RUN ─────────────────────────────────────────────────────────────
+
+    DryRunResult:
+      type: object
+      description: >
+        Returned when dry_run: true is passed to POST /tasks.
+        The task is NOT persisted. Use to verify intent resolution before committing.
+      properties:
+        concept:
+          type: object
+          description: Generated concept definition
+        condition:
+          $ref: '#/components/schemas/ConditionDefinition'
+        action_id:
+          type: string
+          description: Resolved action binding
+        action_version:
+          type: string
+        validation:
+          $ref: '#/components/schemas/ValidationResult'
+        would_trigger:
+          type: boolean
+          nullable: true
+          description: >
+            Simulated trigger status. Present if entity and timestamp are
+            provided in the request alongside dry_run.
+
+    ValidationResult:
+      type: object
+      properties:
+        valid:
+          type: boolean
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValidationError'
+        warnings:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+              message:
+                type: string
+
+    ValidationError:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [type_error, reference_error, graph_error, semantic_error, parameter_error]
+        message:
+          type: string
+        location:
+          type: string
+          nullable: true
+        suggestion:
+          type: string
+          nullable: true
+
+    # ─── ERRORS ──────────────────────────────────────────────────────────────
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          required: [type, message]
+          properties:
+            type:
+              type: string
+              description: >
+                Machine-readable error type. Always branch on this field — never on message.
+                TypeScript SDK maps this directly to MemintelError.type.
+              enum:
+                - syntax_error
+                - type_error
+                - semantic_error
+                - reference_error
+                - parameter_error
+                - graph_error
+                - execution_error
+                - execution_timeout
+                - auth_error
+                - not_found
+                - conflict
+                - rate_limit_exceeded
+                - bounds_exceeded
+                - action_binding_failed
+              x-ts-type: |
+                export type ErrorType =
+                  | 'syntax_error'
+                  | 'type_error'
+                  | 'semantic_error'
+                  | 'reference_error'
+                  | 'parameter_error'
+                  | 'graph_error'
+                  | 'execution_error'
+                  | 'execution_timeout'
+                  | 'auth_error'
+                  | 'not_found'
+                  | 'conflict'
+                  | 'rate_limit_exceeded'
+                  | 'bounds_exceeded'
+                  | 'action_binding_failed';
+            message:
+              type: string
+            location:
+              type: string
+              nullable: true
+            suggestion:
+              type: string
+              nullable: true
+
+# ─── PATHS ───────────────────────────────────────────────────────────────────
+
+paths:
+
+  # ── TASKS ──────────────────────────────────────────────────────────────────
+
+  /tasks:
+    post:
+      operationId: createTask
+      summary: Create a task from natural language intent
+      description: >
+        Submits a natural language intent to the LLM pipeline.
+        The system classifies intent, resolves primitives, selects a strategy,
+        resolves parameters, generates a concept + condition, binds an action,
+        validates, compiles, and persists a version-pinned Task.
+        Pass dry_run: true to preview without persisting.
+      x-guardrails-note: >
+        Strategy selection and parameter resolution are governed by
+        memintel.guardrails.md. The LLM does not freely interpret intent —
+        it resolves strategy and parameters within deterministic guardrails
+        using a strict priority order: user_explicit > primitive_hint >
+        mapping_rule > application_context > global_preferred > global_default.
+        The same intent + same guardrails always produces the same strategy
+        and parameters. This is not heuristic inference — it is deterministic
+        compilation.
+      tags: [Tasks]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [intent, entity_scope, delivery]
+              properties:
+                intent:
+                  type: string
+                  description: Natural language description of the desired condition
+                  example: "Alert me when AAPL price rises significantly"
+                entity_scope:
+                  type: string
+                  description: Entity or group to evaluate this task against
+                  example: "AAPL"
+                delivery:
+                  $ref: '#/components/schemas/DeliveryConfig'
+                constraints:
+                  $ref: '#/components/schemas/ConstraintsConfig'
+                dry_run:
+                  type: boolean
+                  default: false
+                  description: >
+                    When true, returns a DryRunResult without persisting the task.
+      responses:
+        '200':
+          description: >
+            Task created successfully, or DryRunResult if dry_run: true.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/Task'
+                  - $ref: '#/components/schemas/DryRunResult'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorised
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: >
+            Intent could not be resolved — primitive not found, no valid
+            strategy, or action binding failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    get:
+      operationId: listTasks
+      summary: List tasks
+      description: Returns a paginated list of tasks for the current workspace.
+      tags: [Tasks]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, paused, deleted]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+        - name: cursor
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Paginated task list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskList'
+        '401':
+          description: Unauthorised
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /tasks/{id}:
+    get:
+      operationId: getTask
+      summary: Get task details
+      description: >
+        Returns the full task definition including concept, condition,
+        and action references (id + version for each), plus execution metadata.
+      tags: [Tasks]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Task definition
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '401':
+          description: Unauthorised
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Task not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    patch:
+      operationId: updateTask
+      summary: Update a task
+      description: >
+        Updates operational task settings. Condition logic, concept definition,
+        strategy, and action logic MUST NOT be modified here — those require the
+        calibration flow (calibrate → apply → rebind).
+        Allowed: condition_version rebind, delivery config, entity_scope, status.
+      tags: [Tasks]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskUpdateRequest'
+      responses:
+        '200':
+          description: Updated task
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '400':
+          description: Validation error or disallowed update attempted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorised
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Task not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      operationId: deleteTask
+      summary: Delete a task
+      description: >
+        Soft-deletes a task (status = deleted). Deleted tasks are inactive
+        and skipped during execution but retained for audit purposes.
+      tags: [Tasks]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Task deleted (soft delete)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '401':
+          description: Unauthorised
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Task not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ── EXECUTION ──────────────────────────────────────────────────────────────
+
+  /evaluate/full:
+    post:
+      operationId: evaluateFull
+      summary: Execute concept + condition + action pipeline
+      description: >
+        Runs the full ψ → φ → α pipeline for a given entity. Fully deterministic
+        when timestamp is provided. No LLM involvement. Use dry_run: true to
+        simulate without firing actions.
+      tags: [Execution]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [concept_id, concept_version, condition_id, condition_version, entity]
+              properties:
+                concept_id:
+                  type: string
+                concept_version:
+                  type: string
+                condition_id:
+                  type: string
+                condition_version:
+                  type: string
+                entity:
+                  type: string
+                timestamp:
+                  type: string
+                  format: date-time
+                  description: When provided, execution is fully deterministic
+                explain:
+                  type: boolean
+                  default: false
+                dry_run:
+                  type: boolean
+                  default: false
+      responses:
+        '200':
+          description: Pipeline executed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FullPipelineResult'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorised
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Concept, condition, or entity not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '408':
+          description: Execution timeout
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Execution error — missing data, null propagation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ── CONDITIONS ─────────────────────────────────────────────────────────────
+
+  /conditions/{id}:
+    get:
+      operationId: getCondition
+      summary: Get a condition definition
+      description: >
+        Retrieves a specific condition definition by id and version.
+        Use to inspect condition logic and parameters before explaining
+        or calibrating.
+      tags: [Conditions]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Fully qualified condition identifier (namespace.id)
+        - name: version
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Condition definition
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConditionDefinition'
+        '401':
+          description: Unauthorised
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Condition not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /conditions/explain:
+    post:
+      operationId: explainCondition
+      summary: Explain condition logic and parameters
+      description: >
+        Returns a human-readable explanation of what a condition evaluates,
+        why its parameters were selected, and its relationship to its concept.
+      tags: [Conditions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [condition_id, condition_version]
+              properties:
+                condition_id:
+                  type: string
+                condition_version:
+                  type: string
+                timestamp:
+                  type: string
+                  format: date-time
+      responses:
+        '200':
+          description: Condition explanation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConditionExplanation'
+        '401':
+          description: Unauthorised
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Condition not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /conditions/calibrate:
+    post:
+      operationId: calibrateCondition
+      summary: Generate calibration recommendation for a condition
+      description: >
+        Analyses stored feedback and/or a target alert volume to recommend
+        adjusted parameters. Returns no_recommendation for equals strategy
+        (no numeric parameter to adjust) or when no valid adjustment exists
+        within declared threshold_bounds.
+        Does NOT modify the existing condition — call apply-calibration to
+        create a new version.
+      tags: [Conditions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CalibrateRequest'
+      responses:
+        '200':
+          description: >
+            Calibration result. Always HTTP 200 — inspect status field.
+            status: recommendation_available | no_recommendation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CalibrationResult'
+        '401':
+          description: Unauthorised
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Condition not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /conditions/apply-calibration:
+    post:
+      operationId: applyCalibration
+      summary: Apply a calibration recommendation as a new condition version
+      description: >
+        Creates a new immutable condition version using the parameters from a
+        calibration recommendation. Does NOT modify the existing version.
+        Does NOT automatically rebind any tasks — rebinding is always an
+        explicit user action via PATCH /tasks/{id}.
+        Returns tasks_pending_rebind listing tasks still bound to the
+        previous version.
+      tags: [Conditions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApplyCalibrationRequest'
+      responses:
+        '200':
+          description: New condition version created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApplyCalibrationResult'
+        '400':
+          description: Invalid or expired calibration token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorised
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ── DECISIONS ──────────────────────────────────────────────────────────────
+
+  /decisions/explain:
+    post:
+      operationId: explainDecision
+      summary: Explain a specific decision result for an entity
+      description: >
+        Returns a full explanation of a decision — why it fired or did not fire,
+        the concept value that was evaluated, the threshold or label applied,
+        and the contribution of each input signal. Supports both boolean and
+        categorical decision outputs.
+      tags: [Decisions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [condition_id, condition_version, entity, timestamp]
+              properties:
+                condition_id:
+                  type: string
+                condition_version:
+                  type: string
+                entity:
+                  type: string
+                timestamp:
+                  type: string
+                  format: date-time
+      responses:
+        '200':
+          description: Decision explanation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecisionExplanation'
+        '401':
+          description: Unauthorised
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Decision record not found for given entity + timestamp
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ── FEEDBACK ───────────────────────────────────────────────────────────────
+
+  /feedback/decision:
+    post:
+      operationId: submitFeedback
+      summary: Submit feedback on a decision
+      description: >
+        Records user feedback on a specific decision result. Feedback is stored
+        and consumed by POST /conditions/calibrate to derive tighten/relax direction.
+        false_positive → tighten (condition too sensitive).
+        false_negative → relax (condition too strict).
+        correct → no-op.
+        Note: feedback on an equals strategy condition is stored but will always
+        result in no_recommendation from calibrate (no numeric parameter to adjust).
+      tags: [Feedback]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FeedbackRequest'
+      responses:
+        '200':
+          description: Feedback recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [recorded]
+                  feedback_id:
+                    type: string
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorised
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Condition not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+tags:
+  - name: Tasks
+    description: Task creation, listing, inspection, update, and deletion
+  - name: Execution
+    description: Deterministic concept + condition + action pipeline execution
+  - name: Conditions
+    description: Condition inspection, explanation, calibration, and versioning
+  - name: Decisions
+    description: Decision result explanation and attribution
+  - name: Feedback
+    description: User feedback on decision results for calibration input
