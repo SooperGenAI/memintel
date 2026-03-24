@@ -1,3 +1,6 @@
+[![Memintel Introduction](https://img.youtube.com/vi/lo0RM1rTc2w/maxresdefault.jpg)](https://www.youtube.com/watch?v=lo0RM1rTc2w)
+```
+
 # Memintel
 
 Makes agentic AI execution deterministic. Run AI agents reliably without any randomness — same inputs, same outputs, every time.
