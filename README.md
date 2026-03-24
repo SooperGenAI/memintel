@@ -1,9 +1,8 @@
-[![Memintel Introduction](https://img.youtube.com/vi/lo0RM1rTc2w/maxresdefault.jpg)](https://www.youtube.com/watch?v=lo0RM1rTc2w)
-```
----
 # Memintel
 
 Makes agentic AI execution deterministic. Run AI agents reliably without any randomness — same inputs, same outputs, every time.
+
+[![Memintel Introduction](https://img.youtube.com/vi/lo0RM1rTc2w/maxresdefault.jpg)](https://www.youtube.com/watch?v=lo0RM1rTc2w)
 
 ---
 
@@ -40,6 +39,7 @@ If each decision boundary in a pipeline is a Memintel condition — explicit, ve
 Think of how traditional software works. You write source code, a compiler validates and transforms it into a deterministic executable, and the runtime runs that executable predictably every time.
 
 Memintel applies exactly this model to AI-driven decisions.
+
 ```
 Natural Language Intent  →  Compiler  →  Deterministic Execution
       (Source Code)         (Validator)      (Runtime)
@@ -79,12 +79,24 @@ Definitions are immutable once registered. All execution is version-pinned. "Lat
 ---
 
 ## Repository Structure
+
 ```
 backend/    — Python execution engine (FastAPI, Pydantic v2, asyncpg)
 sdk/        — TypeScript SDK (@memintel/sdk)
 ```
-## Memintel has been released under the MIT license
-```
+
+---
+
+## License
+
+Released under the [MIT License](LICENSE).
+
+---
+
 ## Getting Started
 
 See [backend/memintel-backend/README.md](backend/memintel-backend/README.md) for full setup instructions.
+
+## Documentation
+
+Full API reference and guides at **[www.memintel.io](https://www.memintel.io)**
