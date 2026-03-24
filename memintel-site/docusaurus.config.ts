@@ -10,8 +10,8 @@ const config: Config = {
 
   future: { v4: true },
 
-  url: 'https://SooperGenAI.github.io',
-  baseUrl: '/memintel/',
+  url: 'https://www.memintel.io',
+  baseUrl: '/',
   organizationName: 'SooperGenAI',
   projectName: 'memintel',
   deploymentBranch: 'gh-pages',
