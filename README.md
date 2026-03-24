@@ -80,9 +80,8 @@ Definitions are immutable once registered. All execution is version-pinned. "Lat
 backend/    — Python execution engine (FastAPI, Pydantic v2, asyncpg)
 sdk/        — TypeScript SDK (@memintel/sdk)
 ```
-
----
-
+## Memintel has been released under the MIT license
+```
 ## Getting Started
 
 See [backend/memintel-backend/README.md](backend/memintel-backend/README.md) for full setup instructions.
