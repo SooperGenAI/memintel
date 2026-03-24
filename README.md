@@ -82,7 +82,7 @@ sdk/        — TypeScript SDK (@memintel/sdk)
 ```
 ---
 
-## Mimentel has been released under MIT 
+## Mimentel has been released under MIT license
 ---
 
 ## Getting Started
