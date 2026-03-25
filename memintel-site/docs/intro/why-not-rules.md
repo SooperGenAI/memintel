@@ -180,6 +180,92 @@ Intent-based systems maintain auditability at both levels. Every decision is tra
 
 ---
 
+### 6. Environment changes require logic rewrites
+
+When the external environment changes significantly — a new regulatory framework, updated clinical guidelines, a shift in what "anomalous" means for a domain — a rules-based system requires someone to find every affected rule, understand what it was doing, decide what it should now do, and rewrite it. This is true even if the *intent* behind the rule has not changed at all. Only the parameters that give that intent its operational meaning have changed.
+
+**In AML compliance:** Regulators tighten guidance and "unusual transaction volume" now maps to 10x the customer baseline instead of 15x. In a rules engine, someone locates every rule that encodes a transaction volume threshold, assesses whether each one reflects this concept, and rewrites the ones that do. Some rules may have been written years ago by people who have since left. Some may encode the threshold in non-obvious ways. Some may have been copied and slightly modified across business units and are now inconsistent.
+
+**In healthcare:** CMS updates coverage criteria for a procedure. Every prior authorisation rule that encodes those criteria needs to be found and updated. If the criteria changed in a subtle way — the same procedure is now covered under condition A but not condition B — every rule that referenced the old single condition needs to be rewritten into two rules with different logic.
+
+**In DevOps:** A service's traffic patterns shift seasonally. What was "statistically anomalous" last quarter is now normal peak behaviour. Every alert threshold that was set based on last quarter's baseline needs to be recalibrated — and in a rules engine, that means someone sitting down and manually updating numbers.
+
+In each case: even though the *intent* has not changed — "flag unusual transactions", "enforce coverage criteria", "alert on anomalous load" — the rules must be rewritten because rules encode parameters, not intent.
+
+**Memintel's approach:** When the environment changes, the admin updates the guardrails config — the parameter priors, bias rules, and strategy constraints that reflect current domain understanding. Then they trigger recompilation of affected tasks. The compiler re-runs against the original intent strings with the new policy constraints and derives new concept and condition versions automatically. The intent layer is untouched. The logic derives itself from current understanding.
+
+```
+Rules-based environment change:
+  Find affected rules → understand current logic → decide new logic
+  → rewrite rules → test → deploy → repeat for each rule
+
+Memintel environment change:
+  Update guardrails config → trigger recompilation of affected tasks
+  → review delta → approve → rebind
+```
+
+The difference in scale becomes clear when an organisation has hundreds of monitoring tasks across a domain. In a rules engine, a regulatory update is a project. In Memintel, it is a config change followed by a review.
+
+---
+
+---
+
+## The benefits of intent-based evaluation
+
+The six implications above describe what goes wrong with rules. Flipped around, they describe what Memintel gets right. Here is the positive statement of each.
+
+### 1 — Logic comes from meaning, not from engineering
+
+Domain experts express what they want to monitor in plain language. The system derives the signals, the combination, the strategy, and the thresholds from the primitive vocabulary and guardrails the admin has configured. Nobody has to translate business intent into code. Engineers build primitives. Admins govern policy. Users express meaning. The compiler does the rest.
+
+**In practice:** A credit analyst says "alert me when a borrower shows significant financial deterioration." A compliance officer says "flag unusual transaction patterns for this customer." An SRE says "warn me before this service breaches its SLO." None of them wrote a threshold. All of them got exactly the monitoring they intended.
+
+### 2 — Consistency across every evaluation
+
+This matters most for **ongoing tasks** — the primary Memintel use case. When a task evaluates thousands of entities on a schedule, every single evaluation runs against the same pinned condition version. Same threshold, same strategy, same parameters — across every entity, across every run, across months of operation. Cross-entity fairness and cross-time reproducibility are guaranteed by architecture, not by discipline.
+
+**In practice:** When a bank's AML system evaluates 2 million customers daily, every customer is evaluated against the same compiled condition. When a health plan monitors 50,000 providers for network compliance, every provider is evaluated identically. There is no question of which version of the logic any given entity was subject to.
+
+### 3 — Auditability at the level of meaning
+
+Every decision is traceable to a specific compiled condition version — which strategy, which parameters, which primitives. And that condition version is itself traceable to the intent that produced it. When a decision is questioned, you can answer both "what fired" and "what was the system trying to detect."
+
+**In practice:** A regulator asks why a specific AML alert was not raised for a specific customer on a specific date. You can replay the exact evaluation — same condition version, same primitive values, same timestamp — and show precisely what the system evaluated and why it did or did not fire. This is not post-hoc reconstruction. It is the audit trail the system produces automatically.
+
+### 4 — Environment changes without logic rewrites
+
+When the regulatory environment changes, clinical guidelines update, or domain understanding shifts — the admin updates the guardrails config and triggers recompilation of affected tasks. The compiler re-derives new conditions from the same original intent strings under the new policy constraints. The intent layer is untouched. Users never touch a threshold.
+
+**In practice:** A regulatory update that would require rewriting dozens of AML rules in a rules engine becomes a guardrails config change followed by a review of the compiled delta. The compliance team approves the new thresholds. Tasks rebind. The entire process is traceable and reversible.
+
+### 5 — Complexity grows linearly, not combinatorially
+
+Adding a new signal adds one primitive. Existing tasks incorporate it where semantically relevant on next recompilation. Complexity grows with new requirements, not with new scenario permutations. There is no rule explosion — just a growing vocabulary of typed signals that the compiler can draw on.
+
+**In practice:** A platform team adds a new observability signal — `service.dependent_service_latency`. Every existing SRE monitoring task that was created with "degradation" or "cascade risk" intent automatically benefits from the new signal on next recompilation. No individual task needs to be updated.
+
+### 6 — Calibration produces clean, actionable signal
+
+Condition versions are immutable. Feedback accumulates against a known, stable definition. When enough signal exists, the calibration recommendation is statistically meaningful — not confounded by silent changes in evaluation logic between evaluations. The system gets more accurate over time through explicit, versioned, admin-approved improvement.
+
+**In practice:** After three months of AML monitoring, the false positive rate is 22%. The calibration engine recommends raising the threshold from 10x to 12x, estimated to reduce false positives by 30% with minimal impact on true positive detection. The admin reviews, approves, and the new version is deployed. Every step is auditable.
+
+---
+
+### Summary
+
+| Benefit | Rules | Memintel |
+|---|---|---|
+| How logic is created | Specified by engineers | Derived from intent |
+| Consistency across evaluations | Degrades as rules drift | Guaranteed by version pinning |
+| Auditability | At rule level only | At meaning level |
+| Response to environment change | Rewrite affected rules | Update guardrails, recompile |
+| Complexity as scale grows | Combinatorial explosion | Linear growth |
+| Calibration | Manual threshold adjustment | Structured feedback loop |
+| Most valuable for | Bounded, static, well-defined checks | Ongoing monitoring, evolving environments |
+
+---
+
 ## What rules do well — and where to keep them
 
 To be precise about the boundary:
