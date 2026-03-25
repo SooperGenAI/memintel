@@ -8,206 +8,221 @@ sidebar_label: Why not SQL and rules?
 
 Every technical team evaluating Memintel asks the same question early on: *"Can't we just do this with SQL and a rules engine?"*
 
-It is the right question. SQL and rule-based systems are well-understood, reliable, and already present in most organisations. Before adopting anything new, a technical team should be able to explain precisely why existing tools are insufficient — not in vague terms, but with specific architectural reasoning.
+The honest answer is: for many things, yes you can. Time-series analysis, z-score anomaly detection, multi-signal composition, threshold monitoring — all of these are technically achievable with rules. A motivated engineering team can build them.
 
-This page answers that question directly. It explains what SQL and rules do well, exactly where they break down, and why the problems Memintel addresses are structurally beyond what rule-based systems can solve.
-
----
-
-## What SQL and rules do well
-
-Let us be honest about this before making the case for something different.
-
-A well-built system using SQL databases, rule engines, and validation scripts handles a significant class of decision logic correctly:
-
-**Static threshold checks** — "Is this transaction above $10,000?" "Has this loan's LTV exceeded 80%?" "Is this server's CPU above 90%?" Rules fire correctly here. The logic is explicit, testable, and deterministic.
-
-**Point-in-time validation** — "Is this record in a valid state?" "Does this field contain a permitted value?" "Is this configuration within spec?" SQL handles this well.
-
-**Simple event triggers** — "When a payment fails, create a retry task." "When disk usage exceeds 95%, send an alert." Clear input, clear output, direct action.
-
-For these problems — bounded, well-defined, static — Memintel is not needed. Use SQL. Use rules. They are faster to implement and easier to maintain.
+The question is not whether rules *can* do it. The question is **how the logic gets there in the first place** — and what happens when the world changes.
 
 ---
 
-## Where they fundamentally break down
+## The fundamental difference
 
-The real problems are not validation problems. They are **state evolution problems** — and this is a meaningful distinction.
+In a rule-based system, logic must be **specified**. Someone sits down, decides which signals matter, defines how to combine them, picks the thresholds, and writes the condition. Every decision reflects an explicit choice made by a human at authoring time. The system does exactly what it was told — no more, no less.
 
-SQL and rules are designed to answer: **"What is true right now?"**
+In Memintel, logic is **derived from intent**. A user expresses what they want to monitor in plain language. The compiler — working within the primitive vocabulary and guardrails the admin has configured — derives the signals, the combination, the strategy, and the thresholds. Nobody wrote that specific logic. It was compiled from meaning.
 
-The problems Memintel addresses require answering: **"Has the meaning of this data changed, given everything else that has changed around it?"**
-
-These are different questions. Here is exactly where the gap opens.
+This is the centrepiece. Everything else — the auditability, the adaptability, the scale — is a consequence of this one architectural difference.
 
 ---
 
-### Problem 1 — Time-indexed reasoning
+## The same problem, seen from both sides
 
-SQL gives you the current state. But many risk and compliance decisions require reasoning about state *as of a specific historical moment* — evaluated against what the external environment looked like at that time.
-
-**In financial compliance:** A transaction that was permissible under the sanctions regime in effect on March 1st may create liability if a counterparty was added to the OFAC list on March 3rd — but only for transactions *after* the designation, not before. The decision depends on the precise relationship between transaction timestamps and regulatory state changes.
-
-**In healthcare:** A prior authorization approved under a clinical policy that was updated two weeks ago may no longer cover the scheduled procedure. Whether the provider is at risk depends on when the service is scheduled relative to when the policy changed.
-
-**In DevOps:** A deployment that passed all checks at 2pm may have introduced a regression that only becomes visible at 6pm when traffic patterns shift. Root cause analysis requires reconstructing the exact system state at each point — not just the current state.
-
-SQL can store all of this data. But evaluating decisions *as of* a historical moment — using the regulatory state, policy version, or system configuration that was current *at that time* — requires engineering that has no native SQL answer. You build it yourself, differently, for every data source.
-
-**Memintel's approach:** Every evaluation is timestamped. Resolvers are required to return values *as of* the given timestamp. Point-in-time correctness is enforced architecturally, not by convention.
+The difference becomes concrete when you look at the same problem through both lenses across different domains.
 
 ---
 
-### Problem 2 — Cross-period dependency graphs
+### Finance — AML transaction monitoring
 
-When something changes in a complex system, the change does not stay local. It propagates through a dependency graph — and the full extent of that propagation is rarely obvious in advance.
+**Rules-based approach:**
 
-**In finance:** A credit rating downgrade of a single large counterparty ripples through risk-weighted assets, capital ratios, concentration limits, and reporting requirements simultaneously. Each of these is a separate calculation. Each depends on others. A rules engine fires the rule for the direct exposure. It does not automatically evaluate the second and third-order consequences across the portfolio.
+A compliance engineer defines:
 
-**In healthcare:** A formulary change — removing a drug from covered status — affects every active prescription for that drug, every prior authorization referencing it, every care plan that includes it, and every patient whose treatment protocol depends on it. The impacted scope is not a list. It is a tree of consequences.
+```python
+if transaction.amount > customer.avg_90d * 10:
+    if customer.jurisdiction_risk == "high":
+        if transaction.counterparty in watchlist:
+            create_alert("high_risk_transaction")
+```
 
-**In DevOps / platform engineering:** A schema migration in a shared database service affects every downstream service that reads from it. Identifying the full blast radius requires traversing a dependency graph of services, their contracts, their consumers, and their consumers' consumers.
+This logic reflects decisions made at authoring time: the 10x multiplier, the jurisdiction risk threshold, the watchlist check. Each was chosen by someone, written by someone, and must be maintained by someone.
 
-SQL can store relationships. What it cannot do is *continuously evaluate propagation* through a dependency graph as changes occur. You end up writing cascading queries — each step a separate job, each new edge type a new engineering project. As the graph grows, the complexity grows combinatorially. It is brittle and difficult to maintain.
+Now the compliance team learns that structuring patterns — multiple transactions just below the reporting threshold — are more suspicious than single large transactions. Someone has to add that logic. The typology changes next month when regulators publish new guidance. Someone has to update the rules again. A new signal becomes available — the customer's Slack escalation history. Someone has to wire it in.
 
-**Memintel's approach:** The execution graph is compiled from intent. Dependency traversal is built into the evaluation engine, not layered on top of it with hand-written queries.
+The system is always one step behind the current understanding of what suspicious means.
 
----
+**Memintel approach:**
 
-### Problem 3 — Semantic equivalence across change
+The compliance officer types: *"Alert me when a transaction shows unusual risk relative to this customer's established pattern and current regulatory signals."*
 
-Data sources evolve. The meaning of a field, a label, or a metric changes over time — sometimes subtly, sometimes significantly. Rules that were written against the old meaning silently produce wrong answers when evaluated against the new one.
+The compiler maps "unusual" to a statistical deviation strategy on `transaction.value_vs_baseline_ratio`, weighs it against `customer.counterparty_jurisdiction_risk` and `typology.recent_match_score`, and compiles a composite condition. The compliance officer never picked a multiplier. The system derived what "unusual" means given the registered signals and domain priors.
 
-**In finance:** "Revenue" as a concept in a company's financial reporting may be split into multiple components in a new accounting standard. A rule that evaluated total revenue against a threshold now needs to evaluate the sum of multiple successor fields — but which successor fields are semantically equivalent depends on the company's specific reporting structure, not just on the standard itself.
-
-**In healthcare:** A diagnosis code that was a single ICD-10 code in one year may be split into three more specific codes in the next revision. A rule checking for "diabetes-related complications" by code now misses two-thirds of the population unless it is explicitly updated — and that update requires clinical knowledge, not just a schema change.
-
-**In DevOps / SRE:** A latency metric that was a single P99 value is now reported as separate P95, P99, and P99.9 values after an observability platform upgrade. Rules firing on the old metric name produce no alerts. Rules firing on the new names need to be rebuilt from scratch with correct thresholds.
-
-In each case, the problem is not that the data changed. The problem is that the *meaning* of the data changed, and rules have no way to detect or reason about meaning — only structure and values.
-
-**Memintel's approach:** Semantic interpretation happens at task creation time, with an LLM operating within guardrails, mapping intent to structured primitives. When a primitive's underlying source changes, the resolver is updated. The evaluation logic built on top of that primitive remains valid because it operates on meaning, not on raw field names.
+When new typology guidance is published, the data team updates the `typology.recent_match_score` resolver. The compiled logic automatically incorporates it on the next evaluation — because the intent was "match against current regulatory signals", not "check these three specific conditions."
 
 ---
 
-### Problem 4 — Dual memory reconciliation
+### Healthcare — Prior authorisation monitoring
 
-The most important class of problems Memintel addresses require simultaneously maintaining and reconciling two evolving states:
+**Rules-based approach:**
 
-1. **Internal state** — the customer's transaction history, the borrower's financial trajectory, the patient's care history, the service's deployment history
-2. **External state** — the current regulatory environment, the latest clinical guidelines, the current vendor SLA, the current threat landscape
+A revenue cycle engineer writes:
 
-The value does not come from either source alone. It comes from the *interaction* between them.
+```python
+if auth.days_to_expiry < 7:
+    if auth.units_remaining < 3:
+        send_alert("auth_expiring_soon")
+```
 
-**In AML compliance:** A transaction is only suspicious relative to the customer's established behavior pattern. A $50,000 wire transfer is routine for a commercial real estate firm. It is anomalous for a sole trader who has never previously sent a wire above $5,000. The same value, different meaning — because the internal history is different.
+This fires when an auth is expiring with few units left. But it does not fire when an auth has 12 days left and 8 units remaining — even if 9 services are scheduled in the next 10 days and the auth will be exhausted on day 3. The rule captures the current state. It does not reason about the trajectory.
 
-**In credit risk:** A counterparty downgrade (external signal) only matters in proportion to that counterparty's share of your portfolio (internal state). A downgrade affecting a counterparty that represents 0.2% of RWA is a monitoring note. A downgrade affecting a counterparty representing 8% of RWA may require immediate capital action.
+To catch that case, an engineer has to write another rule. To catch the case where expiry and scheduled services interact with a pending renewal that may or may not arrive in time, another rule. Each new scenario is a new specification project.
 
-**In healthcare network compliance:** A provider's OIG exclusion (external signal) only creates liability in proportion to the claims currently in flight from that provider (internal state). The alert without the context is noise. The alert with the context is actionable.
+**Memintel approach:**
 
-**In DevOps / incident management:** An infrastructure event (external signal — a cloud provider's availability zone outage) only creates risk in proportion to which services have active traffic routed through that zone (internal state). The event affects everyone theoretically. The impact is specific to your topology.
+The care manager types: *"Alert me when an active authorisation is at risk of expiring before scheduled services are completed."*
 
-SQL systems are designed around internal data. Connecting them to continuously evolving external state — and evaluating the interaction in real time — requires custom engineering for each external source, custom reconciliation logic for each interaction type, and custom alerting for each combination. This does not scale across domains.
+The compiler combines `auth.days_to_expiry`, `auth.units_remaining`, `auth.units_utilization_rate`, and `auth.pending_claims_at_risk` into a composite concept that evaluates the trajectory — not just the current state. Nobody specified that `pending_claims_at_risk > units_remaining` is the relevant comparison. The compiler derived it from "at risk of expiring before scheduled services are completed."
 
-**Memintel's approach:** Internal and external state are both expressed as typed primitives. The evaluation engine treats them identically. A new external data source is a new resolver function, not a new architecture.
-
----
-
-### Problem 5 — Continuous vs batch evaluation
-
-Traditional rule systems run checks when triggered — on a schedule or in response to a direct event. The gap between when something becomes true and when the system discovers it is structural, not accidental.
-
-**In financial compliance:** An OIG exclusion takes effect from the moment of publication. Paying claims to an excluded provider after that moment creates federal liability — regardless of when your batch job runs. A system that checks the exclusion list nightly creates a window of exposure that is not a configuration problem; it is an architectural one.
-
-**In healthcare:** A prior authorization approved today may exhaust its unit limit by Friday based on scheduled services. A system that checks authorization status at claim submission discovers the problem after the service has been delivered. A system that continuously evaluates trajectory discovers it with enough lead time to request an extension.
-
-**In DevOps / SRE:** A memory leak that doubles every four hours is undetectable by a rule that checks current memory utilisation against a static threshold. By the time the threshold is crossed, the system may be minutes from failure. Detecting it requires evaluating the *rate of change* of memory utilisation over time — which is a different question from "is memory above 80%?"
-
-**In financial markets:** A credit spread that widens by 3 basis points per day is unremarkable in isolation. Over 30 trading days, it signals a structural deterioration in counterparty credit quality that should trigger enhanced monitoring. A rule fires at a specific spread level. Memintel detects the trajectory before that level is reached.
-
-Running batch jobs more frequently does not solve this. It multiplies compute cost while still evaluating the same static logic more often. The architecture is still reactive.
-
-**Memintel's approach:** Tasks can be event-driven, firing immediately when a resolver returns a changed value. The evaluation is a continuous function of state, not a scheduled poll.
+The alert fires with enough lead time to act — not after the service has been delivered and the claim denied.
 
 ---
 
-### Problem 6 — Proactive vs reactive
+### DevOps / SRE — Incident early warning
 
-This is the most fundamental difference — and the hardest to solve with rules.
+**Rules-based approach:**
 
-A rule system answers: **"Is something wrong right now?"**
+An SRE writes:
 
-Memintel is designed to answer: **"Is something becoming wrong, given the trajectory of the current state?"**
+```yaml
+alert: high_error_rate
+condition: error_rate > 1.0%
+severity: page
+```
 
-**In credit risk:** A borrower's debt service coverage ratio of 1.52 is above the covenant floor of 1.25. No rule fires. But the ratio has declined from 2.41 to 2.18 to 1.87 to 1.52 over four consecutive quarters — a -37% decline tracking toward a covenant breach in two quarters. The current value is acceptable. The trajectory is not.
+This fires when the error rate crosses 1%. It does not fire when the error rate is 0.7% and has been climbing 0.1% per hour for six hours. By the time the rule fires, the service may be minutes from an outage.
 
-**In healthcare fraud detection:** A physician billing 68% high-complexity codes this month is within tolerances. But if that proportion has risen from 31% to 45% to 57% to 68% over four months while the peer median has held steady at 31%, the trajectory indicates a systematic upcoding pattern — not a one-month anomaly that resolved itself.
+To catch the trajectory, the engineer has to write a second rule on the rate of change. To catch the case where a memory leak causes gradual degradation, a third rule. To catch the case where error rate is acceptable but p99 latency is deteriorating in a pattern that predicts a cascade failure, several more rules — each requiring specialised knowledge of what warning patterns look like for that specific service.
 
-**In DevOps:** A service's error rate of 0.8% is below the SLO threshold of 1.0%. No alert fires. But if the error rate has increased by 0.15% every hour for the past six hours, it will breach the SLO within the next 90 minutes. Detecting this requires evaluating the trend, not just the current value.
+**Memintel approach:**
 
-**In SaaS operations:** A customer's feature adoption score of 42% is above the churn risk threshold of 35%. No alert fires. But adoption has declined from 71% to 63% to 53% to 42% over four weeks. At this trajectory, they cross the threshold before their next renewal. The intervention window is now, not after they cross the line.
+The SRE types: *"Alert me when this service shows early signs of degradation before it breaches SLO thresholds."*
 
-You can encode trend detection in rules. It is technically possible — precompute time-series features, define the slope calculation, write the comparison logic. But you have to do this individually for every metric you care about. As the number of metrics grows, the engineering cost grows linearly. As the number of trend types grows, the complexity grows combinatorially. The system becomes a collection of bespoke feature-engineering projects rather than a coherent evaluation framework.
+The compiler maps "early signs of degradation" to change and z-score strategies across `service.error_rate_1h`, `service.p99_latency_trend`, and `service.memory_utilization_rate`, derives the appropriate time windows from the service's historical patterns, and compiles a composite condition. The SRE did not specify which signals matter or what trajectory threshold triggers concern. The system derived both from "early signs of degradation" given the registered primitives.
 
-**Memintel's approach:** Time-series primitives are a first-class type. Change and z-score strategies are built-in evaluation primitives. Trajectory detection is a configuration choice, not a custom engineering project.
-
----
-
-## The honest summary
-
-SQL and rules are not wrong. They are the right tool for bounded, well-defined, static problems. The problem they are not designed for is this:
-
-**Continuously determining whether a system's state — evaluated in the context of its own history and an evolving external environment — has changed in a way that is meaningful enough to require action.**
-
-This problem has six structural requirements that rule-based systems cannot satisfy at scale:
-
-| Requirement | SQL / Rules | Memintel |
-|---|---|---|
-| Point-in-time historical evaluation | Manual, per-source engineering | Enforced by resolver contract |
-| Cross-period dependency propagation | Combinatorial query complexity | Compiled evaluation graph |
-| Semantic interpretation across change | Not possible | LLM at compile-time, deterministic at runtime |
-| Dual internal/external memory reconciliation | Custom per-integration engineering | Unified primitive model |
-| Continuous event-driven evaluation | Batch polling or complex streaming pipelines | Native event-driven execution |
-| Trajectory and trend detection | Custom feature engineering per metric | Built-in time-series strategies |
-
-The left column is not a criticism of SQL. SQL is excellent at what it does. The right column describes a different class of problem — one that requires a different architectural layer.
+When a new signal is added — say, `service.dependent_service_latency` — tasks that include "signs of degradation" in their intent automatically become candidates for recompilation to include it.
 
 ---
 
-## What Memintel is not replacing
+### Credit risk — Portfolio early warning
+
+**Rules-based approach:**
+
+A risk analyst writes:
+
+```python
+if borrower.dscr < 1.25:
+    flag_for_review("covenant_breach")
+```
+
+This fires at the covenant floor. But a borrower with DSCR declining from 2.41 → 2.18 → 1.87 → 1.52 over four quarters is two quarters from a breach. The rule does not fire. The relationship manager does not know. The intervention window passes.
+
+To catch deterioration before breach, the engineer has to build time-series features, define the slope calculation, write the trend comparison. For each metric the bank monitors — DSCR, leverage, current ratio, interest coverage — a separate engineering project. And each one encodes a specific definition of "deteriorating" that may not match what an experienced credit analyst would recognise.
+
+**Memintel approach:**
+
+The credit analyst types: *"Alert me when a borrower's financial health is showing a significant declining trend."*
+
+The compiler maps "financial health" to a composite of `borrower.dscr_trend_4q`, `borrower.leverage_ratio`, and `borrower.management_sentiment_score`, applies a change strategy to detect trajectory rather than current level, and derives severity from the rate of decline. The analyst did not define what "financial health" is or what "significant declining trend" means quantitatively. The system derived both.
+
+The alert fires when the trajectory predicts a covenant breach — not when the breach has already occurred.
+
+---
+
+## The implications of rules-based logic specification
+
+When logic must be specified rather than derived, a specific set of consequences follow. They are not accidental — they are structural.
+
+### 1. Logic is always behind current understanding
+
+Rules encode what someone understood at the time they wrote them. The world moves on. New signals become available. New patterns emerge. New regulatory guidance is published. The rules do not know any of this. They continue evaluating the same conditions they were given, against a reality that has evolved.
+
+Keeping rules current requires continuous manual intervention — someone monitoring what has changed, deciding what it means for the logic, writing the update, testing it, deploying it. In fast-moving environments, this is not a backlog item. It is a permanent ongoing cost.
+
+Intent-based systems face this too — but only at the primitive and guardrails layer, not at the logic layer. When a new signal becomes available, the admin registers a primitive. Tasks that were created with intent that encompasses that signal automatically benefit from it. The logic layer does not need to be rewritten.
+
+### 2. Every edge case is an engineering project
+
+Rule systems handle the cases their authors anticipated. Every unanticipated case — every interaction between signals that was not explicitly specified — either fires incorrectly, fails to fire, or requires a new rule.
+
+In AML, this means the structuring pattern that was not in the original specification gets missed for months until an audit finds it. In healthcare, this means the authorisation that expires during a holiday weekend does not trigger the right escalation because nobody wrote that rule. In DevOps, this means the cascading failure that starts with a subtle latency degradation does not page anyone because the path from "latency degrading slowly" to "imminent outage" was never explicitly defined.
+
+Intent-based systems derive logic from meaning. "At risk" means at risk — including the edge cases the user did not enumerate, because the compiler is working from the semantic intent, not from a list of specific conditions.
+
+### 3. Complexity grows with the number of scenarios
+
+A rules system with 10 signals and 5 severity levels requires someone to reason about every meaningful combination. Not all combinations matter — but determining which ones matter requires domain expertise, and encoding each one that does requires engineering effort. As signals are added, this grows combinatorially.
+
+Large financial institutions routinely maintain thousands of AML rules. Healthcare payors maintain hundreds of prior authorisation rules per clinical specialty. DevOps teams maintain rule files with hundreds of alert conditions. Each was added for a reason. Each interacts with others in ways that are difficult to fully reason about. Debugging a false positive means tracing which rule fired and why — often through logic written by someone who has since left the organisation.
+
+Intent-based systems scale differently. Adding a new signal adds one primitive. The evaluation logic for existing tasks does not need to change — the compiler incorporates the new signal where it is semantically relevant. Complexity grows linearly with new requirements, not combinatorially with new scenarios.
+
+### 4. Adaptation requires re-specification
+
+When a calibration is needed — thresholds are too sensitive, a new pattern needs to be detected, a clinical policy changes — rules must be rewritten. This means: identify the relevant rules, understand their current logic, decide what should change, write the change, test it, deploy it.
+
+In practice this creates inertia. Rules that should be updated are not, because the update process is expensive. Systems drift away from current best practice because the cost of keeping them current exceeds the perceived benefit of each individual update.
+
+Intent-based calibration works differently. Feedback on decisions — "this was a false positive", "this should have fired earlier" — adjusts parameters within the compiled condition. The intent remains the same. The system becomes more accurate without anyone rewriting logic. The adaptation is structural, not manual.
+
+### 5. Auditability exists at the rule level, not at the meaning level
+
+A rules engine can tell you which rule fired. It cannot tell you whether the rule still accurately reflects what the organisation means by "high risk" or "significant deterioration" or "at risk of stalling." The rule is the authoritative record, but the rule is a human artifact — it reflects an understanding that may have been correct at authoring time and may have drifted since.
+
+Intent-based systems maintain auditability at both levels. Every decision is traceable to a specific compiled condition version — which strategy, which parameters, which primitives. And that condition version is itself traceable to the intent that produced it. When a decision is questioned, you can answer both "what fired" and "what was the system trying to detect."
+
+---
+
+## What rules do well — and where to keep them
 
 To be precise about the boundary:
 
-**Memintel does not replace your data pipeline.** Signal extraction — turning raw transactions, clinical records, infrastructure metrics, or financial data into clean typed values — happens upstream in your existing infrastructure. Memintel starts where typed primitives exist.
+**Rules are the right tool for:**
+- Bounded, well-defined threshold checks with stable definitions
+- Regulatory validation rules that are explicitly specified in law or policy and do not require interpretation
+- Simple event triggers with clear, unambiguous conditions
+- Any decision where the logic is unlikely to evolve and does not require contextual reasoning
 
-**Memintel does not replace your LLM.** The LLM interprets intent at task creation time. It does not participate in runtime evaluation. Memintel's runtime is a pure deterministic function.
-
-**Memintel does not replace simple rules.** For bounded, well-defined threshold checks — use SQL. The engineering is simpler and the overhead is lower. Memintel is for the problems where the answer depends on context, history, and evolving external state.
+**Memintel is the right tool for:**
+- Decisions where "what matters" requires domain interpretation, not just threshold comparison
+- Monitoring that needs to evolve as signals, patterns, and regulatory expectations change
+- Multi-signal evaluation where the combination reflects meaning, not just arithmetic
+- Any context where the ability to express intent and have logic derived — rather than specified — reduces the engineering and governance burden to a level that makes continuous improvement practical
 
 ---
 
-## The architectural position
+## The architectural boundary
 
-Memintel sits between your data pipeline and your action layer:
+Memintel does not replace your data pipeline. Signal extraction — turning raw transactions, clinical records, financial filings, or infrastructure metrics into clean typed values — happens upstream in your existing infrastructure. Memintel starts where typed primitives exist.
+
+Memintel does not replace your LLM. The LLM interprets intent at task creation time, once, and produces a structured evaluation definition. It does not participate in runtime evaluation. The runtime is a pure deterministic function.
 
 ```
 Data Sources  →  Signal Extraction  →  Primitives  →  Memintel  →  Actions
-(your systems)   (your pipeline)        (your config)  (evaluation)  (your systems)
+(your systems)   (your pipeline)       (admin cfg)    (evaluation)  (your systems)
                                                            ↑
                                                      Intent (LLM)
                                                      compiled once
+                                                     at task creation
 ```
 
-Every layer to the left and right of Memintel is yours. Memintel's job is the evaluation in the middle — determining, continuously and deterministically, whether the state your data describes is meaningfully different from what it was before.
-
-SQL tells you what your data is. Memintel tells you whether it still makes sense — given everything that has changed around it.
+SQL tells you what your data is.
+Rules tell you whether your data matches what someone decided mattered.
+Memintel tells you whether your data means something — given current signals, current context, and current understanding of what matters.
 
 ---
 
 ## Further reading
 
 - [Core Concepts](/docs/intro/core-concepts) — the ψ → φ → α model in detail
-- [Guardrails System](/docs/intro/guardrails) — how evaluation logic is governed
-- [Deal Intelligence Tutorial](/docs/tutorials/deal-intelligence) — the architecture applied to sales pipeline monitoring
-- [Financial Risk Monitoring](/docs/tutorials/financial-risk-monitoring) — AML, credit risk, and capital adequacy
+- [Guardrails System](/docs/intro/guardrails) — how the admin constrains intent resolution
+- [Deal Intelligence Tutorial](/docs/tutorials/deal-intelligence) — intent-based monitoring applied to sales
+- [Financial Risk Monitoring](/docs/tutorials/financial-risk-monitoring) — AML, credit risk, capital adequacy
 - [Healthcare Payor-Provider](/docs/tutorials/healthcare-payor-provider) — claims fraud, network compliance, prior auth
