@@ -6,7 +6,7 @@ sidebar_label: Deal Intelligence
 
 # Tutorial: Deal Intelligence for Sales
 
-A complete end-to-end walkthrough of building a deterministic deal intelligence system — from raw CRM and email data through to automated sales alerts. This tutorial covers the full architecture, including where Memintel sits and what comes before it.
+A complete end-to-end walkthrough of building a deterministic deal intelligence system — from raw CRM and email data through to automated sales alerts. This tutorial covers the full architecture, the division of roles and responsibilities, and design guidelines for building a system that stays deterministic in production.
 
 :::note What you'll build
 A system that monitors your sales pipeline and automatically alerts reps when deals show signals of risk — with every decision consistent, explainable, and fully reproducible.
@@ -14,109 +14,173 @@ A system that monitors your sales pipeline and automatically alerts reps when de
 
 ---
 
-## The Right Mental Model
+## The Three Roles
 
-Before writing a single line of code, it is worth understanding the three-layer architecture that makes this system work. Getting this right is what separates a reliable production system from one that collapses back into probabilistic LLM reasoning.
+Before anything else, it is worth being explicit about who does what. One of the most common mistakes when building on Memintel is treating it as a single-persona system. It is not. There are three distinct roles, each with a different level of access and a different kind of responsibility.
+
+| Role | Who they are | What they do |
+|---|---|---|
+| **Data Engineer** | Backend / data team | Builds the data pipeline — ingests raw sources, runs signal extraction, delivers typed primitives to the registry |
+| **Admin** | Domain expert / platform owner | Registers primitives, configures guardrails, governs the strategy registry and parameter bounds |
+| **User** | Sales ops / business user | Expresses intent in plain language — never sees primitives, strategies, or thresholds |
+
+And there is a fourth actor: **Memintel itself** — which compiles user intent into concepts and conditions automatically, within the boundaries the admin has defined.
+
+These roles have a deliberate hierarchy. The data engineer determines what signals are available. The admin determines how those signals can be used. The user determines what they want to monitor. Memintel resolves the rest.
+
+---
+
+## The Architecture
 
 ```
-Layer 1          Layer 2               Layer 3
-──────────       ──────────────────    ──────────────────────────
-Raw Data    →    Signal Extraction →   Memintel
-(messy,          (LLMs + parsers,      (typed primitives →
- unstructured)    semi-structured)      deterministic decisions)
+Raw Data     →    Signal Extraction    →    Primitives    →    Memintel    →    Decisions
+(Data Eng.)       (Data Eng. + LLMs)        (Admin)            (System)         (User)
 ```
 
-### Layer 1 — Data Sources
+**Layer 1 — Raw Data** *(Data Engineer's responsibility)*
 
-This is your raw data. Unstructured, noisy, inconsistent. You do not give this directly to Memintel.
+Unstructured, noisy, inconsistent. Never given directly to Memintel.
+- Emails, CRM records, Slack messages, call transcripts
 
-- **Emails** — threads, replies, response times, tone
-- **CRM** — deal stages, activity logs, close dates, deal values
-- **Slack** — internal discussions, escalation mentions, deal references
-- **Calls** — transcripts, duration, talk ratios, next steps captured
+**Layer 2 — Signal Extraction** *(Data Engineer's responsibility)*
 
-### Layer 2 — Signal Extraction
-
-This is where LLMs and parsers do their job: converting raw unstructured data into structured, named signals. This layer is inherently probabilistic — and that is fine, because its job is interpretation, not decision-making.
+LLMs and parsers convert raw data into structured signals. This layer is inherently probabilistic — that is fine because its job is interpretation, not decision-making.
 
 *From emails:*
-- `response_time_hours` — how long the customer took to reply
-- `sentiment_score` — 0 to 1, extracted by LLM from email tone
-- `last_reply_direction` — did the customer reply last, or the rep?
-- `urgency_detected` — boolean, did the email contain urgency signals?
-- `thread_stalled_days` — days since last email in the thread
+- `response_time_hours` — time from rep's email to customer reply
+- `sentiment_score` — 0 to 1, LLM-extracted from email tone
+- `last_reply_direction` — customer or rep replied last
+- `urgency_detected` — boolean, urgency signals present
+- `thread_stalled_days` — days since last reply in thread
 
 *From CRM:*
-- `deal_stage` — current stage (categorical: prospecting, negotiation, etc.)
-- `stage_duration_days` — how many days at the current stage
+- `deal_stage` — current stage (categorical)
+- `stage_duration_days` — days at current stage
 - `deal_value` — contract value
-- `last_activity_days` — days since any CRM activity was logged
+- `last_activity_days` — days since any logged activity
 
 *From Slack:*
-- `internal_escalation_flag` — boolean, has this deal been escalated internally?
-- `mentions_of_deal` — how often the deal is referenced in the last 7 days
+- `internal_escalation_flag` — deal escalated internally
+- `mention_frequency_7d` — how often deal is referenced
 
 *From calls:*
-- `call_completion_rate` — scheduled vs completed calls
-- `next_steps_captured` — boolean, were next steps recorded after the last call?
+- `call_completion_rate` — scheduled vs completed ratio
+- `next_steps_captured` — next steps recorded after last call
 
-### Layer 3 — Primitives (where Memintel begins)
+**Layer 3 — Primitives** *(Admin's responsibility)*
 
-Once signals are extracted, they are normalised into typed primitives and handed to Memintel. **This is the architecture boundary.** Everything before this point is your data pipeline. Everything after this point is deterministic.
-
-```json
-{ "name": "thread_stalled_days",       "type": "int"         }
-{ "name": "customer_sentiment_score",  "type": "float"       }
-{ "name": "deal_stage",                "type": "categorical" }
-{ "name": "stage_duration_days",       "type": "int"         }
-{ "name": "last_activity_days",        "type": "int"         }
-{ "name": "internal_escalation_flag",  "type": "boolean"     }
-```
+Normalised, typed variables registered in Memintel's primitive registry. This is the architecture boundary. Everything before this point is your data pipeline. Everything after this point is deterministic.
 
 :::warning The critical insight
-If your primitives are wrong — inconsistently defined, loosely typed, or directly fed from raw LLM outputs without normalisation — Memintel's evaluations become non-deterministic too. The determinism guarantee only holds from the primitive layer onwards. Getting primitives right is the most important architectural decision in this system.
+The determinism guarantee only holds from the primitive layer onwards. If your primitives are inconsistently defined, loosely typed, or fed directly from raw LLM outputs without normalisation, Memintel's evaluations become non-deterministic too. Getting primitives right is the most important architectural decision in this system.
 :::
 
 ---
 
-## Who Defines What
+## Designing Good Primitives
 
-| Layer | Who defines it | Nature |
-|---|---|---|
-| Data sources | System / integrations | Raw, messy |
-| Signal extraction | System (LLM + parsers + ETL) | Semi-structured |
-| Primitives | System (standardised registry) | Clean, typed |
-| Intent | Admin | High-level natural language |
-| Concepts + Conditions | Memintel compiler | Derived from intent + guardrails |
-| Actions | Admin | Configured endpoints |
+*This section is for the Admin.*
 
-The admin does **not** define primitives manually from scratch. Instead they express intent in plain language — *"detect deal risk based on customer engagement and sentiment"* — and Memintel's guardrails system, working from the registered primitive catalog, resolves which primitives are relevant and how to combine them.
+The quality of your primitive design determines the quality of everything above it. A poorly designed primitive layer is the number one reason deterministic evaluation breaks down in practice. Here are the design principles that matter most.
 
-This is the intent-driven model in practice:
+### 1. One signal per primitive
 
-```
-Admin: "Flag deals that are likely to stall"
-         ↓
-Guardrails consults primitive registry:
-  → thread_stalled_days
-  → customer_sentiment_score
-  → last_activity_days
-  → stage_duration_days
-         ↓
-Compiler produces:
-  IF thread_stalled_days > X
-  AND sentiment_score < Y
-  AND stage_duration > Z
-  THEN trigger: deal_at_risk
+Never bundle two things into one field. `engagement_and_sentiment_combined` is not a primitive — it is a concept. Primitives are atomic. The system composes them; you should not.
+
+```json
+// Wrong — two signals in one
+{ "name": "engagement_sentiment", "type": "float" }
+
+// Right — separate, composable
+{ "name": "sentiment_score",          "type": "float" }
+{ "name": "call_completion_rate",     "type": "float" }
 ```
 
-The admin never manually specifies thresholds or writes logic. They express intent. Memintel resolves the rest — deterministically, within the constraints the guardrails system defines.
+### 2. Primitives are observable facts, not interpretations
+
+A primitive should represent something you can directly measure or extract. "Deal health" is not a primitive — it is a concept. "Days since last activity" is a primitive.
+
+```json
+// Wrong — this is an interpretation, not a fact
+{ "name": "deal_health_score", "type": "float" }
+
+// Right — directly measurable facts
+{ "name": "last_activity_days",    "type": "int"   }
+{ "name": "stage_duration_days",   "type": "int"   }
+{ "name": "thread_stalled_days",   "type": "int"   }
+```
+
+### 3. Name primitives from the domain, not the system
+
+Names should be immediately legible to a sales ops admin with no engineering background. They are the vocabulary through which business users will express intent.
+
+```json
+// Wrong — opaque, system-oriented
+{ "name": "email_feature_3",      "type": "float" }
+{ "name": "crm_field_last_touch", "type": "int"   }
+
+// Right — domain-legible
+{ "name": "sentiment_score",      "type": "float" }
+{ "name": "last_activity_days",   "type": "int"   }
+```
+
+### 4. Type them strictly — declare nullability explicitly
+
+A `float` that sometimes contains nulls is not a `float` — it is a `float?` (nullable). Using the wrong type causes silent failures at evaluation time. Declare nullability explicitly so the compiler can enforce correct handling.
+
+```json
+{ "name": "sentiment_score",       "type": "float"  }  // always present
+{ "name": "last_call_sentiment",   "type": "float?" }  // may be null if no calls
+{ "name": "deal_stage",            "type": "categorical" }
+```
+
+### 5. Distinguish point-in-time from time-series primitives
+
+These are fundamentally different types. A point-in-time primitive is a single value now. A time-series primitive is a sequence of values over a window. Declaring them correctly unlocks different strategies at evaluation time.
+
+```json
+// Point-in-time — single value, evaluated now
+{ "name": "sentiment_score",       "type": "float"              }
+
+// Time-series — sequence of values, enables z_score and change strategies
+{ "name": "sentiment_score_30d",   "type": "time_series<float>" }
+{ "name": "activity_count_30d",    "type": "time_series<int>"   }
+```
+
+If you want to use a `z_score` or `change` strategy on a signal, you must register it as a `time_series` primitive. The compiler will reject any condition that attempts to apply these strategies to a point-in-time primitive.
+
+### 6. Pair LLM-extracted signals with a confidence score
+
+LLM-extracted signals are probabilistic by nature. Register a confidence score alongside every LLM-derived primitive — this allows the system to weight or gate on confidence when evaluating.
+
+```json
+{ "name": "sentiment_score",            "type": "float"  }
+{ "name": "sentiment_confidence",       "type": "float"  }
+{ "name": "urgency_detected",           "type": "boolean" }
+{ "name": "urgency_confidence",         "type": "float"  }
+```
+
+### 7. Prefer numeric scores over booleans where possible
+
+A boolean loses the information that a numeric score preserves. `escalation_flag: true` tells you an escalation happened. `escalation_severity: 0.87` tells you how serious it is. The richer primitive enables richer conditions.
+
+```json
+// Acceptable — but loses information
+{ "name": "internal_escalation_flag",    "type": "boolean" }
+
+// Better — preserves severity for threshold and z_score strategies
+{ "name": "internal_escalation_score",  "type": "float"   }
+```
+
+Use booleans only when the signal is genuinely binary with no meaningful gradation.
 
 ---
 
-## Step 1 — Register Your Primitives
+## Step 1 — Register Primitives
 
-With signals extracted and normalised by your data pipeline, register them in Memintel's primitive registry:
+*Who does this: **Admin**, working with the Data Engineer to agree on the signal catalog.*
+
+With signals extracted and normalised by the data pipeline, the admin registers them in Memintel's primitive registry. This is a governance step — the admin is declaring what signals the system is allowed to use and how they are typed.
 
 ```python
 primitives = [
@@ -135,6 +199,13 @@ primitives = [
         "description": "LLM-extracted sentiment from last 3 customer emails, 0-1"
     },
     {
+        "id": "deal.sentiment_confidence",
+        "type": "float",
+        "source": "email_pipeline",
+        "entity": "deal_id",
+        "description": "Confidence score for the sentiment extraction, 0-1"
+    },
+    {
         "id": "deal.stage_duration_days",
         "type": "int",
         "source": "crm",
@@ -149,18 +220,18 @@ primitives = [
         "description": "Days since any CRM activity was logged"
     },
     {
-        "id": "deal.internal_escalation_flag",
-        "type": "boolean",
-        "source": "slack_pipeline",
-        "entity": "deal_id",
-        "description": "True if deal has been escalated internally in last 7 days"
-    },
-    {
         "id": "deal.call_completion_rate",
         "type": "float",
         "source": "calendar_pipeline",
         "entity": "deal_id",
-        "description": "Ratio of completed to scheduled calls"
+        "description": "Ratio of completed to scheduled calls, 0-1"
+    },
+    {
+        "id": "deal.internal_escalation_score",
+        "type": "float",
+        "source": "slack_pipeline",
+        "entity": "deal_id",
+        "description": "Severity of internal escalation signals, 0-1"
     },
 ]
 
@@ -168,94 +239,117 @@ for p in primitives:
     registry.register_primitive(p)
 ```
 
-Notice that `deal.sentiment_score` was produced by an LLM upstream — but once it is registered as a typed `float` primitive, Memintel treats it as a clean numeric input. The probabilistic extraction has already happened. Everything from here is deterministic.
+Notice two things. First, `deal.sentiment_score` was produced by an LLM upstream — but once it is registered as a typed `float` primitive, Memintel treats it as a clean numeric input. The probabilistic extraction has already happened. Second, `deal.sentiment_confidence` is registered alongside it, allowing the system to account for extraction reliability.
 
 ---
 
-## Step 2 — Build Your Concepts
+## Step 2 — Configure Guardrails
 
-Concepts combine primitives into meaningful signals. They answer: *"what is the current state of this deal?"*
+*Who does this: **Admin**.*
 
-### Engagement Score
+The guardrails system defines the policy layer that constrains how Memintel resolves user intent. The admin does not write conditions or set thresholds directly. Instead, they define the boundaries within which the system operates — and user intent is resolved deterministically within those boundaries.
 
-Combines communication and activity signals into a single 0-1 score.
-
-```python
-define_concept({
-    "id": "deal.engagement_score",
-    "inputs": [
-        "deal.sentiment_score",
-        "deal.call_completion_rate",
-        "deal.thread_stalled_days",
-        "deal.last_activity_days"
-    ],
-    "features": {
-        "comms_health": {
-            "op": "weighted_sum",
-            "inputs": ["deal.sentiment_score", "deal.call_completion_rate"],
-            "weights": [0.5, 0.5]
-        },
-        "activity_recency": {
-            "op": "inverse_decay",
-            "input": "deal.last_activity_days",
-            "halflife": 7
-        }
-    },
-    "compute": "weighted_sum(comms_health, activity_recency, weights=[0.6, 0.4])"
-})
-```
-
-### Stall Risk Score
-
-Combines signals that indicate a deal is stalling — not just inactive, but actively deteriorating.
+Key guardrails for a deal intelligence system:
 
 ```python
-define_concept({
-    "id": "deal.stall_risk",
-    "inputs": [
-        "deal.thread_stalled_days",
-        "deal.stage_duration_days",
-        "deal.internal_escalation_flag",
-        "deal.engagement_score"
-    ],
-    "features": {
-        "thread_pressure": {
-            "op": "threshold_step",
-            "input": "deal.thread_stalled_days",
-            "cutoff": 5,
-            "above_value": 1.0,
-            "below_value": 0.0
-        },
-        "stage_pressure": {
-            "op": "percentile_rank",
-            "input": "deal.stage_duration_days"
-        }
+guardrails = {
+    # Which strategies are available for which primitive types
+    "type_strategy_map": {
+        "int":               ["threshold", "percentile", "change"],
+        "float":             ["threshold", "percentile", "z_score", "change"],
+        "time_series<float>": ["z_score", "change", "percentile"],
+        "boolean":           ["equals"],
+        "categorical":       ["equals"],
     },
-    "compute": "weighted_sum(thread_pressure, stage_pressure, 1 - engagement_score, weights=[0.35, 0.35, 0.30])"
-})
+
+    # Default threshold parameters per severity level
+    # These are what "significantly", "high", "low" resolve to
+    "parameter_priors": {
+        "sentiment_score": {
+            "low_severity":    { "threshold": 0.6 },
+            "medium_severity": { "threshold": 0.45 },
+            "high_severity":   { "threshold": 0.3 },
+        },
+        "stage_duration_days": {
+            "low_severity":    { "percentile": 60 },
+            "medium_severity": { "percentile": 75 },
+            "high_severity":   { "percentile": 90 },
+        },
+        "thread_stalled_days": {
+            "low_severity":    { "threshold": 4  },
+            "medium_severity": { "threshold": 7  },
+            "high_severity":   { "threshold": 12 },
+        },
+    },
+
+    # How language maps to severity — deterministic lookup, not LLM interpretation
+    "bias_rules": {
+        "conservative":  "high_severity",
+        "early warning": "low_severity",
+        "urgent":        "high_severity",
+        "monitor":       "low_severity",
+    }
+}
 ```
+
+This is important: when a user says *"alert me when a deal is urgently at risk"*, the word "urgently" is not interpreted by an LLM at evaluation time. It maps deterministically to `high_severity` via the bias rules, which then resolves to specific parameter values via `parameter_priors`. The admin defines these mappings. The user benefits from them without ever seeing them.
 
 ---
 
-## Step 3 — Define Your Conditions
+## Step 3 — Memintel Compiles Concepts and Conditions
 
-Conditions evaluate concept outputs and produce decisions. They answer: *"does this deal's current state warrant action?"*
+*Who does this: **Memintel** (automatically).*
 
-### Condition 1 — Deal at Risk of Stalling
+This is where the separation of concerns becomes visible. The user expresses intent. Memintel resolves it.
+
+The user does not write concepts. The user does not set thresholds. The user does not select strategies. All of that is resolved by the compiler, working within the guardrails the admin has configured.
+
+```
+User intent: "Alert me when a deal is at high risk of stalling"
+                              ↓
+Guardrails consults primitive registry:
+  → thread_stalled_days     (int — threshold strategy applicable)
+  → last_activity_days      (int — threshold strategy applicable)
+  → sentiment_score         (float — threshold strategy applicable)
+  → stage_duration_days     (int — percentile strategy applicable)
+                              ↓
+"high risk" maps to high_severity via bias rules
+                              ↓
+Compiler produces:
+  Concept:   weighted_sum(thread_pressure, activity_pressure,
+                          sentiment_pressure, stage_pressure)
+  Condition: stall_risk_score > 0.75  (high_severity threshold)
+  Action:    webhook → https://myapp.com/hooks/deal-risk
+```
+
+The admin never wrote `0.75`. The user never saw it. The compiler derived it deterministically from the guardrails configuration.
+
+---
+
+## Step 4 — User Creates a Task
+
+*Who does this: **User** (sales ops, business analyst, or sales manager).*
+
+The user interacts with Memintel entirely through natural language. They never configure primitives, write concepts, or set thresholds.
 
 ```typescript
-const stallingCondition = await client.tasks.create({
+import Memintel from '@memintel/sdk';
+
+const client = new Memintel({ apiKey: process.env.MEMINTEL_API_KEY });
+
+// User expresses intent in plain English
+const task = await client.tasks.create({
     intent: "Alert me when a deal is at high risk of stalling",
     entityScope: "all_active_deals",
     delivery: {
         type: "webhook",
-        endpoint: "https://myapp.com/hooks/deal-stalling"
+        endpoint: "https://myapp.com/hooks/deal-risk"
     },
     dryRun: true  // preview the compiled condition before activating
 });
 
-// See exactly how "high risk" was resolved
-console.log(stallingCondition.condition.strategy);
+// The user can inspect what the system resolved — but did not author it
+console.log(task.condition.strategy);
 // {
 //   type: "threshold",
 //   params: { direction: "above", value: 0.75 },
@@ -263,53 +357,17 @@ console.log(stallingCondition.condition.strategy);
 // }
 ```
 
-### Condition 2 — Deal Going Cold
-
-Uses a `change` strategy to catch deals that were healthy but are deteriorating.
-
-```typescript
-const goingColdCondition = await client.tasks.create({
-    intent: "Alert me when deal engagement drops significantly week over week",
-    entityScope: "all_active_deals",
-    delivery: {
-        type: "webhook",
-        endpoint: "https://myapp.com/hooks/deal-cold"
-    }
-});
-
-// "significantly week over week" resolves to:
-// { type: "change", params: { direction: "decrease", value: 0.25, window: "7d" } }
-```
-
-### Condition 3 — Internally Escalated Deal
-
-Uses `equals` strategy on a boolean primitive — no concept needed for simple flags.
-
-```typescript
-const escalationCondition = await client.tasks.create({
-    intent: "Alert me immediately when a deal is internally escalated",
-    entityScope: "all_active_deals",
-    delivery: {
-        type: "webhook",
-        endpoint: "https://myapp.com/hooks/deal-escalated"
-    }
-});
-
-// Directly evaluates the boolean primitive
-// { type: "equals", params: { value: true } }
-```
+The `dryRun: true` flag is especially useful for users — it lets them review what the system compiled before activating it in production. If the threshold looks wrong, they can adjust their intent wording (e.g. "conservative early warning" instead of "high risk") and preview again.
 
 ---
 
-## Step 4 — Evaluate a Deal
+## Step 5 — Evaluate a Deal
 
-With everything wired up, evaluating a specific deal is a single API call:
+*Who does this: **System** (automated, triggered on schedule or event).*
+
+Once tasks are live, evaluation runs automatically. For manual or on-demand evaluation:
 
 ```typescript
-import Memintel from '@memintel/sdk';
-
-const client = new Memintel({ apiKey: process.env.MEMINTEL_API_KEY });
-
 const result = await client.evaluateFull({
     concept_id: "deal.stall_risk",
     concept_version: "1.0",
@@ -323,22 +381,16 @@ const result = await client.evaluateFull({
 console.log(result.result.value);    // 0.81 — stall risk score
 console.log(result.decision.value);  // true — threshold crossed
 
-// Full signal breakdown
+// Signal breakdown — visible to admin and ops for audit
 console.log(result.result.explanation.contributions);
 // {
-//   thread_pressure:   0.35  (thread stalled 8 days — above 5-day cutoff)
-//   stage_pressure:    0.29  (deal in 78th percentile for stage duration)
-//   engagement_score:  0.17  (sentiment 0.31, no calls completed)
+//   thread_pressure:   0.35  (thread stalled 8 days — above 7-day threshold)
+//   stage_pressure:    0.29  (deal in 83rd percentile for stage duration)
+//   sentiment_score:   0.17  (sentiment 0.29 — below 0.3 high-severity cutoff)
 // }
 ```
 
-The `explain: true` output is what makes this genuinely useful for sales ops. Your rep does not just get an alert — they get a breakdown: the email thread has been stalled for 8 days, the deal has been in negotiation longer than 78% of similar deals, and engagement signals are low.
-
----
-
-## Step 5 — Run Your Daily Pipeline Review
-
-Evaluate every active deal in one batch:
+### Daily pipeline batch
 
 ```typescript
 const activeDeals = await crm.getActiveDeals();
@@ -357,7 +409,6 @@ const results = await Promise.all(
     )
 );
 
-// Sort by risk score and surface the top deals
 const atRisk = results
     .filter(r => r.decision.value === true)
     .sort((a, b) => b.result.value - a.result.value)
@@ -366,7 +417,6 @@ const atRisk = results
 atRisk.forEach(r => {
     const topDriver = Object.entries(r.result.explanation.contributions)
         .sort(([,a], [,b]) => (b as number) - (a as number))[0];
-
     console.log(`${r.decision.entity}: ${(r.result.value * 100).toFixed(0)}% risk`);
     console.log(`  Top signal: ${topDriver[0]}`);
 });
@@ -376,10 +426,12 @@ atRisk.forEach(r => {
 
 ## Step 6 — Calibrate Over Time
 
-After a few weeks you will see false positives — deals flagged as at-risk that closed successfully. Feed this back to tighten the thresholds:
+*Who does this: **User** submits feedback. **Admin** reviews and approves calibration.*
+
+Calibration is a governed process — not an automatic one. The user flags incorrect decisions. The system produces a recommendation. The admin reviews the impact and approves the new version. Nothing changes silently.
 
 ```typescript
-// Mark a false positive
+// User submits feedback on a false positive
 await client.feedback.decision({
     conditionId: "deal.at_risk_of_stalling",
     conditionVersion: "1.0",
@@ -389,22 +441,23 @@ await client.feedback.decision({
     note: "Deal closed — champion pushed through despite low email activity"
 });
 
-// Get calibration recommendation
+// Admin reviews calibration recommendation
 const cal = await client.conditions.calibrate({
     conditionId: "deal.at_risk_of_stalling",
     conditionVersion: "1.0",
 });
 
 if (cal.status === "recommendation_available") {
-    console.log(cal.recommended_params);   // { value: 0.82 }
+    console.log(cal.recommended_params);   // { value: 0.82 } — threshold raised slightly
     console.log(cal.impact.delta_alerts);  // -3 per day
 
-    // Apply — creates a new immutable version, never mutates existing
+    // Admin approves — creates a new immutable version, never mutates existing
     const applied = await client.conditions.applyCalibration({
         calibrationToken: cal.calibration_token,
     });
 
-    // Explicitly rebind tasks to the new version
+    // Admin explicitly rebinds tasks to the new version
+    // Nothing changes automatically without this step
     for (const task of applied.tasks_pending_rebind) {
         await client.tasks.update(task.task_id, {
             conditionVersion: applied.new_version,
@@ -415,33 +468,39 @@ if (cal.status === "recommendation_available") {
 
 ---
 
-## What You've Built
+## Role Summary
 
-| Capability | How it works |
-|---|---|
-| **Consistent scoring** | Same primitive values always produce the same risk score |
-| **Explainable alerts** | Every alert shows exactly which signals drove the decision |
-| **Auditable history** | Any past decision can be replayed with the original primitive values |
-| **Controlled calibration** | Thresholds evolve via structured feedback — never silently |
-| **Architecture clarity** | LLMs do signal extraction; Memintel does evaluation — clean separation |
+| Step | Who | What they do |
+|---|---|---|
+| Raw data ingestion | **Data Engineer** | Connects email, CRM, Slack, call sources |
+| Signal extraction | **Data Engineer** | Runs LLMs and parsers to produce named signals |
+| Primitive registration | **Admin** | Registers typed primitives in the registry |
+| Guardrails configuration | **Admin** | Defines strategies, parameter priors, bias rules |
+| Task creation | **User** | Expresses intent in plain language |
+| Intent compilation | **Memintel** | Resolves intent → concepts + conditions |
+| Evaluation | **System** | Runs deterministic evaluation on schedule or event |
+| Feedback | **User** | Flags false positives and negatives |
+| Calibration approval | **Admin** | Reviews and applies threshold adjustments |
 
 ---
 
 ## The Key Takeaway
 
-The reliability of this system comes entirely from the architecture boundary.
+The reliability of this system depends entirely on the clarity of its architecture boundaries.
 
-**LLMs sit upstream** — in signal extraction, converting raw emails and CRM data into typed signals. They are allowed to be probabilistic here because their job is interpretation.
+**The Data Engineer** ensures that raw, probabilistic signals are converted into clean typed values before they reach Memintel. The LLM lives here — doing interpretation, which is what it is good at.
 
-**Memintel sits downstream** — evaluating clean typed primitives with deterministic logic. Once a `sentiment_score: 0.31` primitive is registered, the evaluation engine never calls an LLM again. The same score at the same timestamp always produces the same decision.
+**The Admin** ensures that the primitive registry is well-governed and that guardrails constrain intent resolution to sensible, domain-appropriate behaviour.
 
-Get the primitive layer right, and Memintel becomes a true deterministic evaluation engine. Get it wrong — by feeding raw LLM outputs directly into conditions without normalisation — and you lose the determinism guarantee entirely.
+**The User** expresses what they want in plain language and gets consistent, auditable decisions in return — without ever touching the underlying machinery.
+
+**Memintel** enforces the separation. The LLM cannot execute. The runtime cannot interpret. The compiler cannot be bypassed. That enforced separation is what makes the whole system provably predictable rather than just usually predictable.
 
 ---
 
 ## Next Steps
 
 - [Core Concepts](/docs/intro/core-concepts) — understand the ψ → φ → α model in depth
-- [Guardrails System](/docs/intro/guardrails) — how admins constrain intent resolution
+- [Guardrails System](/docs/intro/guardrails) — how admins configure the policy layer
 - [API Reference](/docs/api-reference/overview) — full endpoint documentation
 - [Common Mistakes](/docs/intro/common-mistakes) — pitfalls to avoid when building on Memintel
