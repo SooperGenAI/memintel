@@ -84,6 +84,7 @@ const sidebars: SidebarsConfig = {
         'tutorials/deal-intelligence',
         'tutorials/xbrl-compliance',
         'tutorials/financial-risk-monitoring',
+        'tutorials/healthcare-payor-provider',
       ],
     },
   ],
