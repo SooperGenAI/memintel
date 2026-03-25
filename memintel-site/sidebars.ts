@@ -83,6 +83,7 @@ const sidebars: SidebarsConfig = {
       items: [
         'tutorials/deal-intelligence',
         'tutorials/xbrl-compliance',
+        'tutorials/financial-risk-monitoring',
       ],
     },
   ],
