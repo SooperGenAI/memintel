@@ -133,6 +133,12 @@ const config: Config = {
           label: 'Python SDK',
         },
         {
+          type: 'docSidebar',
+          sidebarId: 'tutorialsSidebar',
+          position: 'left',
+          label: 'Tutorials',
+        },
+        {
           href: 'https://github.com/SooperGenAI/memintel',
           label: 'GitHub',
           position: 'right',
