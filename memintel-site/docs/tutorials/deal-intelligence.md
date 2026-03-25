@@ -243,7 +243,137 @@ Notice two things. First, `deal.sentiment_score` was produced by an LLM upstream
 
 ---
 
-## Step 2 — Configure Guardrails
+## Step 2 — Register Primitive Resolvers
+
+*Who does this: **Data Engineer**.*
+
+A primitive declaration is just a typed reference — it tells Memintel that a signal called `deal.thread_stalled_days` exists and is an `int`. It contains no database connection, no SQL, no API endpoint. The actual linkage to real data happens through a **primitive resolver** — a function the data team registers that tells Memintel how to fetch that value for a given entity at a given timestamp.
+
+```python
+@registry.resolver("deal.thread_stalled_days")
+async def resolve_thread_stalled_days(entity_id: str, timestamp: datetime) -> int:
+    result = await db.execute("""
+        SELECT DATE_PART('day', $2 - MAX(received_at))::int
+        FROM email_messages
+        WHERE deal_id = $1
+          AND received_at <= $2
+    """, entity_id, timestamp)
+    return result.scalar()
+
+
+@registry.resolver("deal.sentiment_score")
+async def resolve_sentiment_score(entity_id: str, timestamp: datetime) -> float:
+    result = await db.execute("""
+        SELECT sentiment_score
+        FROM email_signal_snapshots
+        WHERE deal_id = $1
+          AND snapshot_at <= $2
+        ORDER BY snapshot_at DESC
+        LIMIT 1
+    """, entity_id, timestamp)
+    return result.scalar()
+
+
+@registry.resolver("deal.stage_duration_days")
+async def resolve_stage_duration_days(entity_id: str, timestamp: datetime) -> int:
+    result = await db.execute("""
+        SELECT DATE_PART('day', $2 - stage_entered_at)::int
+        FROM deal_stage_history
+        WHERE deal_id = $1
+          AND stage_entered_at <= $2
+        ORDER BY stage_entered_at DESC
+        LIMIT 1
+    """, entity_id, timestamp)
+    return result.scalar()
+
+
+@registry.resolver("deal.last_activity_days")
+async def resolve_last_activity_days(entity_id: str, timestamp: datetime) -> int:
+    result = await db.execute("""
+        SELECT DATE_PART('day', $2 - MAX(activity_at))::int
+        FROM crm_activity_log
+        WHERE deal_id = $1
+          AND activity_at <= $2
+    """, entity_id, timestamp)
+    return result.scalar()
+```
+
+Each resolver receives two parameters: `entity_id` (the deal being evaluated) and `timestamp` (the point in time at which to evaluate). What happens inside is entirely up to the data team — SQL queries, Redis lookups, REST API calls, feature store fetches, or anything else.
+
+### Why the timestamp parameter is critical
+
+The timestamp is what makes evaluations reproducible. When Memintel evaluates a condition at a specific timestamp, it passes that timestamp to every resolver in the execution graph. Each resolver is expected to return the value of the primitive **as it was at that exact point in time** — not the current value.
+
+This is what allows you to replay a decision from three months ago and get the exact same result.
+
+```python
+# Wrong — ignores timestamp, always returns current state
+# Breaks determinism on replay
+@registry.resolver("deal.last_activity_days")
+async def resolve_last_activity_days(entity_id: str, timestamp: datetime) -> int:
+    result = await db.execute("""
+        SELECT DATE_PART('day', NOW() - MAX(activity_at))::int
+        FROM crm_activity_log
+        WHERE deal_id = $1
+    """, entity_id)  # timestamp ignored!
+    return result.scalar()
+
+# Right — honours timestamp, returns value as of that moment
+@registry.resolver("deal.last_activity_days")
+async def resolve_last_activity_days(entity_id: str, timestamp: datetime) -> int:
+    result = await db.execute("""
+        SELECT DATE_PART('day', $2 - MAX(activity_at))::int
+        FROM crm_activity_log
+        WHERE deal_id = $1
+          AND activity_at <= $2
+    """, entity_id, timestamp)
+    return result.scalar()
+```
+
+### What data infrastructure supports this
+
+Point-in-time queries require data sources that retain history. Three patterns work well:
+
+| Pattern | How it works | Best for |
+|---|---|---|
+| **Event / log tables** | Append-only records with timestamps — query `WHERE event_at <= $timestamp` | CRM activity, email events, call logs |
+| **Snapshot tables** | Periodic snapshots with a `recorded_at` column — query the latest snapshot before the timestamp | Sentiment scores, computed signals |
+| **Feature store** | Systems like Feast or Tecton with built-in point-in-time correctness | Large-scale, multi-team deployments |
+
+If your data team is fetching from a current-state table that gets overwritten — a CRM `deals` table where columns are updated in place — the resolver cannot honour the timestamp. You will need to either add a change-log table or snapshot the relevant fields periodically.
+
+:::warning
+If resolvers ignore the timestamp parameter and always return current values, evaluations will produce different results on replay even with the same concept version, condition version, and entity. This breaks the determinism guarantee entirely — not at the Memintel layer, but at the data layer. The data team is responsible for ensuring point-in-time correctness in every resolver.
+:::
+
+### The full evaluation chain
+
+When Memintel evaluates `deal.stall_risk` for `deal_acme_corp` at `2024-03-15T09:00:00Z`, here is exactly what happens:
+
+```
+1. Compiler looks up execution graph for deal.stall_risk v1.0
+2. Graph requires primitives:
+     deal.thread_stalled_days
+     deal.sentiment_score
+     deal.stage_duration_days
+     deal.last_activity_days
+
+3. Memintel calls each resolver with (entity_id, timestamp):
+     resolve_thread_stalled_days("deal_acme_corp", 2024-03-15T09:00:00Z) → 8
+     resolve_sentiment_score("deal_acme_corp",     2024-03-15T09:00:00Z) → 0.29
+     resolve_stage_duration_days("deal_acme_corp", 2024-03-15T09:00:00Z) → 34
+     resolve_last_activity_days("deal_acme_corp",  2024-03-15T09:00:00Z) → 12
+
+4. Concept computation runs on these four values → stall_risk_score: 0.81
+5. Condition evaluates: 0.81 > 0.75 → true
+6. Action fires → webhook delivered
+```
+
+The resolver layer is the only place where data fetching happens. Everything above it — concept computation and condition evaluation — is a pure function. It receives values and computes results, with no I/O.
+
+---
+
+## Step 3 — Configure Guardrails
 
 *Who does this: **Admin**.*
 
@@ -296,7 +426,7 @@ This is important: when a user says *"alert me when a deal is urgently at risk"*
 
 ---
 
-## Step 3 — Memintel Compiles Concepts and Conditions
+## Step 4 — Memintel Compiles Concepts and Conditions
 
 *Who does this: **Memintel** (automatically).*
 
@@ -326,7 +456,7 @@ The admin never wrote `0.75`. The user never saw it. The compiler derived it det
 
 ---
 
-## Step 4 — User Creates a Task
+## Step 5 — User Creates a Task
 
 *Who does this: **User** (sales ops, business analyst, or sales manager).*
 
@@ -361,7 +491,7 @@ The `dryRun: true` flag is especially useful for users — it lets them review w
 
 ---
 
-## Step 5 — Evaluate a Deal
+## Step 6 — Evaluate a Deal
 
 *Who does this: **System** (automated, triggered on schedule or event).*
 
@@ -424,7 +554,7 @@ atRisk.forEach(r => {
 
 ---
 
-## Step 6 — Calibrate Over Time
+## Step 7 — Calibrate Over Time
 
 *Who does this: **User** submits feedback. **Admin** reviews and approves calibration.*
 
