@@ -75,6 +75,17 @@ const sidebars: SidebarsConfig = {
     },
   ],
 
+  tutorialsSidebar: [
+    {
+      type: 'category',
+      label: 'Tutorials',
+      collapsible: false,
+      items: [
+        'tutorials/deal-intelligence',
+      ],
+    },
+  ],
+
 };
 
 export default sidebars;
