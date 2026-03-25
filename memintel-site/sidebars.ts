@@ -82,6 +82,7 @@ const sidebars: SidebarsConfig = {
       collapsible: false,
       items: [
         'tutorials/deal-intelligence',
+        'tutorials/xbrl-compliance',
       ],
     },
   ],
