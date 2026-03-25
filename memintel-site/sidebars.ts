@@ -10,6 +10,7 @@ const sidebars: SidebarsConfig = {
       items: [
         'intro/overview',
         'intro/core-concepts',
+        'intro/why-not-rules',
         'intro/quickstart',
         'intro/builder-workflow',
         'intro/guardrails',
