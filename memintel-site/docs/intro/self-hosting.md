@@ -118,7 +118,7 @@ The server will refuse to start if any required variable is missing. This is by 
 |---|---|---|---|
 | `DATABASE_URL` | **Yes** | — | Full PostgreSQL connection string including credentials |
 | `REDIS_URL` | **Yes** | — | Full Redis connection string including credentials |
-| `MEMINTEL_CONFIG_PATH` | **Yes** | — | Absolute path to `memintel_config.md` on the server |
+| `MEMINTEL_CONFIG_PATH` | **Yes** | — | Absolute path to `memintel_config.yaml` on the server |
 
 ### Optional Variables
 
@@ -143,7 +143,7 @@ On Linux / Mac:
 ```bash
 export DATABASE_URL="postgresql://user:password@host:5432/memintel"
 export REDIS_URL="redis://host:6379/0"
-export MEMINTEL_CONFIG_PATH="/etc/memintel/memintel_config.md"
+export MEMINTEL_CONFIG_PATH="/etc/memintel/memintel_config.yaml"
 export USE_LLM_FIXTURES="false"
 export ANTHROPIC_API_KEY="sk-ant-..."
 ```
