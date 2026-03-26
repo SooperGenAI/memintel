@@ -1,7 +1,7 @@
 ---
 id: devops-observability
 title: DevOps and Observability
-sidebar_label: DevOps / Observability
+sidebar_label: DevOps & Observability
 ---
 
 # Tutorial: DevOps and Observability
