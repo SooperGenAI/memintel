@@ -1,0 +1,1 @@
+{"parameters":[{"in":"header","name":"X-Elevated-Key","required":true,"schema":{"type":"string"},"description":"Elevated key (MEMINTEL_ELEVATED_KEY) required for this endpoint"}]}
