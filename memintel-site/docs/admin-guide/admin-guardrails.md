@@ -1,82 +1,79 @@
 ---
 id: admin-guardrails
-title: Configuring Guardrails
-sidebar_label: Guardrails
+title: Step 3 — Guardrails
+sidebar_label: Step 3 — Guardrails
 ---
 
-# Configuring Guardrails
+# Step 3 — Guardrails
 
-Guardrails are the policy layer that constrains how the compiler resolves user intent. They define which evaluation strategies are valid for which primitive types, what parameter ranges are acceptable, how severity language maps to numeric thresholds, and which strategy the compiler should prefer when intent is ambiguous.
+Guardrails are the rules the system follows when interpreting what your team members ask for. When someone says "alert me when churn risk is **significant**" — the guardrails define what "significant" means in numbers.
 
-Without guardrails, the compiler has no domain policy. With well-configured guardrails, the same intent expression produces consistently appropriate compiled conditions across every task — regardless of who created the task or when.
-
----
-
-## What Guardrails Control
-
-```
-User says: "Alert me when a customer shows significant churn risk"
-                          ↓
-Guardrails answers:
-  1. What strategies are valid for float primitives?
-     → threshold, percentile, z_score, change
-  2. What does "significant" mean?
-     → bias_rules maps it to medium_severity
-  3. What threshold represents medium severity for churn signals?
-     → parameter_priors defines this per primitive
-  4. If multiple strategies are valid, which should the compiler prefer?
-     → global_preferred_strategy breaks the tie
-                          ↓
-Compiler produces a specific, deterministic condition
-```
-
-The compiler never freely invents strategies or parameters. It resolves within the constraints the admin has defined.
+Think of guardrails as your domain policy encoded in configuration. The system will always operate within these rules when compiling monitoring tasks.
 
 ---
 
-## The Guardrails Config File
+## Why Guardrails Matter
 
-Guardrails are defined in `memintel_guardrails.yaml`. Like primitives, this file is loaded at startup and changes require a restart.
+Without guardrails, when a user says "alert me when the active user rate is significantly low", the system has no idea whether "significant" means 60%, 40%, or 20%. It would have to guess.
 
-### File Structure
+With guardrails, you have defined — in advance, based on your domain expertise — that in your application, "significant" applied to `account.active_user_rate_30d` means below 45%. The user gets exactly the threshold that makes operational sense, without ever having to specify a number.
+
+---
+
+## Where Guardrails Live
+
+Guardrails are defined in the `guardrails:` section of your `memintel_config.yaml`:
 
 ```yaml
-# memintel_guardrails.yaml
+# memintel_config.yaml
 
-type_strategy_map:        # which strategies are valid for which types
-parameter_priors:         # per-primitive threshold priors by severity
-bias_rules:               # how natural language severity maps to severity levels
-global_default_strategy:  # fallback strategy when no other rule matches
-global_preferred_strategy: # preferred strategy when multiple are valid
-threshold_directions:     # whether threshold fires above or below (optional)
+guardrails:
+  type_strategy_map:
+    float:      [threshold, percentile, z_score, change]
+    int:        [threshold, percentile, change]
+    boolean:    [equals]
+    categorical: [equals]
+
+  parameter_priors:
+    account.active_user_rate_30d:
+      low_severity:    { value: 0.60 }
+      medium_severity: { value: 0.45 }
+      high_severity:   { value: 0.30 }
+
+  bias_rules:
+    significant: medium_severity
+    urgent:      high_severity
+    early:       low_severity
+
+  global_default_strategy:   threshold
+  global_preferred_strategy: percentile
 ```
+
+There are four sub-sections. You will spend most of your time on `parameter_priors` and `bias_rules` — the other two usually need little or no customisation.
 
 ---
 
-## type_strategy_map
+## Sub-section 1 — type_strategy_map
 
-Declares which evaluation strategies are valid for each primitive type. The compiler will only select strategies listed here — any strategy not declared for a type is rejected at compile time.
+This declares which evaluation methods (strategies) are valid for each signal type. In most cases, you can copy this block directly and leave it unchanged.
 
 ```yaml
-type_strategy_map:
-  float:                [threshold, percentile, z_score, change]
-  int:                  [threshold, percentile, change]
-  boolean:              [equals]
-  string:               [equals]
-  categorical:          [equals]
-  time_series<float>:   [z_score, change, percentile]
-  time_series<int>:     [z_score, change, percentile]
-  float?:               [threshold]
-  int?:                 [threshold]
+guardrails:
+  type_strategy_map:
+    float:                [threshold, percentile, z_score, change]
+    int:                  [threshold, percentile, change]
+    boolean:              [equals]
+    string:               [equals]
+    categorical:          [equals]
+    time_series<float>:   [z_score, change, percentile]
+    time_series<int>:     [z_score, change, percentile]
+    float?:               [threshold]
+    int?:                 [threshold]
 ```
 
-:::note
-Nullable types (`float?`, `int?`) should generally only support `threshold` — other strategies require a complete value history that null values would corrupt.
-:::
+**When you might change this:**
 
-**Restricting strategies for specific domains:**
-
-In a clinical trial context, you may want to restrict float primitives to only `threshold` and `percentile` — preventing z_score strategies that require statistical baselines that may not be appropriate for small patient populations:
+You might want to restrict certain strategies in highly regulated domains. For example, in a clinical trial context where patient populations are small, `z_score` strategies (which require a large baseline dataset) may not be appropriate:
 
 ```yaml
 # Clinical trials — restrict to simpler strategies
@@ -86,129 +83,124 @@ type_strategy_map:
   boolean:  [equals]
 ```
 
-In a real-time fraud detection context, you may want to enable all strategies on time_series types because velocity pattern detection is central:
+If you are unsure, use the default block above and leave it unchanged.
+
+---
+
+## Sub-section 2 — parameter_priors
+
+This is the most important part of the guardrails configuration. For each signal, you define what threshold values correspond to low, medium, and high severity.
 
 ```yaml
-# Fraud detection — full strategy set on time series
-type_strategy_map:
-  time_series<float>: [z_score, change, percentile, threshold]
-  time_series<int>:   [z_score, change, percentile, threshold]
+parameter_priors:
+  <signal_id>:
+    low_severity:    { value: <number> }
+    medium_severity: { value: <number> }
+    high_severity:   { value: <number> }
+```
+
+When a user says "alert me when active user rate drops significantly", the system:
+1. Identifies the relevant signal: `account.active_user_rate_30d`
+2. Maps "significantly" to `medium_severity` via `bias_rules`
+3. Looks up the `medium_severity` threshold: `0.45`
+4. Compiles the condition: fires when active user rate drops below 45%
+
+### Choosing threshold values
+
+Set the three levels based on your operational experience and domain knowledge:
+
+- **low_severity** — early warning. Worth monitoring but not yet a reason to act. A proactive signal.
+- **medium_severity** — material concern. Action should be considered. A standard monitoring threshold.
+- **high_severity** — urgent. Immediate action required.
+
+### Direction matters
+
+For most signals, the condition fires when the value goes **above** the threshold (e.g. error rate above 5%). But some signals fire when they go **below** a threshold. For those, add a `threshold_directions` section (covered below).
+
+### Examples by signal type
+
+**Account active user rate (lower is worse):**
+```yaml
+account.active_user_rate_30d:
+  low_severity:    { value: 0.60 }  # 60% — start paying attention
+  medium_severity: { value: 0.45 }  # 45% — take action
+  high_severity:   { value: 0.30 }  # 30% — urgent engagement needed
+```
+
+**Days to renewal (fewer days = more urgent):**
+```yaml
+account.days_to_renewal:
+  low_severity:    { value: 90 }  # 90 days out — begin monitoring
+  medium_severity: { value: 60 }  # 60 days — start outreach
+  high_severity:   { value: 30 }  # 30 days — urgent
+```
+
+**Transaction value vs customer baseline (higher = more suspicious):**
+```yaml
+transaction.value_vs_baseline_ratio:
+  low_severity:    { value: 3.0  }  # 3x baseline — worth noting
+  medium_severity: { value: 7.0  }  # 7x baseline — investigate
+  high_severity:   { value: 15.0 }  # 15x baseline — strong anomaly
+```
+
+**Adverse event severity score (higher = more serious):**
+```yaml
+patient.ae_severity_score:
+  low_severity:    { value: 0.5 }  # Grade 2+ events
+  medium_severity: { value: 0.7 }  # Grade 3+ events
+  high_severity:   { value: 0.9 }  # Grade 4/5 events
+```
+
+**Covenant headroom (lower = closer to breach):**
+```yaml
+loan.covenant_headroom_pct:
+  low_severity:    { value: 25 }  # 25% headroom — start monitoring
+  medium_severity: { value: 15 }  # 15% — review with borrower
+  high_severity:   { value: 8  }  # 8% — breach imminent
+```
+
+**DSCR quarterly trend (detecting rate of decline):**
+
+For time-series signals, the parameters include a `window` (how many periods to look back):
+```yaml
+borrower.dscr_trend_4q:
+  low_severity:    { value: 0.20, window: "2q" }  # 20% decline over 2 quarters
+  medium_severity: { value: 0.30, window: "3q" }  # 30% decline over 3 quarters
+  high_severity:   { value: 0.40, window: "4q" }  # 40% decline over 4 quarters
 ```
 
 ---
 
-## parameter_priors
+## Sub-section 3 — bias_rules
 
-Defines the numeric parameter values that correspond to each severity level for each primitive. This is where domain expertise is encoded most precisely.
-
-When a user says "significant" or "high risk" or "approaching limit", the compiler maps the language to a severity level via `bias_rules`, then looks up the corresponding parameter value from `parameter_priors`.
-
-```yaml
-parameter_priors:
-  <primitive_id>:
-    low_severity:     { <strategy_param>: <value> }
-    medium_severity:  { <strategy_param>: <value> }
-    high_severity:    { <strategy_param>: <value> }
-```
-
-### Threshold Parameters
-
-For `threshold` strategy, the parameter is `value` — the numeric level at which the condition fires.
-
-```yaml
-parameter_priors:
-  # A DSCR below 1.25 is a covenant breach — set priors approaching that floor
-  borrower.dscr:
-    low_severity:    { value: 1.80 }   # early warning — plenty of headroom
-    medium_severity: { value: 1.50 }   # approaching concern territory
-    high_severity:   { value: 1.30 }   # near covenant floor (1.25)
-
-  # Transaction value vs customer baseline
-  transaction.value_vs_baseline_ratio:
-    low_severity:    { value: 3.0  }   # 3x baseline — worth noting
-    medium_severity: { value: 7.0  }   # 7x baseline — investigate
-    high_severity:   { value: 15.0 }   # 15x baseline — strong anomaly signal
-
-  # Error budget burn rate (multiples of sustainable rate)
-  service.error_budget_burn_rate_1h:
-    low_severity:    { value: 2.0  }   # 2x sustainable — early warning
-    medium_severity: { value: 5.0  }   # consuming budget in 6 days
-    high_severity:   { value: 14.4 }   # consuming budget in 2 days
-```
-
-### Percentile Parameters
-
-For `percentile` strategy, the parameter is `value` — the percentile rank within the population at which the condition fires.
-
-```yaml
-parameter_priors:
-  # Site deviation rate vs trial peers
-  site.peer_deviation_percentile:
-    low_severity:    { value: 70 }   # above 70th percentile of peers
-    medium_severity: { value: 80 }   # above 80th percentile
-    high_severity:   { value: 90 }   # in top 10% of sites by deviation rate
-
-  # Stage duration vs pipeline norms
-  deal.stage_duration_days:
-    low_severity:    { value: 60 }
-    medium_severity: { value: 75 }
-    high_severity:   { value: 90 }
-```
-
-### Z-Score Parameters
-
-For `z_score` strategy, the parameter is `threshold` — the number of standard deviations from the mean at which the condition fires.
-
-```yaml
-parameter_priors:
-  # Provider billing volume anomaly
-  provider.procedure_volume_30d:
-    low_severity:    { threshold: 2.0 }
-    medium_severity: { threshold: 2.5 }
-    high_severity:   { threshold: 3.0 }
-```
-
-### Change Parameters
-
-For `change` strategy, the parameter includes `value` (magnitude of change) and `window` (time window over which to measure it).
-
-```yaml
-parameter_priors:
-  # Error rate increase over time window
-  service.error_rate_trend_1h:
-    low_severity:    { value: 0.002, window: "30m" }  # 0.2pp rise in 30 min
-    medium_severity: { value: 0.005, window: "20m" }  # 0.5pp rise in 20 min
-    high_severity:   { value: 0.010, window: "15m" }  # 1.0pp rise in 15 min
-
-  # DSCR quarterly decline
-  borrower.dscr_trend_4q:
-    low_severity:    { value: 0.20, window: "2q" }   # 20% decline over 2 quarters
-    medium_severity: { value: 0.30, window: "3q" }   # 30% decline over 3 quarters
-    high_severity:   { value: 0.40, window: "4q" }   # 40% decline over 4 quarters
-```
-
----
-
-## bias_rules
-
-Maps natural language severity expressions to severity levels. When a user uses a word or phrase in their intent that carries a severity implication, the compiler looks it up in `bias_rules` to determine which severity level to apply to `parameter_priors`.
+This maps the natural language words your team uses when creating monitoring tasks to the severity levels you defined in `parameter_priors`.
 
 ```yaml
 bias_rules:
-  # Words that map to high_severity — strict, sensitive thresholds
+  <word or phrase>: <severity level>
+```
+
+When a user says "alert me when churn risk is **significant**", the system looks up "significant" in `bias_rules` and finds `medium_severity`. It then uses the `medium_severity` threshold from `parameter_priors`.
+
+### Standard bias rules
+
+These work for most domains — copy them as a starting point:
+
+```yaml
+bias_rules:
+  # High severity words
   urgent:         high_severity
   critical:       high_severity
   immediately:    high_severity
-  conservative:   high_severity
-  page:           high_severity    # "alert me / page me when..."
+  page:           high_severity
 
-  # Words that map to medium_severity — standard thresholds
+  # Medium severity words
   significant:    medium_severity
   material:       medium_severity
   elevated:       medium_severity
   notable:        medium_severity
 
-  # Words that map to low_severity — early warning thresholds
+  # Low severity words
   early:          low_severity
   proactive:      low_severity
   monitor:        low_severity
@@ -216,269 +208,211 @@ bias_rules:
   trending:       low_severity
 ```
 
-### Domain-Specific Bias Rules
+### Adding domain-specific words
 
-Add domain-specific terms that carry severity meaning in your context:
+Add any terms your team commonly uses that carry a severity implication in your domain:
 
 ```yaml
-# Financial services additions
+# Financial services
 bias_rules:
-  breach:         high_severity    # "approaching breach" → high
+  breach:         high_severity
   covenant:       high_severity
-  sar:            high_severity    # "SAR-level activity" → high
-  enhanced:       medium_severity  # "enhanced due diligence" → medium
-  watchlist:      high_severity
+  sar:            high_severity
+  enhanced:       medium_severity
 
-# Clinical trial additions
+# Clinical trials
 bias_rules:
-  stopping:       high_severity    # "approaching stopping rule" → high
-  serious:        high_severity    # "serious adverse event" → high
+  stopping:       high_severity
+  serious:        high_severity
   susar:          high_severity
   unexpected:     medium_severity
-  possibly:       low_severity     # "possibly related" → low
+  possibly:       low_severity
 
-# DevOps / SRE additions
+# DevOps / SRE
 bias_rules:
   outage:         high_severity
   slo:            medium_severity
   degradation:    medium_severity
-  leak:           medium_severity  # "memory leak" → medium
-  latency:        low_severity
+  leak:           medium_severity
 ```
 
 ---
 
-## global_default_strategy and global_preferred_strategy
+## Sub-section 4 — global strategies
 
-When the compiler has resolved a primitive type but multiple strategies are valid (per `type_strategy_map`), it uses these settings to break the tie.
+These two lines tell the system which evaluation method to use as a default and which to prefer when multiple methods are valid.
 
 ```yaml
-global_default_strategy:   threshold    # fallback when no other rule matches
-global_preferred_strategy: percentile   # preferred when multiple strategies are valid
+global_default_strategy:   threshold    # use this when nothing else matches
+global_preferred_strategy: percentile   # prefer this when multiple options are valid
 ```
 
-**Choosing the right defaults:**
+**Which to choose:**
 
-| Domain | Recommended default | Recommended preferred | Reason |
-|---|---|---|---|
-| SaaS / product analytics | `threshold` | `percentile` | Relative comparison to population is usually more meaningful than absolute thresholds |
-| Financial risk | `threshold` | `threshold` | Regulatory thresholds are often absolute, not relative |
-| AML / fraud | `threshold` | `z_score` | Anomaly detection against individual baseline is central |
-| DevOps / SRE | `threshold` | `change` | Trend detection is more valuable than current-level thresholds |
-| Clinical trials | `threshold` | `threshold` | Protocol-defined absolute thresholds are the norm |
+| Your domain | Recommended default | Recommended preferred |
+|---|---|---|
+| SaaS / product analytics | `threshold` | `percentile` |
+| Financial risk / compliance | `threshold` | `threshold` |
+| AML / fraud detection | `threshold` | `z_score` |
+| DevOps / SRE | `threshold` | `change` |
+| Clinical trials | `threshold` | `threshold` |
+
+If you are unsure, `threshold` for both is a safe default. You can always change it later.
 
 ---
 
-## threshold_directions
+## Sub-section 5 — threshold_directions (optional)
 
-By default, a `threshold` condition fires when the value is **above** the threshold. For signals where the concern is values that are **too low** (ratios, coverage ratios, budget remaining), declare the direction explicitly.
+By default, a threshold condition fires when a value goes **above** the threshold. But some signals fire when they go **below** a threshold — coverage ratios, active user rates, DSCR.
+
+Add this section for any signal where "below the threshold" is the concern:
 
 ```yaml
 threshold_directions:
-  bank.cet1_ratio:                below    # fires when ratio falls below threshold
-  bank.lcr:                       below
-  account.active_user_rate_30d:   below    # fires when active rate falls below threshold
-  trial.stopping_rule_proximity:  above    # fires when approaching stopping rule (default)
-  borrower.dscr:                  below    # fires when DSCR falls below threshold
+  account.active_user_rate_30d:   below  # fires when rate FALLS below threshold
+  account.seat_utilization_rate:  below
+  borrower.dscr:                  below  # fires when DSCR FALLS below threshold
+  bank.cet1_ratio:                below
+  loan.covenant_headroom_pct:     below
+```
+
+A simple rule: if your `parameter_priors` values for a signal get **smaller** as severity increases, that signal probably fires `below`. If they get **larger** as severity increases, it fires `above` (the default).
+
+```yaml
+# Getting smaller as severity increases → fires below
+account.active_user_rate_30d:
+  low_severity:    { value: 0.60 }  ← largest
+  medium_severity: { value: 0.45 }
+  high_severity:   { value: 0.30 }  ← smallest
+# → add to threshold_directions as "below"
+
+# Getting larger as severity increases → fires above (default, no entry needed)
+transaction.value_vs_baseline_ratio:
+  low_severity:    { value: 3.0  }  ← smallest
+  medium_severity: { value: 7.0  }
+  high_severity:   { value: 15.0 }  ← largest
+# → no entry needed in threshold_directions
 ```
 
 ---
 
-## Complete Examples
+## Complete Guardrails Examples
 
 ### SaaS Churn Detection
 
 ```yaml
-# memintel_guardrails_saas.yaml
+guardrails:
+  type_strategy_map:
+    float:                [threshold, percentile, z_score, change]
+    int:                  [threshold, percentile, change]
+    boolean:              [equals]
+    categorical:          [equals]
+    time_series<float>:   [z_score, change, percentile]
+    time_series<int>:     [z_score, change, percentile]
+    float?:               [threshold]
 
-type_strategy_map:
-  float:                [threshold, percentile, z_score, change]
-  int:                  [threshold, percentile, change]
-  boolean:              [equals]
-  categorical:          [equals]
-  time_series<float>:   [z_score, change, percentile]
-  time_series<int>:     [z_score, change, percentile]
-  float?:               [threshold]
+  parameter_priors:
+    account.active_user_rate_30d:
+      low_severity:    { value: 0.60 }
+      medium_severity: { value: 0.45 }
+      high_severity:   { value: 0.30 }
 
-parameter_priors:
-  account.active_user_rate_30d:
-    low_severity:     { value: 0.60 }   # 60% of seats active — early concern
-    medium_severity:  { value: 0.45 }   # 45% active — material drop
-    high_severity:    { value: 0.30 }   # 30% active — serious risk
+    account.seat_utilization_rate:
+      low_severity:    { value: 0.65 }
+      medium_severity: { value: 0.50 }
+      high_severity:   { value: 0.35 }
 
-  account.seat_utilization_rate:
-    low_severity:     { value: 0.65 }
-    medium_severity:  { value: 0.50 }
-    high_severity:    { value: 0.35 }
+    account.days_to_renewal:
+      low_severity:    { value: 90 }
+      medium_severity: { value: 60 }
+      high_severity:   { value: 30 }
 
-  account.days_to_renewal:
-    low_severity:     { value: 90 }     # 90 days to renewal — start monitoring
-    medium_severity:  { value: 60 }
-    high_severity:    { value: 30 }     # 30 days — urgent engagement needed
+    user.session_frequency_trend_8w:
+      low_severity:    { value: 0.20, window: "4w" }
+      medium_severity: { value: 0.35, window: "4w" }
+      high_severity:   { value: 0.50, window: "4w" }
 
-  user.session_frequency_trend_8w:
-    low_severity:     { value: 0.20, window: "4w" }  # 20% decline over 4 weeks
-    medium_severity:  { value: 0.35, window: "4w" }  # 35% decline
-    high_severity:    { value: 0.50, window: "4w" }  # 50% decline — strong signal
+  bias_rules:
+    urgent:       high_severity
+    critical:     high_severity
+    significant:  medium_severity
+    material:     medium_severity
+    early:        low_severity
+    proactive:    low_severity
+    approaching:  low_severity
 
-bias_rules:
-  urgent:       high_severity
-  critical:     high_severity
-  significant:  medium_severity
-  material:     medium_severity
-  early:        low_severity
-  proactive:    low_severity
-  approaching:  low_severity
+  threshold_directions:
+    account.active_user_rate_30d:   below
+    account.seat_utilization_rate:  below
 
-threshold_directions:
-  account.active_user_rate_30d:   below
-  account.seat_utilization_rate:  below
-
-global_default_strategy:   threshold
-global_preferred_strategy: percentile
+  global_default_strategy:   threshold
+  global_preferred_strategy: percentile
 ```
 
 ### Credit Risk Monitoring
 
 ```yaml
-# memintel_guardrails_credit.yaml
+guardrails:
+  type_strategy_map:
+    float:                [threshold, percentile, z_score, change]
+    int:                  [threshold, percentile, change]
+    float?:               [threshold]
+    boolean:              [equals]
+    categorical:          [equals]
+    time_series<float>:   [change, z_score, percentile]
 
-type_strategy_map:
-  float:                [threshold, percentile, z_score, change]
-  int:                  [threshold, percentile, change]
-  float?:               [threshold]
-  boolean:              [equals]
-  categorical:          [equals]
-  time_series<float>:   [change, z_score, percentile]
+  parameter_priors:
+    borrower.dscr:
+      low_severity:    { value: 1.80 }
+      medium_severity: { value: 1.50 }
+      high_severity:   { value: 1.30 }
 
-parameter_priors:
-  borrower.dscr:
-    low_severity:     { value: 1.80 }
-    medium_severity:  { value: 1.50 }
-    high_severity:    { value: 1.30 }   # covenant floor: 1.25
+    borrower.leverage_ratio:
+      low_severity:    { value: 3.0 }
+      medium_severity: { value: 4.0 }
+      high_severity:   { value: 5.5 }
 
-  borrower.leverage_ratio:
-    low_severity:     { value: 3.0 }    # total debt / EBITDA
-    medium_severity:  { value: 4.0 }
-    high_severity:    { value: 5.5 }
+    borrower.dscr_trend_4q:
+      low_severity:    { value: 0.20, window: "2q" }
+      medium_severity: { value: 0.30, window: "3q" }
+      high_severity:   { value: 0.40, window: "4q" }
 
-  borrower.dscr_trend_4q:
-    low_severity:     { value: 0.20, window: "2q" }
-    medium_severity:  { value: 0.30, window: "3q" }
-    high_severity:    { value: 0.40, window: "4q" }
+    loan.covenant_headroom_pct:
+      low_severity:    { value: 25 }
+      medium_severity: { value: 15 }
+      high_severity:   { value: 8  }
 
-  loan.covenant_headroom_pct:
-    low_severity:     { value: 25 }     # 25% headroom remaining
-    medium_severity:  { value: 15 }
-    high_severity:    { value: 8  }     # 8% — covenant breach imminent
+  bias_rules:
+    breach:        high_severity
+    covenant:      high_severity
+    deteriorating: medium_severity
+    stressed:      medium_severity
+    declining:     medium_severity
+    watch:         low_severity
+    early:         low_severity
+    proactive:     low_severity
 
-bias_rules:
-  breach:       high_severity
-  covenant:     high_severity
-  deteriorating: medium_severity
-  stressed:     medium_severity
-  declining:    medium_severity
-  watch:        low_severity
-  early:        low_severity
-  proactive:    low_severity
+  threshold_directions:
+    borrower.dscr:              below
+    borrower.current_ratio:     below
+    loan.covenant_headroom_pct: below
 
-threshold_directions:
-  borrower.dscr:            below
-  borrower.current_ratio:   below
-  loan.covenant_headroom_pct: below
-
-global_default_strategy:   threshold
-global_preferred_strategy: threshold   # regulatory thresholds are absolute in this domain
+  global_default_strategy:   threshold
+  global_preferred_strategy: threshold
 ```
-
-### DevOps / SRE
-
-```yaml
-# memintel_guardrails_sre.yaml
-
-type_strategy_map:
-  float:                [threshold, percentile, z_score, change]
-  int:                  [threshold, percentile, change]
-  boolean:              [equals]
-  time_series<float>:   [change, z_score, percentile, threshold]
-  time_series<int>:     [change, z_score, percentile]
-
-parameter_priors:
-  service.error_budget_burn_rate_1h:
-    low_severity:     { value: 2.0  }
-    medium_severity:  { value: 5.0  }
-    high_severity:    { value: 14.4 }
-
-  service.p99_latency_vs_baseline_ratio:
-    low_severity:     { value: 1.5 }    # 50% above baseline
-    medium_severity:  { value: 2.5 }    # 150% above baseline
-    high_severity:    { value: 4.0 }    # 300% above baseline
-
-  service.error_rate_trend_1h:
-    low_severity:     { value: 0.002, window: "30m" }
-    medium_severity:  { value: 0.005, window: "20m" }
-    high_severity:    { value: 0.010, window: "15m" }
-
-  deployment.similar_deployment_incident_rate:
-    low_severity:     { value: 0.10 }
-    medium_severity:  { value: 0.20 }
-    high_severity:    { value: 0.35 }
-
-bias_rules:
-  page:         high_severity
-  outage:       high_severity
-  critical:     high_severity
-  degradation:  medium_severity
-  slo:          medium_severity
-  early:        low_severity
-  proactive:    low_severity
-  trending:     low_severity
-
-global_default_strategy:   threshold
-global_preferred_strategy: change      # trend detection preferred in SRE context
-```
-
----
-
-## Validation
-
-The server validates the guardrails config at startup:
-
-```bash
-# Verify guardrails load correctly
-curl http://localhost:8000/health
-
-# List registered strategies
-curl http://localhost:8000/guardrails/strategies
-
-# Check that a specific primitive has valid strategy mappings
-curl http://localhost:8000/guardrails/validate?primitive_id=borrower.dscr
-```
-
-### Startup Validation Checks
-
-| Check | What it verifies |
-|---|---|
-| All strategies in type_strategy_map exist in strategy registry | No undefined strategy names |
-| All primitives in parameter_priors exist in primitive registry | No orphaned prior definitions |
-| All severity levels present for each prior | low, medium, and high all declared |
-| Parameter values within declared bounds | No out-of-range priors |
-| No conflicting threshold directions | A primitive cannot be both above and below |
 
 ---
 
 ## Common Mistakes
 
-**Setting parameter priors that are too wide apart.** If low_severity threshold is 0.3 and high_severity is 0.9, any user whose intent maps to medium_severity gets a threshold of 0.6 — which may be completely wrong for the domain. Keep severity levels proportional and meaningful.
+**Setting threshold values that are too far apart.** If `low_severity` is 0.9 and `high_severity` is 0.1, the `medium_severity` value of 0.5 may be too blunt for most tasks. Keep the three levels proportional and operationally meaningful.
 
-**Not customising bias_rules for domain terms.** Generic bias rules miss the domain-specific severity language your users will naturally use. A credit risk analyst will say "watch list", "covenant", "deteriorating" — add these to bias_rules so they resolve correctly.
+**Not adding domain-specific bias rules.** If your team will say "covenant breach risk" or "SUSAR-level event" or "SLO degradation", add those terms to `bias_rules`. Without them, the compiler falls back to the global default severity.
 
-**Using the same global_preferred_strategy for all domains.** `percentile` is the right default for population comparison use cases (who is in the bottom quartile). `change` is the right default for trajectory monitoring (what is getting worse). `threshold` is the right default for regulatory compliance (is the ratio above the regulatory minimum). Pick the one that matches your primary use case.
-
-**Forgetting threshold_directions for below-threshold signals.** Coverage ratios, active user rates, DSCR, LCR — these all fire when they fall below a threshold, not above. Forgetting to declare `below` means the condition never fires for the right reason.
+**Forgetting `threshold_directions` for below-threshold signals.** If a signal gets worse as it goes lower — DSCR, active user rate, budget remaining — it needs a `below` entry in `threshold_directions`. Without it, the condition will never fire because the values will never go above the threshold.
 
 ---
 
 ## Next Step
 
-[Configure Actions →](/docs/admin-guide/admin-actions)
+→ [Step 4: Actions](/docs/admin-guide/admin-actions)

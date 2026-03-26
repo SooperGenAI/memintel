@@ -1,373 +1,270 @@
 ---
 id: admin-actions
-title: Configuring Actions
-sidebar_label: Actions
+title: Step 4 — Actions
+sidebar_label: Step 4 — Actions
 ---
 
-# Configuring Actions
+# Step 4 — Actions
 
-Actions define what happens when a condition fires. An action is the output of the evaluation pipeline — the moment a deterministic decision produces a real-world effect. The admin configures the available action types and their delivery endpoints. Users then bind tasks to actions when they create monitoring tasks.
+An action is what happens when a monitoring condition fires. It is the delivery mechanism — where does the alert go, and in what form?
 
----
-
-## What Actions Do
-
-When a task evaluates a condition and the condition is met, one or more actions are triggered. Memintel supports three action types:
-
-| Type | What it does | Best for |
-|---|---|---|
-| `webhook` | HTTP POST to a configured endpoint with the decision payload | Integrating with any downstream system |
-| `notification` | Delivers a formatted alert to a configured channel | Slack, email, in-app notifications |
-| `log_only` | Records the decision to the audit log without external delivery | Audit trail, dry-run mode, debugging |
+You define a library of available actions here. When your team members create monitoring tasks, they choose which action to attach. You can have as many actions as you need — a Slack alert for one team, an email for another, a webhook to your CRM for a third.
 
 ---
 
-## The Actions Config File
+## Where Actions Live
 
-Actions are defined in `memintel_actions.yaml`. Like primitives and guardrails, this file is loaded at startup and changes require a restart.
+Actions are defined in the `actions:` section of `memintel_config.yaml`:
 
 ```yaml
-# memintel_actions.yaml
+# memintel_config.yaml
 
 actions:
-
-  - id: <string>              # required — unique identifier
-    type: webhook             # webhook | notification | log_only
-    endpoint: <url>           # required for webhook
-    method: POST              # optional — default POST
-    headers:                  # optional — static headers
-      <key>: <value>
-    retry:                    # optional — retry configuration
-      max_attempts: 3
-      backoff: exponential
-    timeout_seconds: 10       # optional — default 10
-    description: <string>     # required — plain English
-
-  - id: <string>
+  - id: slack_sales_ops
     type: notification
-    channel: <string>         # slack | email | in_app
-    endpoint: <url>           # Slack webhook URL, email address, etc.
-    template: <string>        # optional — named template ID
-    description: <string>
+    channel: slack
+    endpoint: https://hooks.slack.com/services/$SLACK_WEBHOOK
+    description: "Sends alert to the #sales-ops Slack channel"
 
-  - id: <string>
+  - id: crm_webhook
+    type: webhook
+    endpoint: https://myapp.com/hooks/alert
+    description: "Posts alert payload to CRM workflow system"
+
+  - id: audit_log_only
     type: log_only
-    description: <string>
+    description: "Records the decision to the audit log — no external delivery"
 ```
 
 ---
 
-## Webhook Actions
+## Three Action Types
 
-Webhooks are the most flexible action type. When a condition fires, Memintel sends an HTTP POST to your configured endpoint with the full decision payload. Your application receives the webhook and does whatever it needs to do — create a ticket, trigger a workflow, send a notification, update a dashboard.
+### notification — formatted alerts to messaging channels
 
-### Basic Webhook
-
-```yaml
-actions:
-
-  - id: deal_risk_alert
-    type: webhook
-    endpoint: https://myapp.com/hooks/deal-risk
-    method: POST
-    timeout_seconds: 10
-    retry:
-      max_attempts: 3
-      backoff: exponential
-    description: Fires when a deal risk condition is met — routes to sales ops workflow
-```
-
-### Webhook with Authentication Headers
-
-For endpoints that require authentication, configure static headers. Use environment variable references (prefixed with `$`) for secrets — never hardcode credentials in the config file.
+Use this for Slack messages, emails, or in-app notifications. Memintel formats the alert into a readable message — your team receives plain English, not raw data.
 
 ```yaml
-actions:
-
-  - id: compliance_alert
-    type: webhook
-    endpoint: https://compliance.myapp.com/hooks/aml-alert
-    method: POST
-    headers:
-      Authorization: "Bearer $COMPLIANCE_WEBHOOK_SECRET"
-      X-Source: "memintel"
-      Content-Type: "application/json"
-    timeout_seconds: 15
-    retry:
-      max_attempts: 5
-      backoff: exponential
-    description: AML alert delivery to compliance system — authenticated endpoint
-
-  - id: credit_risk_webhook
-    type: webhook
-    endpoint: https://risk.myapp.com/hooks/credit-early-warning
-    headers:
-      X-API-Key: "$RISK_SYSTEM_API_KEY"
-    timeout_seconds: 10
-    retry:
-      max_attempts: 3
-      backoff: linear
-    description: Credit early warning delivery to risk management platform
+- id: slack_compliance
+  type: notification
+  channel: slack    # slack | email | in_app
+  endpoint: https://hooks.slack.com/services/$SLACK_COMPLIANCE_WEBHOOK
+  description: "AML alert to #compliance Slack channel"
 ```
 
-### Multiple Webhooks for Priority Routing
+For email:
+```yaml
+- id: credit_risk_email
+  type: notification
+  channel: email
+  endpoint: credit-risk-team@mycompany.com
+  description: "Credit risk early warning email to credit risk team"
+```
 
-Register separate action IDs for different priority levels. Users bind tasks to the appropriate action when creating them.
+### webhook — raw data to another system
+
+Use this when you want to send the full alert payload to another system — your CRM, ticketing system, PagerDuty, incident management tool, or any application with an API endpoint.
 
 ```yaml
-actions:
-
-  - id: sre_page
-    type: webhook
-    endpoint: https://pagerduty.com/integration/your-key/enqueue
-    headers:
-      Authorization: "Token token=$PAGERDUTY_TOKEN"
-    timeout_seconds: 5
-    retry:
-      max_attempts: 5
-      backoff: exponential
-    description: High-priority page — SLO breach risk, active incident, deployment block
-
-  - id: sre_slack_alert
-    type: webhook
-    endpoint: https://hooks.slack.com/services/$SLACK_SRE_WEBHOOK
-    timeout_seconds: 10
-    retry:
-      max_attempts: 3
-      backoff: exponential
-    description: Medium-priority Slack alert — SRE channel for early warnings
-
-  - id: sre_log_only
-    type: log_only
-    description: Low-priority — decision logged only, no external delivery. Used for monitoring tasks in observation mode.
+- id: pagerduty_page
+  type: webhook
+  endpoint: https://events.pagerduty.com/v2/enqueue
+  headers:
+    Authorization: "Token token=$PAGERDUTY_KEY"
+  retry:
+    max_attempts: 5
+    backoff: exponential
+  description: "PagerDuty page — critical SLO or deployment risk"
 ```
 
-### Webhook Payload
+### log_only — audit trail only, no external delivery
 
-When a webhook fires, Memintel sends a JSON payload to the configured endpoint. The payload always includes:
+Use this for low-priority monitoring tasks, observation mode, or any situation where you want the decision recorded but do not need anyone notified immediately.
 
-```json
-{
-  "decision_id":        "dec_9x2k1m",
-  "task_id":            "tsk_8f3k2",
-  "entity":             "deal_acme_corp_q2",
-  "timestamp":          "2024-03-15T09:00:00Z",
-  "concept_id":         "deal.stall_risk",
-  "concept_version":    "1.0",
-  "condition_id":       "deal.at_risk_of_stalling",
-  "condition_version":  "1.0",
-  "result_value":       0.81,
-  "decision_value":     true,
-  "action_triggered":   true,
-  "action_id":          "deal_risk_alert",
-  "contributions": {
-    "thread_pressure":   0.35,
-    "stage_pressure":    0.29,
-    "sentiment_score":   0.17
-  },
-  "context_version":    "v1"
-}
+```yaml
+- id: audit_only
+  type: log_only
+  description: "Records decision to audit log — no notification sent"
 ```
-
-Your application should return HTTP `2xx` within the configured `timeout_seconds`. Any non-2xx response triggers the retry logic.
 
 ---
 
-## Notification Actions
+## The id Field
 
-Notification actions deliver formatted alerts to messaging channels. Memintel handles the formatting — your team receives a readable, actionable message rather than a raw JSON payload.
-
-### Slack Notification
+Every action needs a unique identifier. This is what your team members see when they choose which action to attach to a monitoring task. Make it readable and descriptive.
 
 ```yaml
-actions:
+id: slack_sales_ops          # clear — who gets it and via what channel
+id: compliance_slack         # clear
+id: credit_risk_email        # clear
+id: pagerduty_critical       # clear
+id: aml_audit_log            # clear
 
-  - id: sales_ops_slack
-    type: notification
-    channel: slack
-    endpoint: https://hooks.slack.com/services/$SLACK_SALES_OPS_WEBHOOK
-    template: deal_risk_standard
-    description: Deal risk alert delivered to #sales-ops Slack channel
-
-  - id: compliance_slack
-    type: notification
-    channel: slack
-    endpoint: https://hooks.slack.com/services/$SLACK_COMPLIANCE_WEBHOOK
-    template: aml_alert_standard
-    description: AML alert delivered to #compliance Slack channel — includes SAR workflow link
-
-  - id: sre_slack
-    type: notification
-    channel: slack
-    endpoint: https://hooks.slack.com/services/$SLACK_SRE_WEBHOOK
-    template: slo_alert_standard
-    description: SLO early warning alert delivered to #sre Slack channel
+id: action1                  # bad — not descriptive
+id: webhook                  # bad — not unique if you have multiple webhooks
 ```
 
-### Email Notification
+---
+
+## Using Environment Variables for Secrets
+
+Never put real API keys, webhook secrets, or passwords directly in the config file. Use `$VARIABLE_NAME` references instead — the server resolves these from environment variables at startup.
 
 ```yaml
-actions:
+# Wrong — secret hardcoded in config file
+endpoint: https://hooks.slack.com/services/T00000/B00000/XXXX
 
-  - id: credit_risk_email
-    type: notification
-    channel: email
-    endpoint: credit-risk-team@mycompany.com
-    template: credit_early_warning_email
-    description: Credit risk early warning email to credit risk team
-
-  - id: network_compliance_email
-    type: notification
-    channel: email
-    endpoint: provider-relations@mycompany.com
-    template: provider_credentialing_alert
-    description: Provider credentialing alert to network management team
+# Right — secret stored as environment variable
+endpoint: https://hooks.slack.com/services/$SLACK_SALES_OPS_WEBHOOK
 ```
 
-### Notification Templates
-
-Templates control how the decision payload is formatted for human consumption. Reference a named template in the action config — templates are defined separately in `memintel_templates.yaml`.
-
-A well-designed notification template includes:
-- What was detected and for which entity
-- The key signal values that drove the condition
-- The recommended action
-- A link to the relevant workflow or dashboard
-
-```yaml
-# memintel_templates.yaml
-
-templates:
-
-  - id: deal_risk_standard
-    title: "Deal Risk Alert — {{entity}}"
-    body: |
-      Deal {{entity}} has reached a stall risk score of {{result_value | percent}}.
-
-      Top signals:
-      {{#contributions}}
-      • {{key}}: {{value | percent}}
-      {{/contributions}}
-
-      Threshold: {{condition.params.value | percent}}
-      Condition version: {{condition_version}}
-
-    actions:
-      - label: "View deal"
-        url: "https://crm.myapp.com/deals/{{entity}}"
-      - label: "Mark reviewed"
-        url: "https://myapp.com/hooks/mark-reviewed?decision_id={{decision_id}}"
-
-  - id: aml_alert_standard
-    title: "AML Alert — {{entity}}"
-    body: |
-      Customer {{entity}} — transaction risk score: {{result_value | percent}}
-
-      Risk signals:
-      • Value vs baseline: {{contributions.value_vs_baseline | x_multiple}}
-      • Structuring signal: {{contributions.structuring_signal | percent}}
-      • Jurisdiction risk: {{contributions.jurisdiction_risk | risk_level}}
-
-    actions:
-      - label: "Open SAR workflow"
-        url: "https://compliance.myapp.com/sar/new?customer={{entity}}"
-      - label: "View transaction history"
-        url: "https://myapp.com/customers/{{entity}}/transactions"
-```
+Ask your data engineer to set the corresponding environment variables on the server. They will never appear in the config file itself.
 
 ---
 
 ## Retry Configuration
 
-Configure retry behaviour separately for each action. Production systems should always configure retries for webhooks that deliver to external services.
+For webhook actions, configure retries so that a temporary network failure does not cause a missed alert:
 
 ```yaml
-retry:
-  max_attempts: 3        # total attempts including the first
-  backoff: exponential   # exponential | linear | none
-  initial_delay_ms: 500  # delay before first retry (exponential/linear only)
-  max_delay_ms: 30000    # cap on retry delay
+- id: crm_webhook
+  type: webhook
+  endpoint: https://myapp.com/hooks/alert
+  retry:
+    max_attempts: 3         # try up to 3 times total
+    backoff: exponential    # wait longer between each retry
+  timeout_seconds: 10       # give up on a single attempt after 10 seconds
+  description: "CRM alert webhook"
 ```
 
-**Backoff strategies:**
-
-| Strategy | Behaviour | Best for |
-|---|---|---|
-| `exponential` | Delay doubles on each retry (500ms → 1s → 2s...) | Downstream service under load — gives it time to recover |
-| `linear` | Delay is constant on each retry | Simple retry without back-pressure concern |
-| `none` | Immediate retry | Only for very low-latency, idempotent endpoints |
-
-**Retry failure handling:**
-
-If all retry attempts are exhausted, the delivery failure is logged with the full decision payload. The decision itself is permanently recorded in the audit log regardless of delivery outcome. A failed webhook does not affect the determinism or auditability of the decision.
+**Backoff options:**
+- `exponential` — waits longer after each failed attempt (recommended for most cases)
+- `linear` — same wait time between each retry
+- `none` — retries immediately (only for very fast, reliable endpoints)
 
 ---
 
-## Complete Example — Multi-Domain Deployment
+## Complete Examples
+
+### SaaS Platform — Multiple Alert Channels
 
 ```yaml
-# memintel_actions.yaml
-
 actions:
 
-  # ── Sales / CRM ──────────────────────────────────────────────────
-  - id: deal_risk_webhook
+  # Customer success team — Slack
+  - id: slack_customer_success
+    type: notification
+    channel: slack
+    endpoint: https://hooks.slack.com/services/$SLACK_CS_WEBHOOK
+    description: "Churn risk alert to #customer-success Slack channel"
+
+  # Account executives — email
+  - id: ae_email_alert
+    type: notification
+    channel: email
+    endpoint: account-executives@mycompany.com
+    description: "Deal risk alert email to account executive team"
+
+  # CRM workflow system — webhook
+  - id: crm_churn_webhook
     type: webhook
-    endpoint: https://myapp.com/hooks/deal-risk
+    endpoint: https://crm.myapp.com/hooks/churn-alert
     headers:
-      Authorization: "Bearer $SALES_WEBHOOK_SECRET"
+      Authorization: "Bearer $CRM_WEBHOOK_SECRET"
     retry:
       max_attempts: 3
       backoff: exponential
     timeout_seconds: 10
-    description: Deal stall risk alert — routes to sales ops workflow
+    description: "Churn alert posted to CRM workflow — triggers outreach sequence"
 
-  - id: deal_risk_slack
+  # Observation mode — log only
+  - id: log_only
+    type: log_only
+    description: "Decision recorded to audit log only — no notification"
+```
+
+### Compliance / Financial Services
+
+```yaml
+actions:
+
+  # Compliance team — immediate Slack alert
+  - id: compliance_slack_alert
     type: notification
     channel: slack
-    endpoint: https://hooks.slack.com/services/$SLACK_SALES_WEBHOOK
-    template: deal_risk_standard
-    description: Deal risk notification to #sales-ops Slack channel
+    endpoint: https://hooks.slack.com/services/$SLACK_COMPLIANCE_WEBHOOK
+    description: "AML and compliance alerts to #compliance Slack channel"
 
-  # ── Compliance / AML ─────────────────────────────────────────────
-  - id: aml_alert_webhook
+  # Compliance system — webhook with high retry count
+  - id: compliance_system_webhook
     type: webhook
     endpoint: https://compliance.myapp.com/hooks/aml-alert
     headers:
       Authorization: "Bearer $COMPLIANCE_WEBHOOK_SECRET"
-      X-Priority: "high"
+      X-Alert-Priority: "high"
     retry:
       max_attempts: 5
       backoff: exponential
-      initial_delay_ms: 200
     timeout_seconds: 15
-    description: AML alert delivery — high-priority, 5 retries
+    description: "AML alert to compliance management system — high priority, 5 retries"
 
-  - id: aml_log_only
-    type: log_only
-    description: AML decision logging only — used for low-severity monitoring tasks in observation mode
-
-  # ── Credit Risk ───────────────────────────────────────────────────
-  - id: credit_early_warning_webhook
-    type: webhook
-    endpoint: https://risk.myapp.com/hooks/credit-warning
-    headers:
-      X-API-Key: "$RISK_SYSTEM_API_KEY"
-    retry:
-      max_attempts: 3
-      backoff: exponential
-    timeout_seconds: 10
-    description: Credit early warning delivery to risk management platform
-
+  # Credit risk team — email
   - id: credit_risk_email
     type: notification
     channel: email
     endpoint: credit-risk@mycompany.com
-    template: credit_early_warning_email
-    description: Credit risk email alert to credit risk team
+    description: "Credit early warning email to credit risk team"
 
-  # ── SRE / DevOps ──────────────────────────────────────────────────
-  - id: sre_page
+  # Audit trail only
+  - id: audit_log
+    type: log_only
+    description: "Decision recorded to audit log — no notification"
+```
+
+### Clinical Trials / Healthcare
+
+```yaml
+actions:
+
+  # Medical monitor — immediate Slack alert
+  - id: safety_slack_alert
+    type: notification
+    channel: slack
+    endpoint: https://hooks.slack.com/services/$SLACK_SAFETY_WEBHOOK
+    description: "Safety signal alert to medical monitor via Slack"
+
+  # Safety database system — webhook
+  - id: safety_system_webhook
+    type: webhook
+    endpoint: https://safety.myapp.com/hooks/ae-alert
+    headers:
+      Authorization: "Bearer $SAFETY_SYSTEM_SECRET"
+    retry:
+      max_attempts: 5
+      backoff: exponential
+    timeout_seconds: 10
+    description: "Adverse event alert posted to pharmacovigilance system"
+
+  # Medical monitor — email
+  - id: medical_monitor_email
+    type: notification
+    channel: email
+    endpoint: medical-monitor@mycompany.com
+    description: "Safety alert email to medical monitor"
+
+  # Regulatory audit trail
+  - id: regulatory_audit_log
+    type: log_only
+    description: "Decision recorded to audit log for regulatory inspection readiness"
+```
+
+### DevOps / SRE
+
+```yaml
+actions:
+
+  # Critical — PagerDuty page
+  - id: pagerduty_page
     type: webhook
     endpoint: https://events.pagerduty.com/v2/enqueue
     headers:
@@ -375,18 +272,18 @@ actions:
     retry:
       max_attempts: 5
       backoff: exponential
-      initial_delay_ms: 100
     timeout_seconds: 5
-    description: PagerDuty page — critical SLO breach risk or active incident
+    description: "PagerDuty page — critical SLO breach risk or deployment block"
 
+  # Medium priority — SRE Slack
   - id: sre_slack_alert
     type: notification
     channel: slack
     endpoint: https://hooks.slack.com/services/$SLACK_SRE_WEBHOOK
-    template: slo_alert_standard
-    description: SRE Slack alert — early warning and non-critical conditions
+    description: "SRE Slack alert — early warning conditions"
 
-  - id: deployment_block_webhook
+  # Deployment hold — CI/CD webhook
+  - id: deployment_block
     type: webhook
     endpoint: https://ci.myapp.com/hooks/deployment-block
     headers:
@@ -395,102 +292,102 @@ actions:
       max_attempts: 3
       backoff: linear
     timeout_seconds: 5
-    description: Deployment block signal — sent to CI/CD pipeline to hold deployment
-
-  # ── Healthcare ────────────────────────────────────────────────────
-  - id: safety_alert_webhook
-    type: webhook
-    endpoint: https://safety.myapp.com/hooks/ae-alert
-    headers:
-      Authorization: "Bearer $SAFETY_SYSTEM_SECRET"
-      X-Trial-ID: "$TRIAL_ID"
-    retry:
-      max_attempts: 5
-      backoff: exponential
-    timeout_seconds: 10
-    description: Safety signal alert delivery to pharmacovigilance system
-
-  - id: network_compliance_email
-    type: notification
-    channel: email
-    endpoint: network-management@mycompany.com
-    template: provider_credentialing_alert
-    description: Provider network compliance alert — credentialing and OIG exclusion events
+    description: "Deployment hold signal sent to CI/CD pipeline"
 ```
-
----
-
-## Validating Actions
-
-At startup, the server validates all action configurations:
-
-```bash
-# Check all actions loaded
-curl http://localhost:8000/actions
-
-# Verify a specific action is reachable
-curl -X POST http://localhost:8000/actions/deal_risk_webhook/test
-# Sends a test payload to the configured endpoint
-```
-
-### Startup Validation Checks
-
-| Check | What it verifies |
-|---|---|
-| Unique IDs | No duplicate action IDs |
-| Valid type | `webhook`, `notification`, or `log_only` only |
-| Endpoint present | Webhook and notification actions have an endpoint |
-| Channel valid | Notification channel is `slack`, `email`, or `in_app` |
-| No credentials in config | Endpoint strings do not contain raw API keys |
-| Environment variable references resolve | All `$VAR` references are set in the environment |
-
----
-
-## Security
-
-**Never hardcode credentials in the actions config.** Use `$ENV_VAR` references for all secrets. The config loader resolves these from the environment at startup and never logs the resolved values.
-
-```yaml
-# Wrong — credential hardcoded in config file
-headers:
-  Authorization: "Bearer sk-abc123xyz..."
-
-# Right — resolved from environment variable
-headers:
-  Authorization: "Bearer $MY_WEBHOOK_SECRET"
-```
-
-**Validate webhook endpoints before go-live.** Use the test endpoint (`POST /actions/&#123;id&#125;/test`) to verify each webhook is reachable and returns a 2xx response before onboarding users.
-
-**Configure appropriate timeouts.** If a downstream system is slow, a long timeout blocks the evaluation thread. For most webhooks, 10 seconds is sufficient. For critical safety systems where retries matter more than latency, configure shorter timeouts with more retry attempts.
 
 ---
 
 ## Common Mistakes
 
-**Registering only one action for all use cases.** Different severity levels and use cases warrant different delivery mechanisms. Register a paging action for critical conditions, a Slack action for early warnings, and a log-only action for observation mode tasks.
+**Using one action for everything.** Different alerts warrant different delivery mechanisms. A critical safety signal and a low-priority early warning should not go to the same channel with the same urgency. Register separate actions for different priority levels.
 
-**Not configuring retries.** Network failures are inevitable. Without retries, a transient failure means a missed alert. Always configure retries for production webhook actions.
+**Not configuring retries for webhooks.** Network failures happen. Without retries, a transient failure means a missed alert. Always configure retries for webhook actions in production.
 
-**Using the same endpoint for all alert types.** If your downstream system cannot distinguish between an AML alert and a credit risk alert, it cannot route them appropriately. Use separate action IDs for different alert domains — even if they go to the same service, include an action-specific header or path parameter that the downstream system can use for routing.
+**Hardcoding secrets in the endpoint URL.** If your Slack webhook URL contains your actual token, it is visible to anyone who can read the config file. Use `$ENV_VAR` references.
 
-**Forgetting to set environment variables for `$` references.** The server validates that `$ENV_VAR` references resolve at startup. If a variable is not set, the server will refuse to start. Verify all referenced environment variables are set in your deployment environment.
+**Not testing actions before go-live.** Ask your data engineer to run `POST /actions/&#123;action_id&#125;/test` for each action before users start creating tasks. This confirms the endpoint is reachable and responding correctly.
 
 ---
 
-## Admin Setup Complete
+## Setup Complete
 
-You have now configured all four layers of the Memintel admin setup:
+You have now configured all four sections of `memintel_config.yaml`:
 
-1. ✓ **Application Context** — domain understanding for the compiler
-2. ✓ **Primitives** — the signal vocabulary
-3. ✓ **Guardrails** — compiler policy and constraints
-4. ✓ **Actions** — delivery configuration
+1. ✓ **Application Context** — domain understanding submitted via API
+2. ✓ **Primitives** — the signal vocabulary defined
+3. ✓ **Guardrails** — the compiler policy and thresholds defined
+4. ✓ **Actions** — alert delivery configured
 
-The system is ready for users to create tasks and begin monitoring.
+Ask your data engineer to **restart the server** to load the updated config, and to verify that each action endpoint is reachable.
 
-**Recommended next steps:**
+After the restart, your team can begin creating monitoring tasks. Point them to the [Quickstart](/docs/intro/quickstart) to get started.
 
-- Run the full smoke test sequence from the [Self-Hosting guide](/docs/intro/self-hosting#step-6----smoke-test) to verify the end-to-end pipeline
-- Create the first real task using the [Quickstart](/docs/intro/quickstart)
-- Review [Common Mistakes](/docs/intro/common-mistakes) before onboarding users
+---
+
+## The Full Config File
+
+Here is the complete structure of `memintel_config.yaml` with all four sections — use this as your reference:
+
+```yaml
+# memintel_config.yaml
+
+# Application context is submitted separately via POST /context
+# It does not live in this file
+
+# ─────────────────────────────
+# SECTION 1: PRIMITIVES
+# ─────────────────────────────
+primitives:
+  - id: account.active_user_rate_30d
+    type: float
+    source: activity_pipeline
+    entity: account_id
+    description: "Ratio of active users to total licensed seats, 0-1"
+
+  # add more primitives here...
+
+# ─────────────────────────────
+# SECTION 2: GUARDRAILS
+# ─────────────────────────────
+guardrails:
+  type_strategy_map:
+    float:      [threshold, percentile, z_score, change]
+    int:        [threshold, percentile, change]
+    boolean:    [equals]
+    categorical: [equals]
+    time_series<float>: [z_score, change, percentile]
+    time_series<int>:   [z_score, change, percentile]
+    float?: [threshold]
+
+  parameter_priors:
+    account.active_user_rate_30d:
+      low_severity:    { value: 0.60 }
+      medium_severity: { value: 0.45 }
+      high_severity:   { value: 0.30 }
+    # add more priors here...
+
+  bias_rules:
+    urgent:      high_severity
+    significant: medium_severity
+    early:       low_severity
+    # add more bias rules here...
+
+  threshold_directions:
+    account.active_user_rate_30d: below
+    # add more direction overrides here...
+
+  global_default_strategy:   threshold
+  global_preferred_strategy: percentile
+
+# ─────────────────────────────
+# SECTION 3: ACTIONS
+# ─────────────────────────────
+actions:
+  - id: slack_alert
+    type: notification
+    channel: slack
+    endpoint: https://hooks.slack.com/services/$SLACK_WEBHOOK
+    description: "Alert to Slack channel"
+
+  # add more actions here...
+```
