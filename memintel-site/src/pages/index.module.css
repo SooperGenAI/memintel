@@ -1,0 +1,370 @@
+/* ─── Hero ───────────────────────────────────────────────────────────────── */
+.hero {
+  padding: 4.5rem 2rem 1.5rem;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+}
+
+.hero::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(99,102,241,0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(99,102,241,0.06) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, black 30%, transparent 100%);
+  pointer-events: none;
+}
+
+.hero::after {
+  content: '';
+  position: absolute;
+  top: -120px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 700px;
+  height: 400px;
+  background: radial-gradient(ellipse, rgba(99,102,241,0.22) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.heroInner {
+  max-width: 820px;     /* FIX 2: wider to stop "agentic AI" cropping */
+  margin: 0 auto;
+  position: relative;
+  z-index: 1;
+}
+
+/* ─── Badge ──────────────────────────────────────────────────────────────── */
+/* FIX 3: make badge clearly visible in light mode */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 1.1rem;
+  border: 1px solid rgba(99,102,241,0.5);
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  color: #4f46e5;
+  background: rgba(99,102,241,0.1);
+  margin-bottom: 1rem;
+  text-transform: uppercase;
+}
+
+[data-theme='dark'] .badge {
+  color: #c7d2fe;
+  border-color: rgba(99,102,241,0.5);
+  background: rgba(99,102,241,0.12);
+}
+
+/* No pulsing dot — badge is plain text only */
+
+/* ─── Hero title ─────────────────────────────────────────────────────────── */
+/* FIX 2: use clamp with smaller max + no overflow-clip so "agentic AI" never crops */
+.heroTitle {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: clamp(2.4rem, 5.5vw, 4rem);
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  line-height: 1.08;
+  margin: 0 0 1.5rem;
+  overflow: visible;
+  padding-bottom: 0.1em;    /* prevents descender clip on gradient text */
+
+  background: linear-gradient(135deg, #ffffff 0%, #e2e8f0 25%, #c7d2fe 50%, #a5b4fc 65%, #ffffff 100%);
+  background-size: 300% 300%;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: shimmer 6s ease infinite;
+}
+
+@keyframes shimmer {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+[data-theme='light'] .heroTitle {
+  background: linear-gradient(135deg, #0f172a 0%, #1e293b 30%, #3730a3 60%, #1e293b 80%, #0f172a 100%);
+  background-size: 300% 300%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  animation: shimmer 6s ease infinite;
+}
+
+/* ─── Subtitle ───────────────────────────────────────────────────────────── */
+.heroSubtitle {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 1.2rem;
+  font-weight: 400;
+  color: #94a3b8;
+  line-height: 1.7;
+  margin: 0 auto 2.5rem;
+  max-width: 560px;
+  letter-spacing: -0.01em;
+}
+
+[data-theme='light'] .heroSubtitle {
+  color: #475569;
+}
+
+/* ─── CTAs ───────────────────────────────────────────────────────────────── */
+.heroCta {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-bottom: 1.5rem;
+}
+
+/* Both CTA buttons: same grey style, black on hover */
+.ctaPrimary,
+.ctaSecondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.7rem 1.6rem;
+  border-radius: 8px;
+  font-family: 'Inter', sans-serif;
+  font-weight: 500;
+  font-size: 0.9375rem;
+  letter-spacing: -0.01em;
+  text-decoration: none !important;
+  border: 1px solid rgba(255,255,255,0.15);
+  background: rgba(255,255,255,0.07);
+  color: #cbd5e1 !important;
+  transition: background 0.15s, color 0.15s, border-color 0.15s, transform 0.15s;
+}
+
+.ctaPrimary:hover,
+.ctaSecondary:hover {
+  background: #e2e8f0;
+  color: #0f172a !important;
+  border-color: #e2e8f0;
+  transform: translateY(-1px);
+}
+
+.ctaPrimary::after {
+  content: '→';
+  font-size: 1rem;
+  transition: transform 0.15s;
+}
+
+.ctaPrimary:hover::after {
+  transform: translateX(3px);
+}
+
+[data-theme='light'] .ctaPrimary,
+[data-theme='light'] .ctaSecondary {
+  background: #f1f5f9;
+  color: #334155 !important;
+  border-color: rgba(15,23,42,0.12);
+}
+
+[data-theme='light'] .ctaPrimary:hover,
+[data-theme='light'] .ctaSecondary:hover {
+  background: #0f172a;
+  color: #fff !important;
+  border-color: #0f172a;
+}
+
+/* ─── Pipeline diagram ───────────────────────────────────────────────────── */
+/* FIX 4: make stepLabel and stepDesc clearly visible in light mode */
+.pipeline {
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  gap: 0;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  position: relative;
+  z-index: 1;
+  border: 1px solid rgba(99,102,241,0.2);
+  border-radius: 10px;
+  background: #0d1526;
+  max-width: 700px;
+  margin: 0 auto;
+}
+
+[data-theme='light'] .pipeline {
+  background: #f1f5f9;
+  border-color: rgba(99,102,241,0.25);
+}
+
+.pipelineStep {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 1.1rem 1.4rem;
+  flex: 1;
+  min-width: 130px;
+  position: relative;
+  border-right: 1px solid rgba(99,102,241,0.12);
+}
+
+.pipelineStep:last-child {
+  border-right: none;
+}
+
+.stepLabel {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: #c7d2fe;           /* clearly visible on dark bg */
+  white-space: nowrap;
+}
+
+[data-theme='light'] .stepLabel {
+  color: #4338ca;            /* clearly visible on light bg */
+}
+
+.stepDesc {
+  font-size: 0.6875rem;
+  font-weight: 400;
+  color: #94a3b8;            /* FIX 4: was #475569 — too faint in light */
+  margin-top: 0.3rem;
+  white-space: nowrap;
+}
+
+[data-theme='light'] .stepDesc {
+  color: #64748b;
+}
+
+.pipelineArrow { display: none; }
+
+/* ─── Divider ────────────────────────────────────────────────────────────── */
+.divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(99,102,241,0.15), transparent);
+  margin: 0 2rem;
+}
+
+/* ─── Features ───────────────────────────────────────────────────────────── */
+.features {
+  padding: 1rem 2rem 2.5rem;
+}
+
+/* FIX 5: "Why Memintel" — proper section heading size */
+.featuresHeading {
+  text-align: center;
+  font-family: 'Inter', sans-serif;
+  font-size: 1.75rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: #f1f5f9;
+  margin-bottom: 1rem;
+}
+
+[data-theme='light'] .featuresHeading {
+  color: #0f172a;
+}
+
+.featuresGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1px;
+  max-width: 1100px;
+  margin: 0 auto;
+  border: 1px solid rgba(99,102,241,0.1);
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgba(99,102,241,0.08);
+}
+
+.feature {
+  padding: 2rem;
+  background: #080e1a;
+  transition: background 0.2s;
+}
+[data-theme='light'] .feature  { background: #ffffff; }
+.feature:hover                  { background: #0d1526; }
+[data-theme='light'] .feature:hover { background: #f8fafc; }
+
+.featureIcon {
+  font-size: 1.25rem;
+  margin-bottom: 1rem;
+}
+
+.featureTitle {
+  font-family: 'Inter', sans-serif;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  margin: 0 0 0.5rem;
+  letter-spacing: -0.02em;
+  color: #e2e8f0;
+}
+[data-theme='light'] .featureTitle { color: #0f172a; }
+
+.featureDesc {
+  font-size: 0.875rem;
+  color: #64748b;
+  line-height: 1.7;
+  margin: 0;
+}
+[data-theme='light'] .featureDesc { color: #64748b; }
+
+/* ─── Quick links ────────────────────────────────────────────────────────── */
+.quicklinks {
+  padding: 0 2rem 4rem;
+}
+
+/* FIX 5: "Jump in" — proper section heading size */
+.quicklinksTitle {
+  text-align: center;
+  font-family: 'Inter', sans-serif;
+  font-size: 1.75rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: #f1f5f9;
+  margin-bottom: 1rem;
+}
+
+[data-theme='light'] .quicklinksTitle {
+  color: #0f172a;
+}
+
+.quicklinksGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1px;
+  max-width: 900px;
+  margin: 0 auto;
+  border: 1px solid rgba(99,102,241,0.1);
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(99,102,241,0.08);
+}
+
+.quicklink {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 1.5rem;
+  text-decoration: none !important;
+  background: #080e1a;
+  transition: background 0.15s;
+}
+[data-theme='light'] .quicklink        { background: #ffffff; }
+.quicklink:hover                        { background: #0d1526; }
+[data-theme='light'] .quicklink:hover  { background: #f8fafc; }
+
+.quicklink strong {
+  font-family: 'Inter', sans-serif;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: #c7d2fe;
+  letter-spacing: -0.01em;
+}
+[data-theme='light'] .quicklink strong { color: #4f46e5; }
+
+.quicklink span {
+  font-size: 0.8125rem;
+  color: #64748b;
+  line-height: 1.55;
+}

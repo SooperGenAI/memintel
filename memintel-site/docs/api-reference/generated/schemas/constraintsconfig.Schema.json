@@ -1,0 +1,1 @@
+{"schema":{"type":"object","properties":{"sensitivity":{"type":"string","enum":["low","medium","high"],"description":"Hint to the LLM for threshold prior selection. Overrides severity derived from natural language if provided.\n"},"namespace":{"type":"string","enum":["personal","team","org","global"]}},"title":"ConstraintsConfig"},"schemaType":"response"}
