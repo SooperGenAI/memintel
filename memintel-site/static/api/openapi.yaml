@@ -1653,6 +1653,10 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
 
 tags:
+  - name: Context
+    description: Application context — domain briefing for the LLM compiler
+  - name: Guardrails
+    description: Guardrails — compiler policy, strategy registry, and parameter priors
   - name: Tasks
     description: Task creation, listing, inspection, update, and deletion
   - name: Execution
