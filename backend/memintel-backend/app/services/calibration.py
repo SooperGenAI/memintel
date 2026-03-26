@@ -220,18 +220,35 @@ class CalibrationService:
                     adjusted_val = statistically_optimal_val
                     cost_label   = None
 
-                # Clamp to [0.0, 1.0] — bias must never produce an invalid threshold.
+                # Clamp to guardrails threshold_bounds, then to [0.0, 1.0] as a
+                # safety net.  Bias must never push the value outside the
+                # strategy-specific bounds declared in the guardrails.
+                raw_adjusted_val = adjusted_val
+                bounds_min_f = float(bounds.get("min")) if bounds.get("min") is not None else 0.0
+                bounds_max_f = float(bounds.get("max")) if bounds.get("max") is not None else 1.0
+                adjusted_val = max(bounds_min_f, min(bounds_max_f, adjusted_val))
                 adjusted_val = max(0.0, min(1.0, adjusted_val))
 
                 if adjusted_val != statistically_optimal_val:
                     context_adjusted_val = adjusted_val
                     recommended = dict(recommended)
                     recommended[param_key] = adjusted_val
-                    adjustment_explanation = (
-                        f"Threshold adjusted from {statistically_optimal_val:.4f} to "
-                        f"{adjusted_val:.4f} toward {bias_dir} based on application "
-                        f"context ({cost_label})"
-                    )
+                    if raw_adjusted_val != adjusted_val:
+                        guardrails_bound = (
+                            bounds_max_f if raw_adjusted_val > bounds_max_f else bounds_min_f
+                        )
+                        adjustment_explanation = (
+                            f"Threshold adjusted from {statistically_optimal_val:.4f} to "
+                            f"{adjusted_val:.4f} toward {bias_dir} based on application "
+                            f"context ({cost_label}). Clamped to guardrails bound of "
+                            f"{guardrails_bound}."
+                        )
+                    else:
+                        adjustment_explanation = (
+                            f"Threshold adjusted from {statistically_optimal_val:.4f} to "
+                            f"{adjusted_val:.4f} toward {bias_dir} based on application "
+                            f"context ({cost_label})"
+                        )
 
             # Apply meaningful_windows constraint if configured.
             if (

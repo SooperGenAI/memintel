@@ -74,7 +74,14 @@ from app.persistence.db import get_db
 from app.persistence.stores import get_definition_store
 from app.services.calibration import CalibrationService
 from app.services.explanation import ExplanationService
-from app.stores import DefinitionStore
+from app.registry.definitions import DefinitionRegistry
+from app.stores import (
+    CalibrationTokenStore,
+    ContextStore,
+    DefinitionStore,
+    FeedbackStore,
+    TaskStore,
+)
 from pydantic import BaseModel
 
 log = structlog.get_logger(__name__)
@@ -118,7 +125,14 @@ async def get_calibration_service(
     deterministic — no LLM involvement.
     """
     guardrails_store = request.app.state.guardrails_store
-    return CalibrationService(pool=pool, guardrails_store=guardrails_store)
+    return CalibrationService(
+        feedback_store=FeedbackStore(pool),
+        token_store=CalibrationTokenStore(pool),
+        task_store=TaskStore(pool),
+        definition_registry=DefinitionRegistry(store=DefinitionStore(pool)),
+        guardrails_store=guardrails_store,
+        context_store=ContextStore(pool),
+    )
 
 
 # ── POST /conditions/explain ──────────────────────────────────────────────────
