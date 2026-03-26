@@ -100,6 +100,24 @@ components:
           type: string
           format: date-time
           nullable: true
+        context_version:
+          type: string
+          nullable: true
+          description: >
+            The application context version active when this task was compiled.
+            Null if no context was defined at creation time.
+        guardrails_version:
+          type: string
+          nullable: true
+          description: >
+            The guardrails version active when this task was compiled.
+            Null if file-based guardrails were in use at creation time.
+        context_warning:
+          type: string
+          nullable: true
+          description: >
+            Warning message if no application context was defined at task creation time.
+            Null if context was present.
 
     TaskList:
       type: object
@@ -520,6 +538,30 @@ components:
             direction:
               type: string
               enum: [increase, decrease, no_change]
+        statistically_optimal:
+          type: number
+          nullable: true
+          description: >
+            The raw statistically optimal parameter value based on feedback data alone,
+            before any context bias adjustment. Present when status is recommendation_available.
+        context_adjusted:
+          type: number
+          nullable: true
+          description: >
+            The bias-adjusted value after applying calibration_bias from application context.
+            Null if no context or no calibration_bias defined.
+        recommended:
+          type: number
+          nullable: true
+          description: >
+            The final recommended value. Equals context_adjusted if bias was applied,
+            otherwise equals statistically_optimal.
+        adjustment_explanation:
+          type: string
+          nullable: true
+          description: >
+            Human-readable explanation of any bias adjustment applied.
+            Null if no adjustment was made.
 
     ApplyCalibrationRequest:
       type: object
@@ -659,6 +701,131 @@ components:
 
     # ─── ERRORS ──────────────────────────────────────────────────────────────
 
+    ApplicationContext:
+      type: object
+      properties:
+        context_id:
+          type: string
+          format: uuid
+        version:
+          type: string
+          description: "Auto-assigned: v1, v2, v3..."
+        domain:
+          type: object
+        behavioural:
+          type: object
+          nullable: true
+        semantic_hints:
+          type: array
+          items:
+            type: object
+        calibration_bias:
+          type: object
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        is_active:
+          type: boolean
+
+    GuardrailsVersion:
+      type: object
+      properties:
+        guardrails_id:
+          type: string
+          format: uuid
+        version:
+          type: string
+          description: "Auto-assigned: v1, v2, v3..."
+        guardrails:
+          type: object
+          description: The full guardrails definition as submitted
+        change_note:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        is_active:
+          type: boolean
+        source:
+          type: string
+          enum: [api, file]
+          description: api for API-created versions, file for startup-loaded versions
+
+    CreateGuardrailsRequest:
+      type: object
+      required: [guardrails]
+      properties:
+        guardrails:
+          type: object
+          required: [strategy_registry, type_strategy_map]
+          properties:
+            strategy_registry:
+              type: array
+              items:
+                type: string
+              description: "Permitted strategies: threshold, percentile, z_score, change, equals, composite"
+            type_strategy_map:
+              type: object
+              description: Maps signal types to permitted strategies
+            parameter_priors:
+              type: object
+              nullable: true
+            bias_rules:
+              type: object
+              nullable: true
+            threshold_directions:
+              type: object
+              nullable: true
+            global_preferred_strategy:
+              type: string
+              nullable: true
+            global_default_strategy:
+              type: string
+              nullable: true
+        change_note:
+          type: string
+          nullable: true
+
+    GuardrailsImpactResult:
+      type: object
+      properties:
+        current_version:
+          type: string
+        tasks_on_current_version:
+          type: integer
+        tasks_on_older_versions:
+          type: array
+          items:
+            type: object
+            properties:
+              version:
+                type: string
+              task_count:
+                type: integer
+        total_stale_tasks:
+          type: integer
+
+    ContextImpactResult:
+      type: object
+      properties:
+        current_version:
+          type: string
+        tasks_on_current_version:
+          type: integer
+        tasks_on_older_versions:
+          type: array
+          items:
+            type: object
+            properties:
+              version:
+                type: string
+              task_count:
+                type: integer
+        total_stale_tasks:
+          type: integer
+
     ErrorResponse:
       type: object
       properties:
@@ -716,6 +883,192 @@ components:
 paths:
 
   # ── TASKS ──────────────────────────────────────────────────────────────────
+
+  /context:
+    post:
+      summary: Create application context
+      description: >
+        Create or update application context. Creates a new immutable version and
+        deactivates the previous one. Takes effect immediately.
+      tags: [Context]
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [domain]
+              properties:
+                domain:
+                  type: object
+                  required: [description]
+                behavioural:
+                  type: object
+                  nullable: true
+                semantic_hints:
+                  type: array
+                  nullable: true
+                calibration_bias:
+                  type: object
+                  nullable: true
+      responses:
+        '201':
+          description: Context created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApplicationContext'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    get:
+      summary: Get active context
+      description: Get the currently active application context version.
+      tags: [Context]
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Active context returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApplicationContext'
+        '404':
+          description: No active context defined
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /context/versions:
+    get:
+      summary: List context versions
+      tags: [Context]
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: All context versions, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ApplicationContext'
+
+  /context/impact:
+    get:
+      summary: Get context impact
+      description: Shows how many tasks were compiled under older context versions.
+      tags: [Context]
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Context impact result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContextImpactResult'
+
+  /guardrails:
+    post:
+      summary: Create guardrails version
+      description: >
+        Create a new guardrails version. Deactivates the previous version atomically.
+        Takes effect immediately — no server restart required.
+        Requires elevated key header: X-Elevated-Key.
+      tags: [Guardrails]
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - in: header
+          name: X-Elevated-Key
+          required: true
+          schema:
+            type: string
+          description: Elevated key (MEMINTEL_ELEVATED_KEY) required for this endpoint
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateGuardrailsRequest'
+      responses:
+        '201':
+          description: Guardrails created and active
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuardrailsVersion'
+        '400':
+          description: Semantic validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Missing or invalid elevated key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    get:
+      summary: Get active guardrails
+      description: >
+        Get the currently active guardrails version.
+        Returns 404 if no API guardrails have been posted — file-based guardrails are in use.
+      tags: [Guardrails]
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Active guardrails version
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuardrailsVersion'
+        '404':
+          description: No API guardrails defined — file-based guardrails in use
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /guardrails/versions:
+    get:
+      summary: List guardrails versions
+      tags: [Guardrails]
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: All guardrails versions, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/GuardrailsVersion'
+
+  /guardrails/impact:
+    get:
+      summary: Get guardrails impact
+      description: Shows how many tasks were compiled under older guardrails versions.
+      tags: [Guardrails]
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Guardrails impact result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuardrailsImpactResult'
 
   /tasks:
     post:
