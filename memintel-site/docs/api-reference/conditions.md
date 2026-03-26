@@ -218,7 +218,7 @@ POST /conditions/apply-calibration
 Creates a new immutable condition version from the calibration recommendation. The existing version is never modified.
 
 :::warning Rebinding is Always Explicit
-This endpoint does **not** auto-rebind tasks. It returns `tasks_pending_rebind` so you know which tasks still need rebinding. Call `PATCH /tasks/{id}` for each. This prevents silent behavior changes.
+This endpoint does **not** auto-rebind tasks. It returns `tasks_pending_rebind` so you know which tasks still need rebinding. Call `PATCH /tasks/&#123;id&#125;` for each. This prevents silent behavior changes.
 :::
 
 ### Request Body
