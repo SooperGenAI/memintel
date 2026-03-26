@@ -993,6 +993,45 @@ Back to ONGOING LOOP with improved detection sensitivity
 
 ---
 
+## Application Context
+
+Before creating primitives and tasks for this use case, define the application context. Clinical trial monitoring has distinct contexts for safety, operations, and regulatory affairs.
+
+**Safety monitoring context:**
+
+```json
+{
+  "domain": {
+    "description": "Clinical trial safety monitoring and pharmacovigilance for a Phase 3 oncology programme. We continuously monitor adverse events, SAE rates, and external FDA safety signals to protect patient safety and ensure regulatory compliance.",
+    "entities": [
+      { "name": "patient",  "description": "an enrolled trial participant" },
+      { "name": "trial",    "description": "the clinical study with defined safety monitoring plan" },
+      { "name": "compound", "description": "the investigational medicinal product under evaluation" }
+    ],
+    "decisions": ["sae_assessment_required", "dsmb_notification", "stopping_rule_proximity", "susar_reporting"]
+  },
+  "behavioural": {
+    "data_cadence": "batch",
+    "meaningful_windows": { "min": "7d", "max": "180d" },
+    "regulatory": ["FDA-21CFR", "ICH-E6", "ICH-E2A", "GCP"]
+  },
+  "semantic_hints": [
+    { "term": "serious",     "definition": "results in death, hospitalisation, disability, or is life-threatening" },
+    { "term": "unexpected",  "definition": "not consistent with the current Investigator Brochure" },
+    { "term": "related",     "definition": "there is a reasonable possibility the IMP caused the event" }
+  ],
+  "calibration_bias": {
+    "false_negative_cost": "high",
+    "false_positive_cost": "low"
+  }
+}
+```
+
+The regulatory array (`FDA-21CFR`, `ICH-E6`, `ICH-E2A`, `GCP`) signals the highest-stakes regulatory environment in the Memintel domain portfolio. `false_negative_cost: high` and `false_positive_cost: low` reflects the asymmetry in patient safety monitoring — a missed safety signal can cause patient harm, while an over-cautious alert triggers a review that is operationally manageable. The precise ICH definitions for "serious", "unexpected", and "related" as semantic hints mean that when a medical monitor says "alert me when a patient shows a potentially related serious event", the compiler applies the exact regulatory definitions rather than generic severity scoring.
+
+---
+
+
 ## Role Summary
 
 | Step | Who | Safety Monitoring | Site Monitoring | Submission Readiness |

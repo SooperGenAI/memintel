@@ -896,6 +896,43 @@ Back to ONGOING EVALUATION LOOP with recalibrated thresholds
 
 ---
 
+## Application Context
+
+Before creating primitives and tasks for this use case, define the application context so the LLM can compile accurate, domain-aware definitions from user intent.
+
+```json
+{
+  "domain": {
+    "description": "SEC XBRL filing compliance intelligence for US public companies. We monitor taxonomy changes, cross-period consistency, and comment letter risk to ensure filings meet current regulatory expectations.",
+    "entities": [
+      { "name": "filing",        "description": "an SEC periodic report — 10-K or 10-Q" },
+      { "name": "xbrl_tag",      "description": "a specific XBRL taxonomy element used in filings" },
+      { "name": "disclosure",    "description": "a narrative or quantitative disclosure within a filing" }
+    ],
+    "decisions": ["taxonomy_risk", "consistency_risk", "comment_letter_risk", "pipeline_risk"]
+  },
+  "behavioural": {
+    "data_cadence": "batch",
+    "meaningful_windows": { "min": "90d", "max": "365d" },
+    "regulatory": ["SEC", "US-GAAP", "EDGAR"]
+  },
+  "semantic_hints": [
+    { "term": "heavily used tag",  "definition": "a tag that appears in 8 or more prior filings" },
+    { "term": "peer company",      "definition": "a company in the same SIC code with similar market cap" },
+    { "term": "recent comment",    "definition": "SEC comment letter issued in the last 12 months" }
+  ],
+  "calibration_bias": {
+    "false_negative_cost": "high",
+    "false_positive_cost": "medium"
+  }
+}
+```
+
+The regulatory array (`SEC`, `US-GAAP`, `EDGAR`) signals to the compiler that this is a highly regulated environment where missing a compliance issue (`false_negative_cost: high`) is more costly than an over-cautious flag. The semantic hint for "heavily used tag" means the compiler correctly interprets "alert me when a tag we rely on is deprecated" — it knows "rely on" means 8+ filings, not just any historical usage.
+
+---
+
+
 ## Role Summary
 
 | Step | Who | What |

@@ -967,6 +967,73 @@ Back to ONGOING EVALUATION LOOP with recalibrated thresholds
 
 ---
 
+## Application Context
+
+Before creating primitives and tasks for this use case, define the application context. The payor and provider perspectives benefit from distinct contexts.
+
+**Payor context (claims fraud and network compliance):**
+
+```json
+{
+  "domain": {
+    "description": "Healthcare payor compliance intelligence for a regional health plan. We monitor provider billing patterns for fraud and abuse, and network compliance for credentialing and adequacy.",
+    "entities": [
+      { "name": "provider",  "description": "a network-contracted healthcare provider or facility" },
+      { "name": "claim",     "description": "an individual claim submitted for adjudication" },
+      { "name": "patient",   "description": "a health plan member receiving care" }
+    ],
+    "decisions": ["fraud_alert", "network_suspension", "credentialing_review", "adequacy_gap"]
+  },
+  "behavioural": {
+    "data_cadence": "batch",
+    "meaningful_windows": { "min": "30d", "max": "365d" },
+    "regulatory": ["HIPAA", "CMS", "OIG", "NCQA"]
+  },
+  "semantic_hints": [
+    { "term": "peer group",    "definition": "providers with the same specialty code and geographic market" },
+    { "term": "high complexity","definition": "CPT codes 99214 or 99215 for E&M services" },
+    { "term": "outlier",       "definition": "above the 85th percentile of the peer group distribution" }
+  ],
+  "calibration_bias": {
+    "false_negative_cost": "high",
+    "false_positive_cost": "medium"
+  }
+}
+```
+
+**Provider context (prior authorisation):**
+
+```json
+{
+  "domain": {
+    "description": "Prior authorisation management for a multi-specialty physician group. We track authorisation status and expiry to prevent claim denials.",
+    "entities": [
+      { "name": "authorisation", "description": "a payor-issued authorisation for a specific service" },
+      { "name": "patient",       "description": "a patient with scheduled or active services" }
+    ],
+    "decisions": ["expiry_risk", "unit_exhaustion_risk", "missing_auth"]
+  },
+  "behavioural": {
+    "data_cadence": "batch",
+    "meaningful_windows": { "min": "1d", "max": "30d" },
+    "regulatory": ["CMS", "HIPAA"]
+  },
+  "semantic_hints": [
+    { "term": "at risk",   "definition": "auth expires before all scheduled services are completed" },
+    { "term": "exhausted", "definition": "units used equals or exceeds units authorised" }
+  ],
+  "calibration_bias": {
+    "false_negative_cost": "high",
+    "false_positive_cost": "low"
+  }
+}
+```
+
+The provider context sets `false_negative_cost: high` and `false_positive_cost: low` — a missed expiry results in a claim denial after service delivery, which is costly and irreversible. The semantic hint for "at risk" means the compiler correctly interprets "alert me when an auth is at risk" as a trajectory evaluation against scheduled services, not just a days-remaining threshold.
+
+---
+
+
 ## Role Summary
 
 | Step | Who | Claims Fraud | Network Compliance | Prior Auth |
