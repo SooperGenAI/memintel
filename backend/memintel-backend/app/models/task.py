@@ -202,6 +202,12 @@ class Task(BaseModel):
     context_version: str | None = None
     context_warning: str | None = None
 
+    # ── Guardrails tracking ────────────────────────────────────────────────────
+    # guardrails_version — the active API guardrails version at task creation
+    # time. NULL when no API guardrails version was active (file-based only).
+    # Stored in the DB.
+    guardrails_version: str | None = None
+
     # ── Internal DB fields — excluded from API serialisation ──────────────────
     # These fields are written to / read from the DB by the store layer.
     # They must never appear in HTTP responses.

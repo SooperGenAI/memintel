@@ -7,10 +7,14 @@ In-memory store for the parsed Guardrails object loaded from
 Lifecycle
 ─────────
 load(path) is called exactly once during application startup by the lifespan
-handler (app/main.py). After load() returns, the store is immutable — calling
-load() a second time raises RuntimeError.
+handler (app/main.py). After load() returns, the file-based guardrails are
+available.
 
-All other methods raise RuntimeError if called before load().
+After the DB pool is established, reload_from_db() is called. If an active
+API guardrails version exists in the database, it is loaded into memory and
+takes precedence over the file-based version from that point forward.
+
+All read methods raise RuntimeError if called before load().
 
 Consumers
 ─────────
@@ -27,28 +31,51 @@ Consumers
   CalibrationService:
     get_threshold_bounds(s)    — enforces [min, max] during calibration
 
+  TaskAuthoringService:
+    get_active_version()       — active GuardrailsVersion for task tracking
+
 Startup invariant
 ─────────────────
 GuardrailsStore.load() delegates to ConfigLoader.load_guardrails(), which
 raises ConfigError if strategy_registry is empty. The lifespan handler
 treats ConfigError as a fatal startup failure (sys.exit(1)).
+
+API override
+────────────
+Once an admin posts to POST /guardrails, the API version takes precedence
+over the file from that point forward. The file is the seed/fallback;
+the API is the override. reload_from_db() is called after POST /guardrails
+and at startup (after the DB pool is available) to load the active API
+version into memory.
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from app.models.config import ApplicationContext
 from app.models.guardrails import Guardrails, StrategyRegistryEntry
+from app.models.guardrails_api import GuardrailsVersion
+
+if TYPE_CHECKING:
+    from app.stores.guardrails import GuardrailsStore as GuardrailsVersionStore
 
 
 class GuardrailsStore:
     """
     Thread-safe (single-writer) in-memory store for guardrails.
 
-    Populated once at startup; immutable thereafter. All reads are O(1)
-    after load — no file I/O on hot paths.
+    _guardrails is populated from the YAML file at startup.
+    _active_api_version tracks the active DB-sourced version (if any).
+    _source reflects whether the current active version is from "file" or "api".
+
+    All reads use the file-loaded Guardrails for runtime operations.
+    get_active_version() returns the API version metadata for task tracking.
     """
 
     def __init__(self) -> None:
         self._guardrails: Guardrails | None = None
+        self._active_api_version: GuardrailsVersion | None = None
+        self._source: str = "file"
 
     # ── Startup ────────────────────────────────────────────────────────────────
 
@@ -74,6 +101,33 @@ class GuardrailsStore:
 
         loader = ConfigLoader()
         self._guardrails = loader.load_guardrails(guardrails_path)
+
+    async def reload_from_db(self, db: "GuardrailsVersionStore") -> bool:
+        """
+        Check the database for an active API guardrails version and load it
+        into memory if one exists.
+
+        Called:
+          1. During startup (after the DB pool is established).
+          2. After POST /guardrails (synchronously before the 201 response).
+
+        Returns True if an active API version was found and loaded.
+        Returns False if no API version exists (file-based guardrails remain).
+
+        Never raises — any DB error is silently absorbed (file-based guardrails
+        continue to work if the DB is temporarily unavailable).
+        """
+        try:
+            active = await db.get_active()
+        except Exception:
+            return False
+
+        if active is None:
+            return False
+
+        self._active_api_version = active
+        self._source = "api"
+        return True
 
     # ── Read accessors ─────────────────────────────────────────────────────────
 
@@ -117,6 +171,23 @@ class GuardrailsStore:
         if bounds is None:
             return {}
         return bounds.model_dump()
+
+    def get_active_version(self) -> GuardrailsVersion | None:
+        """
+        Return the active API guardrails version, or None if file-based only.
+
+        Used by TaskAuthoringService to record which guardrails version was
+        active when a task was created.
+
+        Returns None when no API version has been posted — file-based
+        guardrails are in use and tasks will have guardrails_version=None.
+        """
+        return self._active_api_version
+
+    @property
+    def source(self) -> str:
+        """Return the current guardrails source: 'file' or 'api'."""
+        return self._source
 
     # ── Internal ───────────────────────────────────────────────────────────────
 
