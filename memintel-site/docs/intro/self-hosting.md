@@ -203,6 +203,7 @@ Expected output:
 ```
 INFO [alembic.runtime.migration] Running upgrade -> 0001, initial_schema
 INFO [alembic.runtime.migration] Running upgrade 0001 -> 0002, add_application_context
+INFO [alembic.runtime.migration] Running upgrade 0002 -> 0003, add_guardrails_versions
 ```
 
 :::warning
@@ -217,13 +218,14 @@ psql $DATABASE_URL -c "\dt"
 
 | Table | Purpose |
 |---|---|
-| `tasks` | Task definitions with version pinning |
+| `tasks` | Task definitions with version pinning. Carries three provenance fields: `context_version`, `guardrails_version`, `context_warning` |
 | `definitions` | Concept, primitive, and condition definitions |
 | `feedback` | User feedback for calibration |
 | `calibration_tokens` | Single-use calibration tokens |
 | `execution_graphs` | Compiled execution graphs (IR) |
 | `jobs` | Async job tracking |
 | `application_context` | Application context versions |
+| `guardrails_versions` | Guardrails versions — created by Migration 0003. Stores all API-posted guardrails with full audit trail |
 
 ---
 
@@ -372,7 +374,22 @@ curl -X POST https://your-domain/context \
   -d @your-context-file.json
 ```
 
-See the [Application Context Tutorial](/docs/tutorials/application-context) for domain-specific examples and full context schema documentation.
+See the [Application Context](/docs/admin-guide/admin-application-context) page in the Admin Guide for domain-specific examples and full schema documentation.
+
+### Define Guardrails (Recommended)
+
+Post your guardrails policy via API. This takes effect immediately without a restart:
+
+```bash
+curl -X POST https://your-domain/guardrails \
+  -H "Content-Type: application/json" \
+  -H "X-Elevated-Key: your-elevated-key" \
+  -d @guardrails.json
+```
+
+:::tip
+Using `POST /guardrails` is preferred over editing `memintel_guardrails.yaml` — changes take effect immediately with no restart required, and every change is versioned. See the [Admin Guide](/docs/admin-guide/admin-guardrails-api) for full guardrails schema and domain-specific examples.
+:::
 
 ### Monitoring
 
@@ -387,10 +404,10 @@ Memintel emits structured logs with `trace_id`, `entity`, `concept_id`, and `con
 
 | Day | Action |
 |---|---|
-| Day 1 | Define application context. Register first primitives. Create first task |
-| Day 2–3 | Run executions. Collect initial feedback. Verify feedback is being recorded |
-| Day 4–5 | Run first calibration cycle. Review `statistically_optimal` vs `context_adjusted` values |
-| Day 7 | Review execution logs. Check for unexpected errors. Verify determinism is holding |
+| Day 1 | Define application context (`POST /context`). Post guardrails (`POST /guardrails`). Create first task. |
+| Day 2–3 | Run executions. Collect initial feedback. Verify feedback is being recorded. |
+| Day 4–5 | Run first calibration cycle. Review `statistically_optimal` vs `context_adjusted` values. |
+| Day 7 | Review execution logs. Check for unexpected errors. Verify determinism is holding. |
 
 ---
 

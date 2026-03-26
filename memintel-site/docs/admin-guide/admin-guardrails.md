@@ -1,12 +1,18 @@
 ---
 id: admin-guardrails
-title: Step 2 — Guardrails
-sidebar_label: Step 2 — Guardrails
+title: Step 2B — Guardrails via File
+sidebar_label: Step 2B — Guardrails (File)
 ---
 
-# Step 2 — Guardrails (memintel_guardrails.yaml)
+# Step 2B — Guardrails via File (memintel_guardrails.yaml)
 
-The guardrails file is your policy configuration. It defines the rules the compiler follows when interpreting what your team members ask for — which evaluation strategies are permitted, what parameter ranges are valid, and how natural language severity words map to numeric thresholds.
+:::note API alternative available
+For most deployments, managing guardrails via the API is simpler — it takes effect immediately without a server restart and maintains a full version history. See [Step 2A — Guardrails via API](/docs/admin-guide/admin-guardrails-api).
+
+This page covers the file-based approach, which is still fully supported and is the right choice for initial deployment seeding or environments where API access is not yet available.
+:::
+
+The guardrails file defines the policy layer — which evaluation strategies are permitted, what parameter ranges are valid, and how natural language severity words map to numeric thresholds.
 
 **This is your file.** Your data engineer sets up `memintel_config.yaml`. You own and maintain `memintel_guardrails.yaml`.
 
@@ -20,7 +26,9 @@ The guardrails file is your policy configuration. It defines the rules the compi
 2. How to access and edit it (directly via terminal, or through your hosting platform's file editor)
 
 :::warning
-Changes to this file require a **server restart** to take effect. After editing, ask your data engineer to restart the server. Application context (Step 1) does not require a restart — only this file does.
+Changes to this file require a **server restart** to take effect. After editing, ask your data engineer to restart the server.
+
+To avoid restarts, use `POST /guardrails` instead — changes via API take effect immediately. See [Step 2A — Guardrails via API](/docs/admin-guide/admin-guardrails-api).
 :::
 
 ---
@@ -464,6 +472,21 @@ global_default_strategy:   threshold
 
 ## Applying Your Changes
 
+### Option A — Via API (recommended, no restart needed)
+
+Instead of editing the file and restarting, post your guardrails as JSON via the API:
+
+```bash
+curl -X POST https://your-memintel-domain/guardrails \
+  -H "Content-Type: application/json" \
+  -H "X-Elevated-Key: your-elevated-key" \
+  -d @guardrails.json
+```
+
+Changes take effect immediately. See [Step 2A — Guardrails via API](/docs/admin-guide/admin-guardrails-api) for full details.
+
+### Option B — Via file (requires restart)
+
 After editing `memintel_guardrails.yaml`:
 
 1. **Save the file** on the server
@@ -485,16 +508,18 @@ python3 -c "import yaml; yaml.safe_load(open('memintel_guardrails.yaml'))" && ec
 
 **Forgetting `threshold_directions` for below-threshold signals.** If a signal gets worse as it goes lower (DSCR, active user rate, budget remaining), add it to `threshold_directions` as `below`. Without this, the condition will never fire.
 
-**Editing the file without a server restart.** Changes to this file do not take effect until the server is restarted. Always ask your data engineer to restart after you edit.
+**Editing the file when the API is available.** Once your server is running and accessible, there is no reason to edit the file and trigger a restart. Use `POST /guardrails` instead — it is faster, safer, and keeps a version history.
+
+**Editing the file without a server restart.** If you do edit the file directly, changes do not take effect until the server is restarted. Always ask your data engineer to restart after you edit.
 
 ---
 
 ## Setup Complete
 
-You have now completed the two admin setup steps:
+You have now completed the admin setup:
 
 1. ✓ **Application Context** — domain briefing submitted via `POST /context`
-2. ✓ **Guardrails** — policy configuration defined in `memintel_guardrails.yaml`
+2. ✓ **Guardrails** — policy configuration defined (via API or file)
 
 Ask your data engineer to restart the server and run a smoke test to verify everything is working.
 
