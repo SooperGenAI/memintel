@@ -19,7 +19,7 @@ DO NOT silently fall back to defaults.
 
 Config path resolution:
   The MEMINTEL_CONFIG_PATH environment variable must point to the
-  memintel.config.md file. If it is not set the process exits immediately.
+  memintel_config.yaml file. If it is not set the process exits immediately.
 """
 from __future__ import annotations
 
@@ -68,8 +68,8 @@ async def lifespan(app: FastAPI):
 
     Startup sequence (all-or-nothing):
       1. Resolve MEMINTEL_CONFIG_PATH
-      2. Load and validate memintel.config.md
-      3. Load and validate memintel.guardrails.md (path from config)
+      2. Load and validate memintel_config.yaml
+      3. Load and validate memintel_guardrails.yaml (path from config)
       4. Verify strategy_registry is non-empty
       5. Populate PrimitiveRegistry from config
       6. Create DB pool
@@ -84,7 +84,7 @@ async def lifespan(app: FastAPI):
         log.error(
             "startup_failed",
             reason="MEMINTEL_CONFIG_PATH environment variable is not set. "
-                   "Set it to the path of your memintel.config.md file.",
+                   "Set it to the path of your memintel_config.yaml file.",
         )
         sys.exit(1)
 

@@ -2,7 +2,7 @@
 app/config/guardrails_store.py
 ──────────────────────────────────────────────────────────────────────────────
 In-memory store for the parsed Guardrails object loaded from
-`memintel.guardrails.md`.
+`memintel_guardrails.yaml`.
 
 Lifecycle
 ─────────
@@ -54,7 +54,7 @@ class GuardrailsStore:
 
     async def load(self, guardrails_path: str) -> None:
         """
-        Parse memintel.guardrails.md, validate against the Guardrails schema,
+        Parse memintel_guardrails.yaml, validate against the Guardrails schema,
         and store the result in memory.
 
         Raises RuntimeError if called after the store is already populated.

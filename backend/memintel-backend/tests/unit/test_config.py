@@ -8,7 +8,7 @@ Unit tests for the config bootstrapping layer:
 
 All tests are self-contained — no external files or services required.
 GuardrailsStore.load() is tested via a tmp_path fixture that writes
-minimal YAML Markdown files.
+minimal plain YAML files.
 """
 from __future__ import annotations
 
@@ -74,20 +74,17 @@ def minimal_valid_config_dict(connector_name: str = "postgres.test") -> dict:
         "primitives": [_minimal_primitive(connector_name)],
         "connectors": {connector_name: _minimal_connector()},
         "llm": _minimal_llm(),
-        "guardrails_path": "memintel.guardrails.md",
+        "guardrails_path": "memintel_guardrails.yaml",
     }
 
 
 def _minimal_guardrails_yaml() -> str:
     """
-    A minimal memintel.guardrails.md Markdown string with one strategy.
+    A minimal memintel_guardrails.yaml plain YAML string with one strategy.
     The YAML is wrapped under a top-level 'guardrails:' key as the spec
     defines.
     """
     return textwrap.dedent("""\
-        # Minimal Guardrails
-
-        ```yaml
         guardrails:
           application_context:
             name: Test App
@@ -118,26 +115,22 @@ def _minimal_guardrails_yaml() -> str:
               valid_strategies:
                 - threshold
               invalid_strategies: []
-        ```
     """)
 
 
-def _minimal_config_md(extra_env_var: str | None = None) -> str:
+def _minimal_config_yaml(extra_env_var: str | None = None) -> str:
     """
-    Minimal memintel.config.md Markdown string.
+    Minimal memintel_config.yaml plain YAML string.
 
     If extra_env_var is provided, it is inserted as a value in the connector
     host field so env var resolution will attempt to resolve it.
     """
     host_val = f"${{{extra_env_var}}}" if extra_env_var else "localhost"
     return textwrap.dedent(f"""\
-        # Config
-
-        ```yaml
         primitives:
           - name: user.score
             type: float
-            missing_data_policy: null
+            missing_data_policy: "null"
             source:
               type: database
               identifier: postgres.test
@@ -165,8 +158,7 @@ def _minimal_config_md(extra_env_var: str | None = None) -> str:
           namespace: org
           log_level: INFO
 
-        guardrails_path: memintel.guardrails.md
-        ```
+        guardrails_path: memintel_guardrails.yaml
     """)
 
 
@@ -268,8 +260,8 @@ class TestEnvVarResolution:
         monkeypatch.delenv("DB_PASSWORD", raising=False)
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-key")
 
-        config_file = tmp_path / "memintel.config.md"
-        config_file.write_text(_minimal_config_md())
+        config_file = tmp_path / "memintel_config.yaml"
+        config_file.write_text(_minimal_config_yaml())
 
         with pytest.raises(ConfigError, match="DB_PASSWORD is not set"):
             ConfigLoader().load(str(config_file))
@@ -282,8 +274,8 @@ class TestEnvVarResolution:
         monkeypatch.delenv("DB_PASSWORD", raising=False)
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-key")
 
-        config_file = tmp_path / "memintel.config.md"
-        config_file.write_text(_minimal_config_md())
+        config_file = tmp_path / "memintel_config.yaml"
+        config_file.write_text(_minimal_config_yaml())
 
         with pytest.raises(ConfigError) as exc_info:
             ConfigLoader().load(str(config_file))
@@ -301,8 +293,8 @@ class TestEnvVarResolution:
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-key")
         monkeypatch.delenv("DB_PASSWORD", raising=False)
 
-        config_file = tmp_path / "memintel.config.md"
-        config_file.write_text(_minimal_config_md())
+        config_file = tmp_path / "memintel_config.yaml"
+        config_file.write_text(_minimal_config_yaml())
 
         with pytest.raises(ConfigError):
             ConfigLoader().load(str(config_file))
@@ -313,8 +305,8 @@ class TestEnvVarResolution:
         monkeypatch.setenv("DB_PASSWORD", "secret")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-key")
 
-        config_file = tmp_path / "memintel.config.md"
-        config_file.write_text(_minimal_config_md(extra_env_var="MY_DB_HOST"))
+        config_file = tmp_path / "memintel_config.yaml"
+        config_file.write_text(_minimal_config_yaml(extra_env_var="MY_DB_HOST"))
 
         # Should not raise — MY_DB_HOST is set
         config = ConfigLoader().load(str(config_file))
@@ -327,69 +319,51 @@ class TestConfigLoaderLoad:
 
     def test_missing_config_file_raises(self):
         with pytest.raises(ConfigError, match="Config file not found"):
-            ConfigLoader().load("/nonexistent/path/memintel.config.md")
+            ConfigLoader().load("/nonexistent/path/memintel_config.yaml")
 
     def test_valid_config_file_loads(self, monkeypatch, tmp_path):
         monkeypatch.setenv("DB_PASSWORD", "secret")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-key")
 
-        config_file = tmp_path / "memintel.config.md"
-        config_file.write_text(_minimal_config_md())
+        config_file = tmp_path / "memintel_config.yaml"
+        config_file.write_text(_minimal_config_yaml())
 
         config = ConfigLoader().load(str(config_file))
 
         assert isinstance(config, ConfigSchema)
         assert config.llm.provider == "anthropic"
 
-    def test_multiple_yaml_blocks_merged(self, monkeypatch, tmp_path):
-        """Later YAML blocks override earlier ones on key conflict."""
+    def test_direct_yaml_file_loads_correct_guardrails_path(self, monkeypatch, tmp_path):
+        """A plain YAML config file is parsed directly with the expected values."""
         monkeypatch.setenv("DB_PASSWORD", "secret")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-key")
 
-        md = textwrap.dedent("""\
-            # Block 1
-
-            ```yaml
-            guardrails_path: first.md
-            ```
-
-            # Block 2 — overrides guardrails_path
-
-            ```yaml
-            primitives:
-              - name: user.score
-                type: float
-                missing_data_policy: null
-                source:
-                  type: database
-                  identifier: postgres.test
-                  field: score
-                  access:
-                    method: sql
-                    query: "SELECT score FROM t WHERE user_id = :entity_id"
-
-            connectors:
-              postgres.test:
-                type: postgres
-                host: localhost
-                user: admin
-                password: "${DB_PASSWORD}"
-
-            llm:
-              provider: anthropic
-              model: claude-sonnet-4-20250514
-              api_key: "${ANTHROPIC_API_KEY}"
-              endpoint: https://api.anthropic.com
-
-            guardrails_path: second.md
-            ```
-        """)
-
-        config_file = tmp_path / "memintel.config.md"
-        config_file.write_text(md)
+        config_file = tmp_path / "memintel_config.yaml"
+        config_file.write_text(_minimal_config_yaml())
 
         config = ConfigLoader().load(str(config_file))
-        assert config.guardrails_path == "second.md"
+        assert config.guardrails_path == "memintel_guardrails.yaml"
+
+    def test_md_extension_raises_config_error(self, tmp_path):
+        """Passing a .md path to load() raises ConfigError about .yaml requirement."""
+        md_file = tmp_path / "memintel.config.md"
+        md_file.write_text("# some markdown")
+
+        with pytest.raises(ConfigError, match=r"\.md format is no longer supported"):
+            ConfigLoader().load(str(md_file))
+
+    def test_valid_yaml_resolves_env_vars(self, monkeypatch, tmp_path):
+        """A .yaml config file correctly resolves ${ENV_VAR} references."""
+        monkeypatch.setenv("DB_PASSWORD", "resolved-secret")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-resolved")
+        monkeypatch.setenv("MY_DB_HOST", "db.prod.example.com")
+
+        config_file = tmp_path / "memintel_config.yaml"
+        config_file.write_text(_minimal_config_yaml(extra_env_var="MY_DB_HOST"))
+
+        config = ConfigLoader().load(str(config_file))
+        assert config is not None
+        assert config.llm.provider == "anthropic"
 
 
 # ── GuardrailsStore ────────────────────────────────────────────────────────────
@@ -399,7 +373,7 @@ class TestGuardrailsStore:
     @pytest.fixture
     def guardrails_file(self, tmp_path) -> Path:
         """Write a minimal guardrails file and return the path."""
-        f = tmp_path / "memintel.guardrails.md"
+        f = tmp_path / "memintel_guardrails.yaml"
         f.write_text(_minimal_guardrails_yaml())
         return f
 
@@ -434,8 +408,7 @@ class TestGuardrailsStore:
     @pytest.mark.asyncio
     async def test_get_threshold_bounds_returns_correct_values(self, tmp_path):
         """Threshold bounds defined in constraints are returned correctly."""
-        md = textwrap.dedent("""\
-            ```yaml
+        yaml_text = textwrap.dedent("""\
             guardrails:
               application_context:
                 name: Test
@@ -458,11 +431,10 @@ class TestGuardrailsStore:
                   threshold:
                     min: 0.01
                     max: 0.99
-            ```
         """)
 
-        f = tmp_path / "guardrails_with_bounds.md"
-        f.write_text(md)
+        f = tmp_path / "guardrails_with_bounds.yaml"
+        f.write_text(yaml_text)
 
         store = GuardrailsStore()
         await store.load(str(f))
@@ -493,23 +465,21 @@ class TestGuardrailsStore:
         store = GuardrailsStore()
 
         with pytest.raises(ConfigError, match="not found"):
-            await store.load("/nonexistent/path/memintel.guardrails.md")
+            await store.load("/nonexistent/path/memintel_guardrails.yaml")
 
     @pytest.mark.asyncio
     async def test_empty_strategy_registry_raises_config_error(self, tmp_path):
         """System must refuse to start if strategy_registry is empty."""
-        md = textwrap.dedent("""\
-            ```yaml
+        yaml_text = textwrap.dedent("""\
             guardrails:
               application_context:
                 name: Test
                 description: Test
                 instructions: []
               strategy_registry: {}
-            ```
         """)
-        f = tmp_path / "empty_registry.md"
-        f.write_text(md)
+        f = tmp_path / "empty_registry.yaml"
+        f.write_text(yaml_text)
 
         store = GuardrailsStore()
         with pytest.raises(ConfigError, match="strategy_registry is empty"):
