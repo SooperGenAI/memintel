@@ -855,6 +855,41 @@ Back to ONGOING EVALUATION LOOP with new parameters
 
 ---
 
+## Application Context
+
+Before creating primitives and tasks for this use case, define the application context so the LLM can compile accurate, domain-aware definitions from user intent.
+
+```json
+{
+  "domain": {
+    "description": "B2B sales pipeline intelligence for SaaS companies. We monitor deal engagement and activity signals to identify deals at risk of stalling or being lost.",
+    "entities": [
+      { "name": "deal",    "description": "an active sales opportunity in the CRM pipeline" },
+      { "name": "contact", "description": "the buyer-side contact associated with the deal" }
+    ],
+    "decisions": ["stall_risk", "engagement_drop", "escalation_required"]
+  },
+  "behavioural": {
+    "data_cadence": "batch",
+    "meaningful_windows": { "min": "3d", "max": "30d" }
+  },
+  "semantic_hints": [
+    { "term": "engaged",        "definition": "email replied to OR call completed in last 5 days" },
+    { "term": "stalled",        "definition": "no meaningful activity from either side in last 7 days" },
+    { "term": "high value deal", "definition": "deal value above $50,000 ARR" }
+  ],
+  "calibration_bias": {
+    "false_negative_cost": "high",
+    "false_positive_cost": "low"
+  }
+}
+```
+
+The `false_negative_cost: high` bias ensures the compiler leans toward sensitivity — missing a genuinely at-risk deal is more costly than an unnecessary check-in. The semantic hint for "stalled" means when a sales rep says "alert me when a deal stalls", the compiler knows exactly what stalled means in this domain rather than applying a generic inactivity threshold.
+
+---
+
+
 ## Role Summary
 
 | Step | Who | What |

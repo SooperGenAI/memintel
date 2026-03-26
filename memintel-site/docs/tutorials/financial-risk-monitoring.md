@@ -838,6 +838,71 @@ The calibration request, impact review, and approval flow is identical across al
 
 ---
 
+## Application Context
+
+Before creating primitives and tasks for this use case, define the application context so the LLM can compile accurate, domain-aware definitions. Financial risk monitoring spans three distinct sub-domains — each benefits from its own context.
+
+**AML context:**
+
+```json
+{
+  "domain": {
+    "description": "Anti-money laundering transaction monitoring for a mid-size commercial bank. We monitor customer transaction patterns to detect money laundering, structuring, and other financial crimes.",
+    "entities": [
+      { "name": "customer",    "description": "a registered bank customer with an established transaction history" },
+      { "name": "transaction", "description": "an individual payment, transfer, or cash event" }
+    ],
+    "decisions": ["sar_required", "enhanced_due_diligence", "account_review"]
+  },
+  "behavioural": {
+    "data_cadence": "streaming",
+    "meaningful_windows": { "min": "1d", "max": "90d" },
+    "regulatory": ["BSA", "FinCEN", "FATF"]
+  },
+  "semantic_hints": [
+    { "term": "unusual",     "definition": "materially different from the customer's established 90-day baseline" },
+    { "term": "structuring", "definition": "multiple transactions designed to stay below $10,000 reporting threshold" }
+  ],
+  "calibration_bias": {
+    "false_negative_cost": "high",
+    "false_positive_cost": "medium"
+  }
+}
+```
+
+**Credit risk context:**
+
+```json
+{
+  "domain": {
+    "description": "Credit risk monitoring for a commercial lending portfolio. We monitor borrower financial health and covenant compliance to identify deterioration before breach.",
+    "entities": [
+      { "name": "borrower", "description": "a commercial borrower with an active loan facility" },
+      { "name": "loan",     "description": "an individual credit facility with defined covenants" }
+    ],
+    "decisions": ["early_warning", "covenant_breach_risk", "watchlist_addition"]
+  },
+  "behavioural": {
+    "data_cadence": "batch",
+    "meaningful_windows": { "min": "30d", "max": "365d" },
+    "regulatory": ["Basel-III", "CECL"]
+  },
+  "semantic_hints": [
+    { "term": "deteriorating", "definition": "declining across two or more consecutive quarterly submissions" },
+    { "term": "stressed",      "definition": "DSCR below 1.5x or leverage above 4x" }
+  ],
+  "calibration_bias": {
+    "false_negative_cost": "high",
+    "false_positive_cost": "low"
+  }
+}
+```
+
+The AML context uses `streaming` cadence and short windows (`1d` minimum) — appropriate for real-time transaction evaluation. The credit context uses `batch` cadence and long windows (`365d` maximum) — appropriate for quarterly financial submissions. The compiler uses these to select appropriate time-series strategies and window parameters automatically.
+
+---
+
+
 ## Role Summary
 
 | Step | Who | AML | Credit Risk | Capital |
