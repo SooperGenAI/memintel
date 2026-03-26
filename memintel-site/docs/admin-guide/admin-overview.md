@@ -6,214 +6,129 @@ sidebar_label: Overview
 
 # Admin Guide
 
-This guide is for the **admin** — the person responsible for setting up and maintaining Memintel for their organisation. You do not need to be a software developer to follow this guide, but you do need to know your domain well: what signals matter, what thresholds are meaningful, and what should happen when something is detected.
+This guide is for the **admin** — the domain expert responsible for defining the policy layer that governs how Memintel operates. You do not need to be a software developer, but you do need to know your domain well: what signals matter, what thresholds are meaningful, and what should happen when something is detected.
 
 ---
 
-## What the Admin Does
+## The Two Config Files
 
-Memintel has three types of people who interact with it:
+Memintel uses two configuration files. Understanding which file does what — and who is responsible for each — is the most important thing to grasp before starting.
 
-| Role | Who they are | What they do |
-|---|---|---|
-| **Data Engineer** | Your technical team | Connects Memintel to your data sources. Writes the code that fetches signal values. |
-| **Admin** | You | Defines what signals exist, what the rules are, and what happens when something is detected. |
-| **User** | Your team members | Types plain English monitoring requests like "alert me when a deal is at risk." |
+### memintel_config.yaml — Infrastructure Config
 
-As admin, you are the bridge between the technical team and the users. You do not write code. You define the vocabulary and the rules that the system works within.
+**Who owns this: your data engineer.**
 
----
-
-## How Configuration Works
-
-Everything you configure as admin lives in a single file called **`memintel_config.yaml`**. This file sits on your server and is read by Memintel when it starts up.
-
-:::note What is a YAML file?
-YAML is a simple text format for configuration. It uses indentation and colons to organise information — similar to a structured list. You can edit it in any text editor. The most important rule: **indentation matters**. Lines that are indented further are "inside" the lines above them. We will show you exactly what everything should look like — you will mostly be copying and editing examples rather than writing from scratch.
-:::
-
-Your `memintel_config.yaml` has four sections:
-
-```
-memintel_config.yaml
-│
-├── context          ← What your application does (optional but strongly recommended)
-├── primitives       ← What signals you want to monitor
-├── guardrails       ← The rules the system follows when interpreting requests
-└── actions          ← What happens when something is detected
-```
-
-Each section is covered in detail in the pages that follow. You will build the file up one section at a time.
-
----
-
-## Where the File Lives
-
-The file can live anywhere on your server. The location is set by your technical team via an environment variable called `MEMINTEL_CONFIG_PATH`. A common location is:
-
-```
-/etc/memintel/memintel_config.yaml
-```
-
-Ask your data engineer where they have set this path before you start editing. You need to edit the file at that exact location for Memintel to pick up your changes.
-
-:::warning
-Every time you change `memintel_config.yaml`, the server needs to be restarted to pick up the changes. Ask your data engineer to restart the server after you finish editing. Application context (the first section) is the exception — it is updated via a separate process and does not require a restart.
-:::
-
----
-
-## Setup Order
-
-Work through the sections in this order. Each one builds on the previous.
-
-### Step 1 — Application Context
-*What your application does, who the users are, what terms mean in your domain.*
-
-This is the most important step for accuracy. It gives the system the background knowledge it needs to understand what your team members are asking for when they create monitoring tasks.
-
-→ [Set up Application Context](/docs/admin-guide/admin-application-context)
-
-### Step 2 — Primitives
-*The signals you want to monitor.*
-
-A primitive is a single measurable signal — "days since last login", "transaction amount vs baseline", "adverse event severity score". You declare what signals exist and what type of data they contain. Your data engineer then connects each signal to the actual data source.
-
-→ [Set up Primitives](/docs/admin-guide/admin-primitives)
-
-### Step 3 — Guardrails
-*The rules the system follows when interpreting monitoring requests.*
-
-When a user says "alert me when something is significantly elevated", the guardrails tell the system what "significantly" means in numbers. You define this mapping based on your domain knowledge.
-
-→ [Set up Guardrails](/docs/admin-guide/admin-guardrails)
-
-### Step 4 — Actions
-*What happens when a condition fires.*
-
-An action is the delivery mechanism — where does the alert go? A Slack message, an email, a webhook to another system, or just a log entry. You define the available actions here and your team members choose which one to use when they create a task.
-
-→ [Set up Actions](/docs/admin-guide/admin-actions)
-
----
-
-## The Complete File Structure
-
-Here is what a complete `memintel_config.yaml` looks like with all four sections. Do not worry about understanding every line right now — each section is explained in detail on its own page. This is just to show you the overall shape.
+This file contains the technical plumbing — database connection, Redis connection, LLM provider, and data connectors. You do not edit this file. Your data engineer sets it up once during deployment and maintains it.
 
 ```yaml
-# memintel_config.yaml
+# memintel_config.yaml — your data engineer's file
+database:
+  url: ${DATABASE_URL}
 
-# ─────────────────────────────────────────────
-# SECTION 1: APPLICATION CONTEXT
-# ─────────────────────────────────────────────
-context:
-  domain:
-    description: "B2B SaaS churn detection for mid-market software companies."
-    entities:
-      - name: account
-        description: "A company-level subscription"
-      - name: user
-        description: "An individual platform user"
-    decisions:
-      - churn_risk
-      - expansion_opportunity
-  behavioural:
-    data_cadence: batch
-    meaningful_windows:
-      min: 30d
-      max: 90d
-    regulatory:
-      - GDPR
-      - SOC2
-  semantic_hints:
-    - term: "active user"
-      definition: "logged in AND performed a core action in last 14 days"
-    - term: "high value account"
-      definition: "ARR above $50,000"
-  calibration_bias:
-    false_negative_cost: high
-    false_positive_cost: medium
+cache:
+  url: ${REDIS_URL}
 
-# ─────────────────────────────────────────────
-# SECTION 2: PRIMITIVES
-# ─────────────────────────────────────────────
-primitives:
-  - id: account.active_user_rate_30d
-    type: float
-    source: activity_pipeline
-    entity: account_id
-    description: "Ratio of active users to total licensed seats, 0-1"
+llm:
+  provider: anthropic
+  api_key: ${ANTHROPIC_API_KEY}
+  model: claude-sonnet-4-6
 
-  - id: account.days_to_renewal
-    type: int
-    source: billing_pipeline
-    entity: account_id
-    description: "Days until next renewal date"
+guardrails_path: /etc/memintel/memintel_guardrails.yaml
 
-  - id: account.payment_failed_flag
-    type: boolean
-    source: billing_pipeline
-    entity: account_id
-    description: "True if most recent payment attempt failed"
+connectors:
+  - name: user_data
+    type: postgres
+    url: ${USER_DB_URL}
+```
 
-# ─────────────────────────────────────────────
-# SECTION 3: GUARDRAILS
-# ─────────────────────────────────────────────
-guardrails:
-  type_strategy_map:
-    float:      [threshold, percentile, z_score, change]
-    int:        [threshold, percentile, change]
-    boolean:    [equals]
-    categorical: [equals]
+### memintel_guardrails.yaml — Policy Config
 
-  parameter_priors:
-    account.active_user_rate_30d:
-      low_severity:    { value: 0.60 }
-      medium_severity: { value: 0.45 }
-      high_severity:   { value: 0.30 }
+**Who owns this: you, the admin.**
 
-    account.days_to_renewal:
-      low_severity:    { value: 90 }
-      medium_severity: { value: 60 }
-      high_severity:   { value: 30 }
+This is your file. It defines the policy layer — which evaluation strategies are permitted, what parameter ranges are acceptable, how severity language maps to numeric thresholds. The path to this file is declared inside `memintel_config.yaml` under `guardrails_path`.
 
-  bias_rules:
-    urgent:      high_severity
-    significant: medium_severity
-    early:       low_severity
-    approaching: low_severity
+```yaml
+# memintel_guardrails.yaml — your file as admin
+strategy_registry:
+  - threshold
+  - percentile
+  - z_score
+  - change
+  - equals
 
-  global_default_strategy:   threshold
-  global_preferred_strategy: percentile
+type_strategy_map:
+  float:    [threshold, percentile, z_score, change]
+  int:      [threshold, percentile, change]
+  boolean:  [equals]
 
-# ─────────────────────────────────────────────
-# SECTION 4: ACTIONS
-# ─────────────────────────────────────────────
-actions:
-  - id: slack_alert
-    type: notification
-    channel: slack
-    endpoint: https://hooks.slack.com/services/$SLACK_WEBHOOK
-    description: "Sends alert to #customer-success Slack channel"
+parameter_priors:
+  account.active_user_rate_30d:
+    low_severity:    { value: 0.60 }
+    medium_severity: { value: 0.45 }
+    high_severity:   { value: 0.30 }
 
-  - id: webhook_crm
-    type: webhook
-    endpoint: https://myapp.com/hooks/churn-alert
-    description: "Posts alert to CRM workflow system"
+bias_rules:
+  significant: medium_severity
+  urgent:      high_severity
+  early:       low_severity
 ```
 
 ---
 
-## Before You Start
+## What is NOT in a Config File
 
-Before editing the config file, check these three things:
+**Primitives, conditions, concepts, and tasks are not defined in config files.** They are registered and managed at runtime via API calls. This means:
 
-**1. Know where the file is.** Ask your data engineer: "Where is `memintel_config.yaml` on the server?" You need the exact path.
+| What | How it is managed | Who does it |
+|---|---|---|
+| **Primitives** | `POST /definitions` (API call) | Data engineer |
+| **Conditions / Concepts** | Compiled automatically from user intent | Memintel compiler |
+| **Tasks** | `POST /tasks` (API call) | Users |
+| **Application context** | `POST /context` (API call) | Admin |
 
-**2. Know how to edit it.** If the server is remote (e.g. on Railway, Render, or AWS), ask your data engineer how to access and edit the file. On some platforms you can edit environment config through a dashboard. On others you need to edit the file directly via a terminal.
+As admin, your configuration work happens in two places:
+1. **`memintel_guardrails.yaml`** — the policy file you own and edit
+2. **`POST /context`** — the API call you make to define domain context
 
-**3. Have a text editor ready.** Any plain text editor works — VS Code, Notepad++, nano, vim. Do not use Microsoft Word or Google Docs — they add hidden formatting that will break the YAML.
+---
+
+## The Admin Setup Flow
+
+```
+Step 1 — Application Context    POST /context (API call, any time)
+         ↓
+Step 2 — Guardrails             memintel_guardrails.yaml (requires server restart)
+         ↓
+Step 3 — Validate               ask your data engineer to restart + smoke test
+```
+
+:::tip
+Application context can be updated at any time without a server restart — it takes effect immediately. Changes to `memintel_guardrails.yaml` require a server restart to take effect.
+:::
+
+---
+
+## File Locations and Security
+
+Both config files live on the server, outside the Git repository, and are excluded from version control via `.gitignore`. They are never committed to Git.
+
+| File | Typical location | In Git? | Restart needed? |
+|---|---|---|---|
+| `memintel_config.yaml` | `/etc/memintel/memintel_config.yaml` | Never | Yes |
+| `memintel_guardrails.yaml` | `/etc/memintel/memintel_guardrails.yaml` | Never | Yes |
+
+The path to `memintel_config.yaml` is set by the `MEMINTEL_CONFIG_PATH` environment variable on the server. The path to `memintel_guardrails.yaml` is declared inside `memintel_config.yaml` under `guardrails_path`. Ask your data engineer for both paths before you begin editing.
+
+:::warning
+Never send these files by email or store them in a shared document. They contain references to credentials. Ask your data engineer for secure access to edit them on the server directly.
+:::
+
+---
+
+## Pages in This Guide
+
+- [Step 1 — Application Context](/docs/admin-guide/admin-application-context) — domain briefing via API call
+- [Step 2 — Guardrails](/docs/admin-guide/admin-guardrails) — your policy config file
 
 ---
 

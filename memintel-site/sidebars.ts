@@ -21,9 +21,7 @@ const sidebars: SidebarsConfig = {
       items: [
         'admin-guide/admin-overview',
         'admin-guide/admin-application-context',
-        'admin-guide/admin-primitives',
         'admin-guide/admin-guardrails',
-        'admin-guide/admin-actions',
       ],
     },
   ],
