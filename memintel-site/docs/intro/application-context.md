@@ -149,7 +149,7 @@ List all context versions, newest first.
 
 ---
 
-### GET /context/versions/{version}
+### GET /context/versions/&#123;version&#125;
 
 Get a specific context version by version string (e.g. `v1`, `v2`).
 
