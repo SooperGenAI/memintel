@@ -1,0 +1,1 @@
+{"title":"Body","body":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["domain"],"properties":{"domain":{"type":"object","required":["description"]},"behavioural":{"type":"object","nullable":true},"semantic_hints":{"type":"array","nullable":true},"calibration_bias":{"type":"object","nullable":true}}}}}}}
