@@ -38,6 +38,7 @@ from app.api.routes import (
     agents,
     compile,
     conditions,
+    context,
     decisions,
     execute,
     feedback,
@@ -238,3 +239,4 @@ app.include_router(decisions.router,        prefix="/decisions",  tags=["Decisio
 app.include_router(feedback.router,         prefix="/feedback",   tags=["Feedback"])
 app.include_router(actions.router,          prefix="/actions",    tags=["Actions"])
 app.include_router(jobs.router,             prefix="/jobs",       tags=["Jobs"])
+app.include_router(context.router,          prefix="/context",    tags=["Context"])

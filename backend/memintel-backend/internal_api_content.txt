@@ -1,0 +1,817 @@
+Memintel
+Internal Platform API Reference
+Complete reference for SDK authors, platform teams, and CI/CD pipelines
+Overview
+The Memintel Internal Platform API is the full engine surface — a superset of the App Developer API. It exposes the compiler layer, full registry governance, semantic tooling, the LLM refinement loop, and all lifecycle management. Where the App Developer API is a product, this API is the engine itself.
+Who this API is for:
+SDK authors building the Python SDK on the full platform surface
+Platform teams compiling, versioning, and governing definitions
+CI/CD pipelines batch-deploying definitions and running semantic checks
+Internal services producing meaning consumed by app developers
+API Structure
+All execution, condition evaluation, actions, definition authoring, registry discovery, intelligence, and AI-assisted authoring endpoints — everything available to app developers.
+Compiler internals, full registry governance, advanced agent workflows, and legacy deprecated intelligence endpoints. Not exposed to app developers.
+Execution Pipeline
+Concept (ψ)  →  /execute              →  Result (Rₜ)
+Condition (φ) →  /evaluate/condition  →  DecisionResult (Aₜ)
+Action (α)    →  /actions/{id}/trigger →  ActionResult
+All three in one call:  POST /evaluate/full
+Definitions
+Definition endpoints create the semantic building blocks of Memintel. A Concept declares meaning (ψ). A Condition declares significance (φ). A Primitive is an interface to a raw data source. All share the namespace.id versioning model.
+Create concept
+Registers a Concept definition — a semantic declaration of what something means for an entity. Concepts are authoring-time objects: you define them once, the compiler produces an execution graph, and the runtime evaluates them.
+Response codes
+Create primitive
+Registers a Primitive definition — an interface to a raw data source. Primitives declare what data exists and where it comes from. They do NOT perform computation; computation belongs to Concepts.
+Response codes
+Create condition
+Registers a Condition definition. Conditions interpret concept results: they declare a strategy (threshold, percentile, z_score, change, equals, or composite), a reference frame, and bind to a specific concept version.
+Key request fields
+Response codes
+Create definitions (batch)
+Submits multiple concept and/or primitive definitions for creation in a single request. Designed for CI/CD pipeline deploys, SDK sync operations, registry migrations, and bulk imports. Each definition is validated independently — partial success is possible. Definitions within the batch are processed in dependency order.
+Request body
+Response — BatchDefinitionResult
+Response codes
+Validate definition
+Validates a Concept, Primitive, or Condition against the compiler's formal schema and semantic rules — without persisting it. This is the single validation endpoint for all definition types. Use before any POST /definitions/* call to surface errors early.
+Response — ValidationResult
+Response codes
+Get definition
+Retrieves a specific version of any definition (Concept, Primitive, or Condition) by its fully qualified id. Both id (path) and version (query) are required — no implicit latest resolution.
+Parameters
+Response codes
+Get condition
+Retrieves a specific Condition definition by its id and version. Semantically identical to GET /definitions/{id} but scoped to conditions for clarity.
+Parameters
+Response codes
+Execution
+All execution is deterministic when a timestamp is provided. POST /execute/graph is an Internal Platform addition that bypasses compilation for maximum throughput. All other execution endpoints are available to app developers.
+Execute concept
+Evaluates a compiled concept for a given entity. With timestamp: deterministic and reproducible. Without timestamp: snapshot mode (current data, not guaranteed reproducible). Supports inline explanation, cache bypass, and version policy override.
+Key request fields
+Response — Result (Rₜ)
+Response codes
+Execute using precompiled graph
+Executes a previously compiled ExecutionGraph directly by graph_id, bypassing the compilation step entirely. This is the highest-performance execution path — compilation is paid once at deploy time and amortised across every call. Optionally supply ir_hash to verify cache consistency and produce an audit trail.
+Key request fields
+Response codes
+Evaluate condition
+Evaluates a Condition (φ) against a concept's Result (Rₜ) to produce a DecisionResult (Aₜ). If the concept result is not already cached, the runtime implicitly executes the concept first — transparent but has latency implications on first call. Pre-warm with POST /execute if latency matters.
+Key request fields
+Response — DecisionResult (Aₜ)
+Response codes
+Evaluate condition (batch)
+Evaluates a single condition across multiple entities in parallel. Returns an array of DecisionResult objects, one per entity. Partial failure is possible — always inspect each item's status.
+Key request fields
+Response codes
+Execute full pipeline
+Runs concept execution (ψ), condition evaluation (φ), and action triggering (α) in one atomic request — the recommended default for most production integrations. Returns a FullPipelineResult with result (Rₜ), decision (Aₜ), and action outcomes.
+Key request fields
+Response — FullPipelineResult
+Response codes
+Execute batch
+Executes a concept for a list of entities in parallel. Shared subgraphs are deduplicated. Independent entities are evaluated concurrently. Partial failure is possible — always inspect each item's status.
+Key request fields
+Response codes
+Execute range
+Evaluates a concept at each point in a time range for a given entity. Produces a time-ordered array of Result objects. All results use deterministic (timestamped) execution semantics.
+Key request fields
+Response codes
+Execute async
+Submits a concept execution as an async job. Returns immediately with a Job object. Poll GET /jobs/{jobId} for status. Cancel with DELETE /jobs/{jobId}. Recommended for workloads expected to exceed 30 seconds.
+Response — Job
+Response codes
+Get async job
+Polls an async job for its current status and result.
+Parameters
+Response codes
+Cancel async job
+Cancels a job in queued or running state. Returns HTTP 409 if the job has already completed or failed.
+Response codes
+Compilation
+The compiler transforms semantic definitions into execution graphs and semantic views. These endpoints are not exposed in the App Developer API. Every concept must be compiled before it can be executed via POST /execute/graph.
+Compile definition
+Compiles a semantic Concept definition into a fully resolved, typed, immutable ExecutionGraph (IR). The returned graph_id is stable for a given definition version. Cache graph_id at service startup and pass it to POST /execute/graph for maximum throughput.
+Request body
+Response — ExecutionGraph
+Response codes
+Compile semantic view
+Returns the semantic view of a compiled concept — the meaning layer, not the execution layer. Exposes resolved features with semantic types and meaning_hash, the normalised canonical form, the dependency graph at the meaning level, and any detected semantic equivalences. Use for deduplication checks and as input to the semantic-refine loop.
+Response — SemanticGraph
+Response codes
+Compile explain plan
+Returns the planned execution order, parallelizable node groups, dependency graph, and optimization steps for a definition — without executing it. The equivalent of SQL EXPLAIN for Memintel. Use to understand topology before running and identify nodes the runtime will execute concurrently.
+Response — ExecutionPlan
+Response codes
+Get compiled graph
+Retrieves a previously compiled ExecutionGraph by its graph_id. Use to inspect the IR, verify ir_hash, or retrieve graph_id for passing to POST /execute/graph.
+Parameters
+Response codes
+Registry
+The registry is the source of truth for all Memintel definitions. App developer access is read-only. Internal teams have full write, lifecycle management, and semantic analysis access.
+Register definition
+Stores a validated definition in the registry under its namespace. Definitions are immutable once registered — updates require a new version. Returns 409 if the same id + version already exists.
+Request body (RegisterRequest)
+Response codes
+List definitions
+Returns a paginated list of definitions in the registry. Filter by type, namespace, or tags. For free-text semantic search, use GET /registry/search instead.
+Query parameters
+Response codes
+Search definitions
+Free-text and structured semantic search across registry definitions. Searches against description, declared meaning, subject, intent, tags, and semantic_type. Results are ranked by relevance. Use for discovery when you know what something means but not its exact id.
+Query parameters
+Response codes
+List definition versions
+Returns version history for a definition, ordered newest-first. The first item is always the latest registered version. Includes deprecation status per version. Use to discover the current version before constructing execute or evaluate calls.
+Parameters
+Response codes
+Get lineage
+Returns the versioned lineage and full dependency graph of a definition — both dependencies (what this definition depends on) and dependents (what depends on this definition). Use for impact analysis before changes, migration planning, and audit trails.
+Parameters
+Response codes
+Semantic diff
+Returns a meaning-level diff between two versions of a concept — what changed in what the concept means, not how it is computed. Operates on the compiled SemanticGraph of both versions. Use for governance sign-off before promotions, compliance audit trails, and dependency impact analysis.
+Parameters
+Response — SemanticDiffResult
+Equivalence status reference
+Response codes
+Deprecate definition
+Marks a version as deprecated. Existing references continue to work; new registrations referencing this version will receive a warning. Deprecation is reversible by an admin.
+Request body
+Response codes
+Promote definition
+Promotes a definition to a higher namespace. Promotion path: personal → team → org → global. Promoting to global is restricted to admins. Run GET .../semantic-diff first to check for breaking changes before promoting.
+Request body
+Response codes
+Find similar definitions
+Detects structurally or behaviourally similar definitions in the registry. Use before registering a new definition to prevent semantic duplication and guide consolidation. Similarity scores are deterministic and method-specific.
+Request body
+Response codes
+Feature Registry
+Features are first-class semantic primitives — registered independently of any Concept and reusable across many Concepts. The feature registry is the foundational layer of the Memintel meaning graph. Internal teams register, deduplicate, and analyse feature usage.
+Register feature
+Registers a Feature as a first-class entity. On registration, the compiler computes the meaning_hash and scans for duplicates. The on_duplicate policy controls what happens on a collision.
+Key request fields
+on_duplicate behaviour
+Response codes
+Search features
+Returns registered features matching semantic search criteria. Search operates on meaning.description, meaning.semantic_type, meaning.unit, and meaning_hash. Supports free-text and structured queries ranked by semantic similarity.
+Query parameters
+Response codes
+Get feature
+Retrieves a specific registered feature by its fully qualified id and version.
+Parameters
+Response codes
+Get feature usages
+Returns every Concept in the registry that references this feature via a FeatureReference. Use for impact analysis before deprecating or modifying a shared feature — know exactly which Concepts would be affected before making any changes.
+Parameters
+Response
+Response codes
+Actions
+Actions are the α layer — the response layer that fires when a Condition evaluates. Actions are declarative: they define WHAT to trigger and HOW, not WHEN (the Condition's trigger.fire_on governs WHEN). Execution types: webhook, notification, workflow, register.
+Create action
+Defines an action (α) — the response layer of the Memintel pipeline. Each Action is bound to a specific Condition version for reproducibility via trigger.condition_id and trigger.condition_version.
+Key fields
+Response codes
+List actions
+Returns a paginated list of action definitions. Filter by condition_id to answer: "what happens if this condition fires?" — the primary visibility path for condition → action binding.
+Query parameters
+Response codes
+Get action
+Retrieves a specific action definition by its fully qualified ID and version.
+Parameters
+Response codes
+Trigger action
+Manually triggers an action for a given entity. Primarily for testing and integration verification. In production, actions fire automatically when their bound Condition evaluates.
+Parameters
+Key request fields
+Response codes
+Explainability
+Returns a complete, deterministic breakdown of how a result was computed: transformation trace, node-level values, contribution attribution, and parameter transparency.
+Explain concept execution
+Returns an authoritative, cache-free explanation for a concept execution. This endpoint always re-executes the full trace without caching shortcuts. For a faster explanation alongside execution, use POST /execute with explain: true instead.
+Key request fields
+Response — Explanation
+Response codes
+Intelligence
+Intelligence endpoints operate on the significance layer (DecisionResult Aₜ), not on raw concept outputs. The primary endpoint is POST /intelligence/condition-impact. The six legacy endpoints are deprecated and superseded by it.
+Condition impact analysis
+Condition-centric analytics. Analyses how frequently and under what circumstances a Condition fires — operating on DecisionResult (Aₜ), the significance layer, not raw concept outputs. Use for monitoring decision rate trends, detecting decision drift, governance audits, and action calibration.
+Key request fields
+Response codes
+Deprecated intelligence endpoints
+The following six endpoints are deprecated. All are superseded by POST /intelligence/condition-impact and retained for backward compatibility only. Migrate before the next major version.
+Agents
+Natural language query
+Accepts a natural language query, resolves it to one or more concept evaluations, and returns structured results. The resolved_concepts field exposes which concepts were selected, enabling verification or override.
+Key request fields
+Response — AgentQueryResponse
+Response codes
+Generate definition
+Converts a natural language description into a valid MemSDL definition via LLM-assisted generation. The generated definition is validated before being returned but is NOT registered or executed automatically. You must call POST /definitions/validate, then POST /registry/definitions, then POST /compile.
+Key request fields
+Response — AgentDefineResponse
+Response codes
+Generate condition
+Generates a Condition definition from natural language. Same non-determinism notice and authoring workflow as POST /agents/define applies.
+Key request fields
+Response codes
+Semantic refinement loop
+Closes the LLM generation loop. Takes an existing Concept definition, its SemanticGraph from POST /compile/semantic, and a refinement instruction. Returns a revised definition with an updated semantic view and a diff showing exactly what changed in meaning. This is the native pattern for iterative concept authoring with compiler feedback.
+Refinement loop (7 steps)
+1. Generate initial definition  POST /agents/define
+2. Compile semantic view  POST /compile/semantic
+3. Refine  POST /agents/semantic-refine → revised definition + updated SemanticGraph
+4. Repeat steps 2–3 until satisfied
+5. Validate  POST /definitions/validate
+6. Compile  POST /compile → ExecutionGraph
+7. Register  POST /registry/definitions
+Key request fields
+Response — SemanticRefineResponse
+Response codes
+Compile workflow
+Converts a natural language workflow description into an explicit, static, MemSDL-backed ExecutionPlan. No dynamic reasoning occurs at execution time — all steps are pre-resolved and validated before any execution begins. The SDK's agent.run() method calls this internally before executing a workflow.
+Key request fields
+Response codes
+Base URL | https://api.memsdl.ai/v1
+Auth | X-API-Key: <your-key>  (elevated permissions required)
+SDK | memintel-sdk  (Python)
+Version | 2.0
+Section 1 — App API (inherited)
+Section 2 — Internal Platform (additional)
+Authentication: All requests require an API key in the X-API-Key header. Internal API keys carry elevated permissions for write and governance operations. Store them in a secrets manager — never in application code or version control.
+Section 1 — App API (inherited)
+POST | /definitions/concepts
+Status | Description
+200 | Concept created. Returns DefinitionResponse with id, version, concept_hash, and semantic_hash.
+400 | Validation error — semantic_error, syntax_error, or type_error.
+401 | Unauthorised.
+409 | Concept with this id and version already exists. Create a new version instead.
+POST | /definitions/primitives
+Status | Description
+200 | Primitive created. Returns DefinitionResponse.
+400 | Validation error.
+401 | Unauthorised.
+409 | Already exists at this id + version.
+POST | /definitions/conditions
+Constraint: Conditions require both strategy and reference_frame declared at authoring time. The namespace field must match the prefix in id.
+Parameter | Type | Required | Description
+id | string | Required | Fully qualified identifier (namespace.id). Example: org.high_churn.
+namespace | enum | Required | personal | team | org | global. Must match the prefix in id.
+concept_id | string | Required | The concept whose result this condition evaluates.
+concept_version | string | Required | Pinned concept version.
+strategy | object | Required | { type: threshold|percentile|z_score|change|equals|composite, params: {...} }
+reference_frame | object | Required | { type: historical|temporal|cross_sectional, window: '30d' }
+Status | Description
+200 | Condition created.
+400 | Validation error.
+401 | Unauthorised.
+409 | Condition already exists at this version.
+POST | /definitions/batch
+Section 2 — Internal Platform only
+Parameter | Type | Required | Description
+definitions | array | Required | List of BatchDefinitionItem objects: { definition, namespace, metadata? }. Max 100 items.
+definitions[].namespace | enum | Required | personal | team | org | global.
+definitions[].metadata | object | Optional | { description, tags, owner }
+Parameter | Type | Required | Description
+results | array | Always | Per-item result in same order as request. Each: id, version, status (created|skipped|failed), error?.
+succeeded | integer | Always | Count of successfully created definitions.
+failed | integer | Always | Count of failed definitions.
+Status | Description
+200 | Batch result. Always HTTP 200. Inspect each item's status field.
+400 | Circular dependency detected, or the batch request itself failed schema validation.
+401 | Unauthorised.
+POST | /definitions/validate
+Parameter | Type | Required | Description
+valid | boolean | Always | true if the definition passes all checks.
+errors | array | Optional | ValidationError[]. Each has type, message, location, and suggestion.
+warnings | array | Optional | Non-blocking: redundant_transformation, unused_input, inefficient_pipeline.
+Status | Description
+200 | Always 200 — validation always returns. Inspect the valid field.
+401 | Unauthorised.
+GET | /definitions/{id}
+Parameter | Type | Required | Description
+id | string | Required (path) | Fully qualified identifier (namespace.id).
+version | string | Required (query) | Explicit semantic version.
+namespace | enum | Optional (query) | Filter to a specific namespace.
+Status | Description
+200 | Definition object — Concept, Primitive, or Condition.
+400 | Validation error.
+401 | Unauthorised.
+404 | Definition not found for given id and version.
+GET | /definitions/conditions/{id}
+Parameter | Type | Required | Description
+id | string | Required (path) | Fully qualified condition identifier.
+version | string | Required (query) | Explicit semantic version.
+Status | Description
+200 | Condition object.
+400 | Validation error.
+401 | Unauthorised.
+404 | Condition not found.
+Section 1 — App API (inherited) + Section 2 additions
+POST | /execute
+Parameter | Type | Required | Description
+id | string | Required | Fully qualified concept identifier (namespace.id).
+version | string | Required | Explicit concept version. No implicit latest.
+entity | string | Required | Entity to evaluate.
+timestamp | datetime | Optional | ISO 8601 UTC. Deterministic when provided.
+explain | boolean | Optional | Default false. Include Explanation in response.
+explain_mode | enum | Optional | summary | full | debug.
+cache | boolean | Optional | Default true. Set false to force recomputation.
+missing_data_policy | enum | Optional | null | zero | forward_fill | backward_fill.
+version_policy | enum | Optional | strict (default) | allow_deprecated.
+Parameter | Type | Required | Description
+value | number|bool|string | Always | Computed concept output. Type matches declared output type.
+type | enum | Always | float | boolean | categorical.
+entity | string | Always | The entity evaluated.
+deterministic | boolean | Always | True when timestamp was provided.
+explanation | object | Optional | Populated when explain: true. Contains contributions, nodes, trace.
+metadata | object | Optional | compute_time_ms, cache_hit, nodes_executed, timeout_ms.
+Status | Description
+200 | Result (Rₜ) produced.
+400 | Validation error.
+401 | Unauthorised.
+404 | Concept not found.
+408 | Execution timed out (30s).
+422 | Execution error — missing data, null propagation.
+429 | Rate limit.
+POST | /execute/graph
+Section 2 — Internal Platform only
+Parameter | Type | Required | Description
+graph_id | string | Required | ID of a previously compiled ExecutionGraph. From POST /compile.
+entity | string | Required | Entity to evaluate.
+ir_hash | string | Optional | Server verifies the stored graph's ir_hash matches. HTTP 409 on mismatch.
+timestamp | datetime | Optional | ISO 8601 UTC. Deterministic when provided.
+explain | boolean | Optional | Default false.
+cache | boolean | Optional | Default true.
+missing_data_policy | enum | Optional | null | zero | forward_fill | backward_fill.
+Status | Description
+200 | Result (Rₜ) — same schema as POST /execute.
+400 | Validation error.
+401 | Unauthorised.
+404 | Graph not found.
+409 | ir_hash mismatch — supplied hash does not match stored graph. Re-compile required.
+408 | Execution timed out.
+422 | Execution error.
+429 | Rate limit.
+POST | /evaluate/condition
+Parameter | Type | Required | Description
+condition_id | string | Required | Fully qualified condition identifier.
+condition_version | string | Required | Explicit condition version.
+entity | string | Required | Entity to evaluate.
+timestamp | datetime | Optional | ISO 8601 UTC. Deterministic when provided.
+dry_run | boolean | Optional | Default false. Evaluates but does not fire actions.
+Parameter | Type | Required | Description
+value | boolean|string | Always | Decision value. true/false for boolean strategies; matched label for equals.
+type | enum | Always | boolean | categorical.
+entity | string | Always | Entity evaluated.
+actions_triggered | array | Optional | Actions fired by this decision. Each: action_id, status, payload_sent, error?.
+concept_result | Result | Optional | Populated on cache miss.
+Status | Description
+200 | Condition evaluated.
+400 | Validation error.
+401 | Unauthorised.
+404 | Condition not found.
+408 | Timeout.
+422 | Execution error.
+429 | Rate limit.
+POST | /evaluate/condition/batch
+Parameter | Type | Required | Description
+condition_id | string | Required | Fully qualified condition identifier.
+condition_version | string | Required | Explicit condition version.
+entities | array | Required | List of entity IDs to evaluate in parallel.
+timestamp | datetime | Optional | Shared evaluation timestamp. Deterministic when provided.
+Status | Description
+200 | Array of DecisionResult objects. Always 200 — inspect each item.
+400 | Validation error.
+401 | Unauthorised.
+429 | Rate limit.
+POST | /evaluate/full
+dry_run: Pass dry_run: true to simulate the full pipeline without firing actions. decision.actions_triggered[].status will be "would_trigger".
+Parameter | Type | Required | Description
+concept_id / concept_version | string | Required | Pinned concept reference.
+condition_id / condition_version | string | Required | Pinned condition reference.
+entity | string | Required | Entity to evaluate.
+timestamp | datetime | Optional | ISO 8601 UTC. Deterministic when provided.
+explain | boolean | Optional | Default false.
+dry_run | boolean | Optional | Default false. Simulates without firing actions.
+missing_data_policy | enum | Optional | null | zero | forward_fill | backward_fill.
+Parameter | Type | Required | Description
+result | Result (Rₜ) | Always | Concept execution output.
+decision | DecisionResult (Aₜ) | Always | Condition evaluation output. Contains actions_triggered[].
+dry_run | boolean | Optional | Reflects whether dry_run was set.
+Status | Description
+200 | Pipeline executed. Action failures return 200 with per-action status.
+400 | Validation error.
+401 | Unauthorised.
+404 | Not found.
+408 | Timeout.
+422 | Execution error.
+429 | Rate limit.
+POST | /execute/batch
+Parameter | Type | Required | Description
+id | string | Required | Fully qualified concept identifier.
+version | string | Required | Explicit concept version.
+entities | array | Required | List of entity IDs.
+timestamp | datetime | Optional | Shared evaluation timestamp.
+explain | boolean | Optional | Include explanations in results.
+missing_data_policy | enum | Optional | null | zero | forward_fill | backward_fill.
+Status | Description
+200 | BatchExecuteResult. Always 200. Inspect results[].status per entity.
+400 | Validation error.
+401 | Unauthorised.
+404 | Concept not found.
+429 | Rate limit.
+POST | /execute/range
+Parameter | Type | Required | Description
+id | string | Required | Fully qualified concept identifier.
+version | string | Required | Explicit concept version.
+entity | string | Required | Entity to evaluate.
+start | datetime | Required | Range start timestamp (ISO 8601 UTC, inclusive).
+end | datetime | Required | Range end timestamp (ISO 8601 UTC, inclusive).
+interval | string | Optional | Evaluation interval. Examples: '1d', '1h', '7d'.
+missing_data_policy | enum | Optional | null | zero | forward_fill | backward_fill.
+Status | Description
+200 | Time-ordered array of Result objects. All deterministic.
+400 | Validation error.
+401 | Unauthorised.
+404 | Not found.
+408 | Timeout. Use /execute/async for large ranges.
+422 | Execution error.
+429 | Rate limit.
+POST | /execute/async
+Parameter | Type | Required | Description
+job_id | string | Always | Unique job identifier.
+status | enum | Always | queued | running | completed | failed | cancelled.
+poll_interval_seconds | integer | Optional | Suggested polling interval.
+estimated_completion_at | datetime | Optional | Server estimate only.
+Status | Description
+202 | Job accepted. Poll /jobs/{jobId} for result.
+400 | Validation error.
+401 | Unauthorised.
+429 | Rate limit.
+GET | /jobs/{jobId}
+Parameter | Type | Required | Description
+jobId | string | Required (path) | The job_id returned by POST /execute/async.
+Status | Description
+200 | JobResult: job_id, status, result? (when completed), error? (when failed).
+401 | Unauthorised.
+404 | Job not found.
+DELETE | /jobs/{jobId}
+Status | Description
+200 | Job cancelled. Final state returned.
+401 | Unauthorised.
+404 | Job not found.
+409 | Cannot cancel — job already completed or failed.
+Section 2 — Internal Platform only
+INVARIANT: Same definition version always produces the same ir_hash. This is the foundation of reproducibility and audit trails.
+POST | /compile
+Parameter | Type | Required | Description
+id | string | Required | Fully qualified definition identifier (namespace.id).
+version | string | Required | Explicit version. No implicit latest.
+Parameter | Type | Required | Description
+graph_id | string | Always | Unique identifier for this compiled graph. Pass to POST /execute/graph.
+ir_hash | string | Always | Deterministic hash of the graph structure. Same definition → same hash.
+definition_id | string | Optional | Fully qualified id of the compiled definition.
+nodes | array | Always | GraphNode list. Each: id, op, inputs, params, output_type.
+edges | array | Always | GraphEdge list. Each: from, to, data_type.
+metadata | dict | Optional | Compile time, optimisation passes applied, node count.
+Status | Description
+200 | ExecutionGraph produced.
+400 | Validation error — semantic_error, syntax_error, reference_error, or graph_error (circular dependency).
+401 | Unauthorised.
+404 | Definition not found.
+POST | /compile/semantic
+Parameter | Type | Required | Description
+semantic_hash | string | Always | Canonical identity. Identical for semantically equivalent concepts regardless of structure.
+concept_hash | string | Optional | Structural hash as authored. May differ from semantic_hash after canonical reduction.
+features | array | Always | Resolved SemanticFeature list. Each: name, layer, meaning, execution, meaning_hash.
+normalized_form | dict | Always | Canonical compiler-normalised form. Two concepts with the same normalized_form are semantically identical.
+dependencies | array | Always | SemanticDependency list. Each: id, version, type, depth.
+equivalences | array | Optional | Registered concepts with the same semantic_hash.
+Status | Description
+200 | SemanticGraph produced.
+400 | Validation error.
+401 | Unauthorised.
+404 | Not found.
+POST | /compile/explain-plan
+Parameter | Type | Required | Description
+steps | array | Always | Ordered WorkflowStep list representing the execution sequence.
+graph | dict | Always | The ExecutionGraph this plan was derived from.
+execution_order | array | Optional | Node IDs in topological execution order.
+parallelizable_groups | array | Optional | Groups of node IDs that can execute concurrently.
+optimizations_applied | array | Optional | Optimisation passes applied. Examples: node_deduplication, dead_node_elimination.
+Status | Description
+200 | ExecutionPlan returned.
+400 | Validation error.
+401 | Unauthorised.
+404 | Not found.
+GET | /graphs/{graphId}
+Parameter | Type | Required | Description
+graphId | string | Required (path) | graph_id returned by POST /compile.
+Status | Description
+200 | ExecutionGraph.
+401 | Unauthorised.
+404 | Graph not found or expired.
+Section 1 (read) + Section 2 (write + governance)
+POST | /registry/definitions
+Section 2 — Internal Platform only
+Parameter | Type | Required | Description
+definition | dict | Required | A Concept, Primitive, or Condition. Should have passed POST /definitions/validate.
+namespace | enum | Required | personal | team | org | global.
+metadata | dict | Optional | { description, tags, owner }
+Status | Description
+200 | DefinitionResponse: { id, version, status, concept_hash, semantic_hash }.
+400 | Validation error.
+401 | Unauthorised.
+409 | Definition already exists at this id + version.
+GET | /registry/definitions
+Parameter | Type | Required | Description
+type | enum | Optional | concept | primitive | condition | feature.
+namespace | enum | Optional | personal | team | org | global.
+tags | string | Optional | Comma-separated tag filter.
+limit | integer | Optional | Default 20, max 100.
+cursor | string | Optional | Pagination cursor.
+Status | Description
+200 | Paginated SearchResult with items[], has_more, next_cursor, total_count.
+401 | Unauthorised.
+GET | /registry/search
+Parameter | Type | Required | Description
+query | string | Optional | Free-text search against descriptions, meaning declarations, and intent fields.
+type | enum | Optional | concept | primitive | condition | feature.
+namespace | enum | Optional | personal | team | org | global.
+tags | string | Optional | Comma-separated tag filter.
+limit | integer | Optional | Default 20, max 100.
+cursor | string | Optional | Pagination cursor.
+Status | Description
+200 | Paginated SearchResult.
+401 | Unauthorised.
+GET | /registry/definitions/{id}/versions
+Parameter | Type | Required | Description
+id | string | Required (path) | Fully qualified definition identifier (namespace.id).
+Status | Description
+200 | VersionListResult: { id, versions: VersionSummary[] }.
+401 | Unauthorised.
+404 | Definition not found.
+GET | /registry/definitions/{id}/lineage
+Parameter | Type | Required | Description
+id | string | Required (path) | Fully qualified identifier.
+version | string | Required (query) | Explicit version.
+Status | Description
+200 | LineageResult: { id, version, dependencies[], dependents[] }.
+401 | Unauthorised.
+404 | Not found.
+GET | /registry/definitions/{id}/semantic-diff
+Section 2 — Internal Platform only
+Parameter | Type | Required | Description
+id | string | Required (path) | Fully qualified definition identifier.
+version_from | string | Required (query) | Baseline version (e.g. '1.2').
+version_to | string | Required (query) | Target version (e.g. '1.3').
+Parameter | Type | Required | Description
+equivalence_status | enum | Always | equivalent | compatible | breaking | unknown.
+changes | dict | Always | { added_features, removed_features, modified_features, modified_semantics }.
+affected_downstream | dict | Optional | { conditions, actions } — downstream definitions that may be affected.
+summary | string | Optional | Compiler-generated natural language summary of the semantic changes.
+Parameter | Type | Required | Description
+equivalent | — | — | Same semantic_hash — meaning unchanged. Safe to promote.
+compatible | — | — | Meaning changed but backward-compatible. Existing Conditions remain valid.
+breaking | — | — | Meaning changed in a way that may invalidate Conditions or Actions. Governance review required.
+unknown | — | — | Equivalence could not be determined. Treat as breaking.
+Status | Description
+200 | SemanticDiffResult.
+400 | Validation error.
+401 | Unauthorised.
+404 | One or both versions not found.
+POST | /registry/definitions/{id}/deprecate
+Section 2 — Internal Platform only
+Parameter | Type | Required | Description
+version | string | Required | Version to deprecate.
+replacement_version | string | Optional | Recommended replacement version.
+reason | string | Optional | Human-readable reason for deprecation.
+Status | Description
+200 | Deprecation confirmed.
+401 | Unauthorised.
+404 | Not found.
+POST | /registry/definitions/{id}/promote
+Section 2 — Internal Platform only
+Parameter | Type | Required | Description
+version | string | Required | Version to promote.
+from_namespace | enum | Required | personal | team | org. Source namespace.
+to_namespace | enum | Required | team | org | global. Target namespace.
+Status | Description
+200 | Promotion confirmed. Returns DefinitionResponse in the new namespace.
+401 | Unauthorised.
+403 | Insufficient permissions for target namespace.
+404 | Not found.
+POST | /registry/definitions/similar
+Section 2 — Internal Platform only
+Parameter | Type | Required | Description
+definition | dict | Required | A Concept or Primitive to compare against the registry.
+method | enum | Required | structural (deterministic, compares pipeline structure) | behavioral (compares output correlation; requires dataset).
+dataset | string | Optional | Required when method is behavioral. Versioned validation dataset identifier.
+threshold | float | Optional | Minimum similarity score. Default 0.7. Range [0, 1].
+namespace | string | Optional | Namespace to search within. Defaults to all accessible namespaces.
+Status | Description
+200 | { similar_concepts: [{ id, version, similarity (0-1), method, namespace }] }.
+400 | Validation error.
+401 | Unauthorised.
+Section 1 (read) + Section 2 (write)
+POST | /registry/features
+Section 2 — Internal Platform only
+Parameter | Type | Required | Description
+feature | dict | Required | RegisteredFeature: { id (namespace.id), namespace, meaning: { description, semantic_type, unit }, execution: { op, input, window } }.
+on_duplicate | enum | Optional | warn (default) | reject | merge.
+Parameter | Type | Required | Description
+warn | — | — | Registers the new feature and returns a duplicates[] list in the response.
+reject | — | — | Returns HTTP 409 with conflicting features listed in the response body.
+merge | — | — | Returns the existing feature with the same meaning_hash — no new id created.
+Status | Description
+200 | Feature registered or existing feature returned on merge.
+400 | Validation error.
+401 | Unauthorised.
+409 | Duplicate found and on_duplicate was set to reject.
+GET | /registry/features
+Parameter | Type | Required | Description
+query | string | Optional | Free-text search against feature descriptions.
+semantic_type | enum | Optional | magnitude | rate | ratio | duration | count | score | indicator.
+domain | string | Optional | Domain filter. Examples: finance, saas, fraud_detection.
+meaning_hash | string | Optional | Find features with an identical meaning_hash (exact semantic equivalence).
+namespace | enum | Optional | personal | team | org | global.
+limit | integer | Optional | Default 20, max 100.
+Status | Description
+200 | Paginated FeatureSearchResult.
+401 | Unauthorised.
+GET | /registry/features/{id}
+Parameter | Type | Required | Description
+id | string | Required (path) | Fully qualified feature identifier (namespace.id).
+version | string | Required (query) | Explicit version.
+Status | Description
+200 | RegisteredFeature object.
+401 | Unauthorised.
+404 | Feature not found.
+GET | /registry/features/{id}/usages
+Section 2 — Internal Platform only
+Parameter | Type | Required | Description
+id | string | Required (path) | Fully qualified feature identifier.
+version | string | Required (query) | Explicit version.
+Parameter | Type | Required | Description
+feature_id / feature_version | string | Optional | Feature identifier and version.
+used_by | array | Optional | List of { concept_id, concept_version, layer (features|compute) } objects.
+Status | Description
+200 | Usage list.
+401 | Unauthorised.
+404 | Feature not found.
+Section 1 (read + trigger) + Section 2 (create)
+POST | /actions
+Section 2 — Internal Platform only
+Parameter | Type | Required | Description
+id | string | Required | Fully qualified identifier (namespace.id). Example: org.notify_risk_team.
+namespace | enum | Required | personal | team | org | global. Must match prefix in id.
+trigger | dict | Required | { condition_id, condition_version, fire_on: 'true'|'false'|'any' }.
+execution | dict | Required | { type: webhook|notification|workflow|register, endpoint?, channel?, workflow_id?, params? }.
+Status | Description
+200 | Action created. Returns DefinitionResponse.
+400 | Validation error.
+401 | Unauthorised.
+409 | Already exists at this version.
+GET | /actions
+Parameter | Type | Required | Description
+condition_id | string | Optional | Filter to actions bound to this condition.
+condition_version | string | Optional | Filter to a specific condition version. Requires condition_id.
+namespace | enum | Optional | personal | team | org | global.
+limit | integer | Optional | Default 20, max 100.
+cursor | string | Optional | Pagination cursor.
+Status | Description
+200 | Paginated list of Action definitions.
+400 | Validation error.
+401 | Unauthorised.
+GET | /actions/{id}
+Parameter | Type | Required | Description
+id | string | Required (path) | Fully qualified action identifier (namespace.id).
+version | string | Required (query) | Explicit action version.
+Status | Description
+200 | Action definition.
+401 | Unauthorised.
+404 | Action not found.
+POST | /actions/{id}/trigger
+Parameter | Type | Required | Description
+id | string | Required (path) | Fully qualified action identifier.
+Parameter | Type | Required | Description
+version | string | Required | Explicit action version.
+entity | string | Required | Entity to trigger the action for.
+timestamp | datetime | Optional | Evaluation timestamp for deterministic context.
+dry_run | boolean | Optional | Default false. Resolves payload and validates but sends nothing.
+Status | Description
+200 | ActionResult with status: triggered, failed, or would_trigger (when dry_run: true).
+400 | Validation error.
+401 | Unauthorised.
+404 | Action not found.
+422 | Action execution failed.
+Section 1 — App API (inherited)
+POST | /explain
+Cache-free: This endpoint always re-executes the full trace without caching shortcuts, ensuring a complete audit trail. For faster explanations, use POST /execute with explain: true.
+Parameter | Type | Required | Description
+id | string | Required | Fully qualified concept identifier.
+version | string | Required | Explicit concept version.
+entity | string | Required | Entity to explain.
+timestamp | datetime | Optional | Required for reproducible explanations.
+explain_mode | enum | Optional | summary | full (default) | debug.
+depth | integer | Optional | How many levels of concept hierarchy to expand. Default 1.
+Parameter | Type | Required | Description
+output | any | Always | Final output value. Matches the parent Result.value.
+nodes | array | Always | Node-level computation details in execution order.
+contributions | object | Always | Attribution of each input signal to the final output.
+trace | array | Always | Step-by-step execution trace in topological order.
+metadata | object | Optional | Execution context: timestamp, version, environment.
+Status | Description
+200 | Explanation produced.
+400 | Validation error.
+401 | Unauthorised.
+404 | Not found.
+408 | Timeout.
+422 | Execution error.
+Section 1 — App API (inherited)
+POST | /intelligence/condition-impact
+Parameter | Type | Required | Description
+condition_id | string | Required | Fully qualified condition identifier.
+condition_version | string | Required | Explicit condition version.
+entity | string | Required | Entity to analyse.
+start | datetime | Required | Analysis window start (ISO 8601 UTC).
+end | datetime | Required | Analysis window end (ISO 8601 UTC).
+Status | Description
+200 | Condition trigger analysis object.
+400 | Validation error.
+401 | Unauthorised.
+DEPRECATED  Superseded by POST /intelligence/condition-impact. Retained for backward compatibility only.
+Parameter | Type | Required | Description
+POST /intelligence/contribution | Deprecated | — | Contribution analysis. Migrate to POST /intelligence/condition-impact.
+POST /intelligence/sensitivity | Deprecated | — | Sensitivity analysis. Migrate to POST /intelligence/condition-impact.
+POST /intelligence/drift | Deprecated | — | Drift detection. Migrate to POST /intelligence/condition-impact.
+POST /intelligence/compare | Deprecated | — | Version comparison. Migrate to POST /intelligence/condition-impact.
+POST /intelligence/backtest | Deprecated | — | Historical backtest. Migrate to POST /intelligence/condition-impact.
+POST /intelligence/simulate | Deprecated | — | Scenario simulation. Migrate to POST /intelligence/condition-impact.
+Section 1 (query, define, define-condition) + Section 2 (semantic-refine, workflows/compile)
+Non-determinism notice: Agent APIs are non-deterministic assistants. They generate definitions but do not execute logic. The LLM is a definition generator; Memintel is the execution engine. All generated output must pass the deterministic compiler before registration or execution. Agents are never on the critical execution path.
+POST | /agents/query
+Parameter | Type | Required | Description
+query | string | Required | Natural language query. Example: 'Which users have high churn risk today?'
+timestamp | datetime | Optional | Optional timestamp for deterministic execution of resolved concepts.
+explain | boolean | Optional | Default false. Include explanation objects in results.
+Parameter | Type | Required | Description
+resolved_concepts | array | Optional | Concept IDs resolved from the query. Verify before relying on results.
+results | array | Always | Result[]. One per entity resolved.
+summary | string | Optional | Natural language summary for queries that warrant a narrative response.
+Status | Description
+200 | Query results.
+400 | Validation error.
+401 | Unauthorised.
+POST | /agents/define
+Parameter | Type | Required | Description
+description | string | Required | Natural language description of the concept or primitive to define.
+context.domain | string | Optional | Domain hint. Examples: finance, saas, fraud_detection.
+context.preferred_primitives | array | Optional | Existing primitive IDs to prefer as inputs during generation.
+Parameter | Type | Required | Description
+definition | Concept|Primitive | Always | Generated and compiler-validated definition. Not registered.
+validation | ValidationResult | Always | Compiler validation result for the generated definition.
+warnings | array | Optional | Non-blocking notes from the LLM step — ambiguities resolved, default mappings used.
+Status | Description
+200 | Generated and validated definition.
+400 | Validation error.
+401 | Unauthorised.
+POST | /agents/define-condition
+Parameter | Type | Required | Description
+description | string | Required | Natural language description of the condition. Example: 'Flag users whose churn risk score exceeds 0.8 over the last 30 days.'
+Status | Description
+200 | Generated Condition definition.
+400 | Validation error.
+401 | Unauthorised.
+POST | /agents/semantic-refine
+Section 2 — Internal Platform only
+Parameter | Type | Required | Description
+definition | Concept | Required | Current Concept definition to refine.
+semantic_view | dict | Required | Current SemanticGraph from POST /compile/semantic.
+instruction | string | Required | Natural language refinement instruction. Example: 'Add a volatility feature weighted at 30%'.
+target_meaning_hash | string | Optional | A semantic_hash to converge toward. convergence_delta tracks distance to this target.
+iteration | integer | Optional | Current iteration number (1-indexed) for loop tracking.
+constraints | dict | Optional | SemanticConstraints to apply during refinement.
+Parameter | Type | Required | Description
+definition | Concept | Always | The refined Concept definition.
+semantic_view | SemanticGraph | Always | Updated SemanticGraph. Input for the next iteration.
+validation | ValidationResult | Always | Check valid before proceeding to the next iteration.
+diff | SemanticDiffResult | Optional | Semantic diff between input and refined definition.
+convergence_delta | float | Optional | Semantic distance to target_meaning_hash. 0.0 = converged.
+Status | Description
+200 | Refined definition with updated semantic view.
+400 | Validation error.
+401 | Unauthorised.
+POST | /agents/workflows/compile
+Section 2 — Internal Platform only
+Parameter | Type | Required | Description
+workflow | string | Required | Natural language workflow description. Compiled into a static pre-resolved ExecutionPlan.
+context.entities | array | Optional | Entity IDs to resolve in the workflow.
+context.timestamp | datetime | Optional | Timestamp context for deterministic step compilation.
+Status | Description
+200 | ExecutionPlan: steps, graph, execution_order, parallelizable_groups, optimizations_applied.
+400 | Workflow could not be resolved to known concepts, or validation error.
+401 | Unauthorised.

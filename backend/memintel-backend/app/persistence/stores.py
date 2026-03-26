@@ -49,6 +49,7 @@ from fastapi import Depends
 from app.persistence.db import get_db
 from app.stores import (
     CalibrationTokenStore,
+    ContextStore,
     DefinitionStore,
     FeedbackStore,
     GraphStore,
@@ -97,3 +98,10 @@ async def get_job_store(
 ) -> JobStore:
     """FastAPI dependency — returns a JobStore backed by the shared pool."""
     return JobStore(pool)
+
+
+async def get_context_store(
+    pool: asyncpg.Pool = Depends(get_db),
+) -> ContextStore:
+    """FastAPI dependency — returns a ContextStore backed by the shared pool."""
+    return ContextStore(pool)

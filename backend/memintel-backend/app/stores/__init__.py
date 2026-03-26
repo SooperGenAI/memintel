@@ -13,6 +13,7 @@ from app.stores.feedback import FeedbackStore
 from app.stores.calibration_token import CalibrationTokenStore
 from app.stores.graph import GraphStore
 from app.stores.job import JobStore
+from app.stores.context import ContextStore
 
 __all__ = [
     "TaskStore",
@@ -21,4 +22,5 @@ __all__ = [
     "CalibrationTokenStore",
     "GraphStore",
     "JobStore",
+    "ContextStore",
 ]
