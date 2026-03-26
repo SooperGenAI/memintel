@@ -236,10 +236,10 @@ class TestCheckNode:
         assert result == 'boolean'
 
     def test_decision_categorical_unwraps_to_categorical(self, checker):
-        """unwrap_decision(decision<categorical>) → categorical."""
+        """unwrap_decision(decision<categorical{a,b}>) → categorical{a,b}."""
         node = GraphNode(op='unwrap_decision', node_id='n17')
-        result = checker.check_node(node, {'input': 'decision<categorical>'})
-        assert result == 'categorical'
+        result = checker.check_node(node, {'input': 'decision<categorical{a,b}>'})
+        assert result == 'categorical{a,b}'
 
     # ── equals strategy: rejects float input (§9.1) ──────────────────────────
 
@@ -267,7 +267,7 @@ class TestCheckNode:
     def test_equals_strategy_on_string_valid(self, checker):
         node = GraphNode(op='equals', node_id='n21')
         result = checker.check_node(node, {'input': 'string'})
-        assert result == 'decision<categorical>'
+        assert result == 'decision<string>'
 
     # ── composite strategy: rejects decision<categorical> (§9.1) ─────────────
 
