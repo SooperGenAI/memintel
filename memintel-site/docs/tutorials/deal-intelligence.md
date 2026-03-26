@@ -1,7 +1,7 @@
 ---
 id: deal-intelligence
-title: Deal Intelligence for Sales
-sidebar_label: Deal Intelligence
+title: Sales Pipeline Monitoring
+sidebar_label: Sales Pipeline Monitoring
 ---
 
 # Tutorial: Deal Intelligence for Sales

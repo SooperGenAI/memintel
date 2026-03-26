@@ -1,7 +1,7 @@
 ---
 id: xbrl-compliance
-title: XBRL Compliance Intelligence
-sidebar_label: XBRL Compliance
+title: SEC XBRL Compliance Intelligence
+sidebar_label: SEC XBRL Compliance
 ---
 
 # Tutorial: XBRL Compliance Intelligence for SEC Filings

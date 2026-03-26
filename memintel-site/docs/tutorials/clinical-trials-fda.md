@@ -1,7 +1,7 @@
 ---
 id: clinical-trials-fda
-title: Clinical Trials and FDA Compliance
-sidebar_label: Clinical Trials / FDA
+title: Clinical Trials & FDA Compliance
+sidebar_label: Clinical Trials & FDA
 ---
 
 # Tutorial: Clinical Trials and FDA Compliance

@@ -418,6 +418,130 @@ After updating, ask your data engineer to recompile any existing tasks so they b
 
 ---
 
+---
+
+## Worked Example — With vs Without Context
+
+The difference context makes is most visible when you compare what the compiler produces with and without it.
+
+### Without context
+
+A user says: *"Alert me when an account is at risk of churning."*
+
+The compiler has no domain knowledge. It produces something generic:
+
+```json
+{
+  "concept": "account_activity_score",
+  "strategy": "threshold",
+  "params": { "value": 0.5 },
+  "window": "30d",
+  "context_version": null,
+  "context_warning": "No active application context exists. Task compiled without domain context — definitions may be less accurate."
+}
+```
+
+The threshold of 0.5 is a generic midpoint. The window of 30d is a default. Nothing is grounded in the actual domain.
+
+### With context active
+
+The same intent, with context v1 active, compiles to:
+
+```json
+{
+  "concept": "account_churn_risk",
+  "strategy": "composite",
+  "components": [
+    { "primitive": "account.active_user_rate_30d",    "weight": 0.40 },
+    { "primitive": "account.core_action_freq_30d",    "weight": 0.30 },
+    { "primitive": "account.seat_utilization_rate",   "weight": 0.20 },
+    { "primitive": "account.support_ticket_rate_30d", "weight": 0.10 }
+  ],
+  "params": { "value": 0.38 },
+  "window": "30d",
+  "context_version": "v1",
+  "context_warning": null
+}
+```
+
+The composite now reflects what "churn risk" actually means in this domain. The threshold of 0.38 reflects the recall bias — lower than the generic 0.5 midpoint, catching more at-risk accounts. The `semantic_hint` for "active user" is why `account.active_user_rate_30d` was selected — the compiler knew that "active" means "logged in AND performed core action", not just "logged in."
+
+---
+
+## How Context Affects Calibration
+
+When `calibration_bias` is defined, the calibration engine adjusts its recommendations away from the raw statistical optimum.
+
+### Recall bias — missing signals is worse
+
+Context has `false_negative_cost: high`. The statistically optimal threshold from feedback is 0.78 — but the system recommends lower:
+
+```json
+{
+  "statistically_optimal": 0.78,
+  "context_adjusted": 0.702,
+  "recommended": 0.702,
+  "adjustment_explanation": "Threshold adjusted from 0.78 to 0.702 toward recall based on application context (false_negative_cost=high)"
+}
+```
+
+### Precision bias — false alarms are worse
+
+Context has `false_positive_cost: high`. The statistically optimal threshold is 0.71 — but the system recommends higher:
+
+```json
+{
+  "statistically_optimal": 0.71,
+  "context_adjusted": 0.781,
+  "recommended": 0.781,
+  "adjustment_explanation": "Threshold adjusted from 0.71 to 0.781 toward precision based on application context (false_positive_cost=high)"
+}
+```
+
+### When to use each bias
+
+| Bias | Use when | Examples |
+|---|---|---|
+| **Recall** | Missing a true signal is worse than a false alarm | Churn detection, AML, medical alerts, safety monitoring |
+| **Precision** | False alarms are costly — especially for automated actions | Fraud blocking, automated suspensions, clinical stopping rules |
+| **Balanced** | Roughly equal cost on both sides | Internal dashboards, advisory alerts with human review |
+
+---
+
+## Window Clamping
+
+If `behavioural.meaningful_windows` is defined, calibration window recommendations are automatically clamped to that range. If the calibration algorithm recommends a 14-day window for a SaaS application with `min: 30d`, the response will note:
+
+```json
+{
+  "adjustment_explanation": "Window clamped to 30d minimum per application context (meaningful_windows.min=30d). Statistically optimal window was 14d."
+}
+```
+
+This prevents the calibration engine from recommending windows that are operationally meaningless in your domain.
+
+---
+
+## Checking Context Impact After an Update
+
+After updating context, use `GET /context/impact` to see how many tasks were compiled under older versions:
+
+```bash
+GET /context/impact
+```
+
+```json
+{
+  "current_version": "v2",
+  "tasks_on_current_version": 14,
+  "tasks_on_older_versions": [{ "version": "v1", "task_count": 8 }],
+  "total_stale_tasks": 8
+}
+```
+
+Tasks on older versions continue running correctly — they are pinned to their compiled version. But they do not benefit from the updated context. Trigger recompilation to incorporate the new domain understanding.
+
+
 ## Common Mistakes
 
 **Writing a vague description.** "A monitoring platform" tells the system nothing useful. Be specific about industry, use case, and what is being monitored.
