@@ -44,6 +44,7 @@ created_at         task.created_at
 updated_at         task.updated_at     (excluded from API; internal)
 last_triggered_at  task.last_triggered_at
 version            task.version        (excluded from API; optimistic lock)
+context_version    task.context_version (nullable; set at creation time)
 """
 from __future__ import annotations
 
@@ -90,16 +91,18 @@ class TaskStore:
                 concept_id, concept_version,
                 condition_id, condition_version,
                 action_id, action_version,
-                entity_scope, delivery, status
+                entity_scope, delivery, status,
+                context_version
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             RETURNING
                 task_id, intent,
                 concept_id, concept_version,
                 condition_id, condition_version,
                 action_id, action_version,
                 entity_scope, delivery, status,
-                created_at, updated_at, last_triggered_at, version
+                created_at, updated_at, last_triggered_at, version,
+                context_version
             """,
             task.intent,
             task.concept_id,
@@ -111,6 +114,7 @@ class TaskStore:
             task.entity_scope,
             task.delivery.model_dump_json(),
             task.status.value,
+            task.context_version,
         )
         return _row_to_task(row)
 
@@ -131,7 +135,8 @@ class TaskStore:
                 condition_id, condition_version,
                 action_id, action_version,
                 entity_scope, delivery, status,
-                created_at, updated_at, last_triggered_at, version
+                created_at, updated_at, last_triggered_at, version,
+                context_version
             FROM tasks
             WHERE task_id = $1
             """,
@@ -193,7 +198,8 @@ class TaskStore:
                 condition_id, condition_version,
                 action_id, action_version,
                 entity_scope, delivery, status,
-                created_at, updated_at, last_triggered_at, version
+                created_at, updated_at, last_triggered_at, version,
+                context_version
             FROM tasks
             {where}
             ORDER BY created_at DESC
@@ -330,7 +336,8 @@ class TaskStore:
                 condition_id, condition_version,
                 action_id, action_version,
                 entity_scope, delivery, status,
-                created_at, updated_at, last_triggered_at, version
+                created_at, updated_at, last_triggered_at, version,
+                context_version
             FROM tasks
             WHERE condition_id = $1
               AND condition_version = $2
@@ -373,4 +380,5 @@ def _row_to_task(row: asyncpg.Record) -> Task:
         last_triggered_at=row["last_triggered_at"],
         updated_at=row["updated_at"],
         version=row["version"],
+        context_version=row["context_version"],
     )
