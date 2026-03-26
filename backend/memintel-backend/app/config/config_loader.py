@@ -1,16 +1,19 @@
 """
 app/config/config_loader.py
 ──────────────────────────────────────────────────────────────────────────────
-Parses and validates `memintel.config.md`, resolves ${ENV_VAR} references,
-and loads `memintel.guardrails.md` into the Guardrails model.
+Parses and validates `memintel_config.yaml`, resolves ${ENV_VAR} references,
+and loads `memintel_guardrails.yaml` into the Guardrails model.
 
-Parsing rules (from memintel.config.md §1)
-──────────────────────────────────────────
-1. Extract all fenced YAML blocks (```yaml ... ```)
-2. Merge them in document order — later blocks override earlier ones on key conflict
-3. Validate the merged object against ConfigSchema
-4. Resolve all ${ENV_VAR} references — raise ConfigError if any variable is unset
-5. NEVER log resolved credential values at any log level
+Parsing rules
+─────────────
+1. Read the YAML file directly (yaml.safe_load)
+2. Validate the parsed object against ConfigSchema
+3. Resolve all ${ENV_VAR} references — raise ConfigError if any variable is unset
+4. NEVER log resolved credential values at any log level
+
+Config files must use the .yaml extension. Passing a .md file path raises
+ConfigError immediately — the Markdown-embedded YAML format is no longer
+supported.
 
 Security invariants
 ───────────────────
@@ -21,9 +24,9 @@ Security invariants
 
 Guardrails loading
 ──────────────────
-load_guardrails(path) extracts YAML from the Markdown file, strips the
-top-level 'guardrails:' wrapper if present, validates against the Guardrails
-model, and enforces the non-empty strategy_registry invariant.
+load_guardrails(path) parses the YAML file directly, strips the top-level
+'guardrails:' wrapper if present, validates against the Guardrails model,
+and enforces the non-empty strategy_registry invariant.
 """
 from __future__ import annotations
 
@@ -58,14 +61,14 @@ class ConfigError(Exception):
 
 class ConfigLoader:
     """
-    Loads and validates memintel.config.md (and memintel.guardrails.md).
+    Loads and validates memintel_config.yaml (and memintel_guardrails.yaml).
 
     All public methods raise ConfigError on any failure. The system must not
     start with a partially applied configuration.
 
     Usage:
         loader = ConfigLoader()
-        config = loader.load("/path/to/memintel.config.md")
+        config = loader.load("/path/to/memintel_config.yaml")
         guardrails = loader.load_guardrails(config.guardrails_path)
     """
 
@@ -73,18 +76,24 @@ class ConfigLoader:
 
     def load(self, config_path: str) -> ConfigSchema:
         """
-        Parse, validate, and resolve a memintel.config.md file.
+        Parse, validate, and resolve a memintel_config.yaml file.
 
         Steps:
-          1. Read the Markdown file and extract all fenced YAML blocks.
-          2. Merge blocks in document order.
-          3. Validate merged dict against ConfigSchema (raises ConfigError on failure).
+          1. Reject .md paths immediately (format no longer supported).
+          2. Read and parse the YAML file directly.
+          3. Validate parsed dict against ConfigSchema (raises ConfigError on failure).
           4. Resolve all ${ENV_VAR} references (raises ConfigError if any unset).
           5. Return the fully resolved, validated ConfigSchema.
 
-        Raises ConfigError if the file is missing, malformed, schema-invalid,
-        or references an unset environment variable.
+        Raises ConfigError if the file has a .md extension, is missing,
+        malformed, schema-invalid, or references an unset environment variable.
         """
+        if config_path.endswith(".md"):
+            raise ConfigError(
+                "Config file must be .yaml — .md format is no longer supported. "
+                "Rename your config file to .yaml (e.g. memintel_config.yaml)."
+            )
+
         path = Path(config_path)
         if not path.exists():
             raise ConfigError(f"Config file not found: {config_path}")
@@ -94,7 +103,14 @@ class ConfigLoader:
         except OSError as e:
             raise ConfigError(f"Cannot read config file '{config_path}': {e}") from e
 
-        raw = self._extract_yaml_blocks(text)
+        try:
+            raw = yaml.safe_load(text) or {}
+        except yaml.YAMLError as e:
+            raise ConfigError(f"YAML parse error in config file: {e}") from e
+
+        if not isinstance(raw, dict):
+            raise ConfigError("Config file must contain a YAML mapping at the top level.")
+
         return self._validate_and_resolve(raw)
 
     def load_from_dict(self, raw: dict) -> ConfigSchema:
@@ -108,18 +124,25 @@ class ConfigLoader:
 
     def load_guardrails(self, guardrails_path: str) -> Guardrails:
         """
-        Parse, validate, and return the Guardrails from memintel.guardrails.md.
+        Parse, validate, and return the Guardrails from memintel_guardrails.yaml.
 
-        The YAML in the guardrails file may have a top-level 'guardrails:' key
-        (the spec wraps the entire content in it). If present, the wrapper is
-        stripped before validation.
+        The YAML file may have a top-level 'guardrails:' key (the spec wraps
+        the entire content in it). If present, the wrapper is stripped before
+        validation.
 
         Raises ConfigError if:
+          - the path has a .md extension
           - the file is missing
           - the YAML is malformed
           - the Guardrails schema is invalid
           - strategy_registry is empty
         """
+        if guardrails_path.endswith(".md"):
+            raise ConfigError(
+                "Config file must be .yaml — .md format is no longer supported. "
+                "Rename your guardrails file to .yaml (e.g. memintel_guardrails.yaml)."
+            )
+
         path = Path(guardrails_path)
         if not path.exists():
             raise ConfigError(f"Guardrails file not found: {guardrails_path}")
@@ -131,7 +154,13 @@ class ConfigLoader:
                 f"Cannot read guardrails file '{guardrails_path}': {e}"
             ) from e
 
-        raw = self._extract_yaml_blocks(text)
+        try:
+            raw = yaml.safe_load(text) or {}
+        except yaml.YAMLError as e:
+            raise ConfigError(f"YAML parse error in guardrails file: {e}") from e
+
+        if not isinstance(raw, dict):
+            raise ConfigError("Guardrails file must contain a YAML mapping at the top level.")
 
         # Strip the top-level 'guardrails:' wrapper if present
         if "guardrails" in raw and isinstance(raw["guardrails"], dict):
@@ -151,7 +180,7 @@ class ConfigLoader:
 
         return guardrails
 
-    # ── Internal helpers ───────────────────────────────────────────────────────
+    # ── Internal helpers ────────────────────────────────────────────────────────
 
     def _validate_and_resolve(self, raw: dict) -> ConfigSchema:
         """Schema-validate, then resolve env vars, then re-validate."""
@@ -176,25 +205,6 @@ class ConfigLoader:
             raise ConfigError(
                 f"Config validation failed after env var resolution: {e}"
             ) from e
-
-    def _extract_yaml_blocks(self, markdown: str) -> dict:
-        """
-        Extract all fenced YAML blocks from Markdown and merge them.
-
-        Later blocks override earlier blocks on key conflict (document order).
-        Non-dict YAML values (scalars, lists) are skipped — only dict blocks
-        contribute to the merged config.
-        """
-        blocks = re.findall(r'```yaml\n(.*?)```', markdown, re.DOTALL)
-        merged: dict = {}
-        for block in blocks:
-            try:
-                parsed = yaml.safe_load(block)
-            except yaml.YAMLError as e:
-                raise ConfigError(f"YAML parse error in config block: {e}") from e
-            if isinstance(parsed, dict):
-                merged = {**merged, **parsed}
-        return merged
 
     def _resolve_env_vars(self, obj: Any) -> Any:
         """
