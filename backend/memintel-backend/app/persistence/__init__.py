@@ -32,6 +32,7 @@ from app.persistence.stores import (
     get_calibration_token_store,
     get_graph_store,
     get_job_store,
+    get_context_store,
 )
 
 __all__ = [
@@ -54,4 +55,5 @@ __all__ = [
     "get_calibration_token_store",
     "get_graph_store",
     "get_job_store",
+    "get_context_store",
 ]

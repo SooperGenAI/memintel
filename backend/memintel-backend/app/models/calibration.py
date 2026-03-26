@@ -281,6 +281,12 @@ class CalibrationResult(BaseModel):
     # Populated when status=no_recommendation
     no_recommendation_reason: NoRecommendationReason | None = None
 
+    # Context bias adjustment metadata (populated when an active context with
+    # calibration_bias caused an adjustment to the statistically optimal value)
+    statistically_optimal: float | None = None    # raw value from adjust_params
+    context_adjusted: float | None = None         # bias-shifted value (None if no adjustment)
+    adjustment_explanation: str | None = None     # human-readable description of adjustment
+
     @model_validator(mode="after")
     def _check_status_consistency(self) -> CalibrationResult:
         if self.status == CalibrationStatus.RECOMMENDATION_AVAILABLE:
