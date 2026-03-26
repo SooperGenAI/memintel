@@ -52,6 +52,8 @@ Pass `dry_run: true` to preview the generated concept, condition, action binding
 | `entity_scope` | string | Always | Entity scope. |
 | `status` | enum | Always | `active` \| `paused` \| `deleted` \| `preview`. |
 | `created_at` / `last_triggered_at` | datetime | Always | ISO 8601. `last_triggered_at` is `null` if never triggered. |
+| `context_version` | string \| null | Always | The application context version active when this task was compiled. `null` if no context was defined at creation time. |
+| `context_warning` | string \| null | Always | Warning message if no application context was defined at task creation time. `null` if context was present. When present, value is: `"No active application context exists. Task compiled without domain context — definitions may be less accurate. Define context via POST /context and consider recompiling this task."` |
 
 ### Response Codes
 
