@@ -1,105 +1,117 @@
 ---
 id: admin-application-context
-title: Configuring Application Context
-sidebar_label: Application Context
+title: Step 1 — Application Context
+sidebar_label: Step 1 — Context
 ---
 
-# Configuring Application Context
+# Step 1 — Application Context
 
-Application context is the first thing an admin defines — before primitives, before guardrails, before any user creates a task. It gives the LLM the domain knowledge it needs to compile accurate, domain-aware definitions from user intent.
+Application context is a description of your application that you provide to Memintel before anything else. Think of it as the briefing you give a new analyst before they start work — background on what the business does, who the customers are, what specific terms mean, and what matters most.
 
----
+Without this briefing, when one of your team members says "alert me when a high-value account shows churn risk", the system has no idea what "high-value" means in your context. Is that $10k ARR? $500k ARR? With context defined, it knows exactly.
 
-## What It Does
-
-Without context, when a user says *"alert me when a deal is at high risk of stalling"*, the compiler has no way to know:
-- What signals are relevant to "stalling" in this domain
-- What "high risk" means relative to the industry and use case
-- What domain-specific terms like "engaged" or "high value" mean
-- Whether missing a stalled deal is more costly than a false alarm
-
-With context, the compiler has answers to all of these questions before it resolves a single intent. The first compiled condition is materially more accurate, and the system requires fewer calibration cycles to reach production quality.
-
-:::tip
-Define context before onboarding any users. Tasks created without context receive a `context_warning` in their response and will produce generic definitions.
+:::tip Why this is the most important step
+Every monitoring task your team creates is compiled using this context as background knowledge. Tasks created without context produce generic definitions that need many more calibration cycles to become accurate. Define context first — before any users create any tasks.
 :::
 
 ---
 
-## The Context Schema
+## What You Are Defining
 
-Context is defined via `POST /context`. The full schema:
+Application context has four parts. You only need to fill in what is relevant to your domain.
+
+| Part | What it is | Required? |
+|---|---|---|
+| **Domain description** | A plain English paragraph describing what your application does | Yes |
+| **Entities** | The things being monitored — customers, deals, providers, patients | Recommended |
+| **Behavioural settings** | How data flows and what time windows are meaningful | Recommended |
+| **Semantic hints** | Definitions of specific terms that have precise meanings in your domain | Strongly recommended |
+| **Calibration bias** | Whether it is worse to miss a real signal or to fire a false alarm | Recommended |
+
+---
+
+## How to Define Context
+
+Unlike the other three sections, application context is **not** defined in `memintel_config.yaml`. It is submitted via an API call — a request you send to the Memintel server. This means you can update it at any time without restarting the server.
+
+The easiest way to do this is via a `curl` command from a terminal, or using a tool like [Postman](https://www.postman.com) or [Insomnia](https://insomnia.rest) if you prefer a graphical interface.
+
+```bash
+curl -X POST https://your-memintel-domain/context \
+  -H "Content-Type: application/json" \
+  -d @context.json
+```
+
+Where `context.json` is a file containing your context definition. The sections below explain exactly what to put in that file.
+
+---
+
+## Part 1 — Domain Description
+
+Write one paragraph describing what your application does. Be specific. The system uses this to understand the purpose of every monitoring task your team creates.
 
 ```json
 {
   "domain": {
-    "description": "string — required. What the application does.",
-    "entities": [
-      { "name": "string", "description": "string" }
-    ],
-    "decisions": ["string"]
-  },
-  "behavioural": {
-    "data_cadence": "batch | streaming | mixed",
-    "meaningful_windows": { "min": "30d", "max": "90d" },
-    "regulatory": ["string"]
-  },
-  "semantic_hints": [
-    { "term": "string", "definition": "string" }
-  ],
-  "calibration_bias": {
-    "false_negative_cost": "high | medium | low",
-    "false_positive_cost": "high | medium | low"
+    "description": "B2B SaaS churn detection for mid-market software companies. We monitor user engagement and account health signals to identify accounts at risk of not renewing their subscription before the renewal window."
   }
 }
 ```
 
-### domain.description
+**Good descriptions are:**
+- Specific about the industry and use case
+- Clear about what is being monitored and why
+- Written as if briefing an intelligent analyst who knows nothing about your company
 
-The most important field. Write this as a precise, information-dense paragraph — not a marketing tagline. The compiler reads this to understand what the application does and calibrates its interpretation of all user intent against it.
+**Avoid:**
+- Generic descriptions like "a business intelligence platform"
+- Marketing language — be precise, not promotional
+- Descriptions longer than 3-4 sentences — keep it focused
+
+---
+
+## Part 2 — Entities
+
+Declare the things your system monitors. An entity is the subject of a monitoring task — the thing a task evaluates.
 
 ```json
-// Too vague — the compiler learns almost nothing
-"description": "A platform for monitoring business metrics."
-
-// Good — tells the compiler exactly what domain it is working in
-"description": "B2B SaaS churn detection for mid-market software companies. We monitor user engagement signals and account-level health metrics to identify accounts at risk of not renewing their annual subscription."
-```
-
-### domain.entities
-
-Declare the things being monitored — the primary and secondary objects in your domain. The compiler uses these to understand what `entity_id` values represent when users create tasks.
-
-```json
-"entities": [
-  {
-    "name": "account",
-    "description": "A company-level subscription — the billing and contract unit. The primary entity for churn monitoring."
-  },
-  {
-    "name": "user",
-    "description": "An individual platform user within an account. Secondary entity — user behaviour signals roll up to account health."
+{
+  "domain": {
+    "description": "...",
+    "entities": [
+      {
+        "name": "account",
+        "description": "A company-level subscription — the billing and contract unit. The primary subject of churn monitoring."
+      },
+      {
+        "name": "user",
+        "description": "An individual platform user within an account. User behaviour signals roll up to account-level health."
+      }
+    ]
   }
-]
+}
 ```
 
-### domain.decisions
+Most domains have one primary entity (the main thing being monitored) and one or two secondary entities. Examples:
 
-The decision types your application makes. These help the compiler understand what categories of conditions are meaningful and how to group similar intent expressions.
+| Domain | Primary entity | Secondary entities |
+|---|---|---|
+| SaaS churn | account | user |
+| AML compliance | customer | transaction |
+| Credit risk | borrower | loan |
+| Clinical trial safety | patient | trial |
+| Sales pipeline | deal | contact |
+| Healthcare network | provider | claim |
 
-```json
-"decisions": ["churn_risk", "expansion_opportunity", "support_escalation", "payment_risk"]
-```
+---
 
-### behavioural.data_cadence
+## Part 3 — Behavioural Settings
 
-How data arrives. This directly influences which evaluation strategies the compiler prefers:
+Tell the system how data flows and what time windows make sense for your domain.
 
-| Cadence | Effect on compilation |
-|---|---|
-| `batch` | Compiler prefers longer windows, tolerates latency in signal freshness |
-| `streaming` | Compiler prefers shorter windows and event-driven strategies |
-| `mixed` | Compiler selects based on individual primitive types |
+### data_cadence
+
+How frequently does your data update?
 
 ```json
 "behavioural": {
@@ -107,101 +119,136 @@ How data arrives. This directly influences which evaluation strategies the compi
 }
 ```
 
-### behavioural.meaningful_windows
+| Value | Use when |
+|---|---|
+| `batch` | Data updates daily, weekly, or on a fixed schedule (most common for B2B SaaS, credit risk, clinical trials) |
+| `streaming` | Data arrives in real time, second by second (fraud detection, transaction monitoring, DevOps) |
+| `mixed` | Different signals update at different rates |
 
-The minimum and maximum time windows that are operationally meaningful for this domain. The compiler uses these to bound window parameters during compilation, and the calibration engine clamps window recommendations to this range.
+### meaningful_windows
 
-```json
-// B2B SaaS — monthly billing cycle means <30d windows are not actionable
-"meaningful_windows": { "min": "30d", "max": "90d" }
-
-// Real-time fraud detection — hours matter, not months
-"meaningful_windows": { "min": "1h", "max": "24h" }
-
-// Clinical trial safety — weekly data cuts, annual trial duration
-"meaningful_windows": { "min": "7d", "max": "180d" }
-```
-
-### behavioural.regulatory
-
-The regulatory frameworks that apply to this application. This signals to the compiler that certain terms have precise legal definitions that must not be interpreted loosely.
+What is the shortest and longest time window that is operationally meaningful in your domain? This prevents the system from recommending windows that are too short to be actionable or too long to be useful.
 
 ```json
-// Financial services
-"regulatory": ["BSA", "FinCEN", "FATF"]
-
-// Healthcare
-"regulatory": ["HIPAA", "CMS", "ICH-E6"]
-
-// SaaS / general
-"regulatory": ["GDPR", "SOC2"]
+"behavioural": {
+  "data_cadence": "batch",
+  "meaningful_windows": {
+    "min": "30d",
+    "max": "90d"
+  }
+}
 ```
 
-When regulatory frameworks are declared, the compiler treats severity language like "significant", "material", and "elevated" more conservatively — because in a regulated context, those words carry legal weight.
+Examples:
 
-### semantic_hints
+| Domain | Min window | Max window | Reason |
+|---|---|---|---|
+| B2B SaaS churn | `30d` | `90d` | Monthly billing cycles — shorter windows are not actionable |
+| Real-time fraud | `1h` | `24h` | Fraud patterns emerge and resolve within hours |
+| Credit risk | `30d` | `365d` | Quarterly financial submissions, annual review cycles |
+| Clinical trial safety | `7d` | `180d` | Weekly data cuts, trial duration months to years |
+| DevOps / SRE | `5m` | `24h` | Incidents develop and resolve within hours |
 
-The most powerful and most underused field. Semantic hints let the admin define precisely what domain-specific terms mean — resolving ambiguity that would otherwise cause the compiler to produce generic definitions.
+### regulatory
 
-Each hint is a term-definition pair. The definition should be unambiguous and operational — something a new analyst could act on without further clarification.
+List any regulatory frameworks that apply to your application. This signals to the system that certain terms have precise legal or regulatory definitions.
+
+```json
+"behavioural": {
+  "data_cadence": "batch",
+  "meaningful_windows": { "min": "30d", "max": "90d" },
+  "regulatory": ["GDPR", "SOC2"]
+}
+```
+
+Common frameworks by domain:
+
+| Domain | Frameworks |
+|---|---|
+| Financial services / AML | `BSA`, `FinCEN`, `FATF` |
+| Healthcare (US) | `HIPAA`, `CMS`, `OIG` |
+| Clinical trials | `FDA-21CFR`, `ICH-E6`, `ICH-E2A`, `GCP` |
+| SaaS / general | `GDPR`, `SOC2` |
+| Capital markets | `MiFID2`, `Basel-III` |
+
+Leave this empty if no specific regulatory framework applies.
+
+---
+
+## Part 4 — Semantic Hints
+
+This is the most powerful part of the context and the most commonly skipped — which is a mistake.
+
+A semantic hint defines precisely what a specific term means in your domain. Without hints, the system uses its general understanding of words. With hints, it uses your exact definition.
 
 ```json
 "semantic_hints": [
   {
     "term": "active user",
-    "definition": "logged in AND performed at least one core action (create, edit, or share) in the last 14 days. Login alone does not count as active."
+    "definition": "logged in AND performed at least one core action (create, edit, share, or export) in the last 14 days. Login alone does not count as active."
   },
   {
     "term": "high value account",
-    "definition": "ARR above $50,000, regardless of seat count or plan type."
-  },
-  {
-    "term": "churned",
-    "definition": "subscription cancelled or not renewed within 30 days of expiry date."
+    "definition": "ARR above $50,000 regardless of seat count or plan type."
   },
   {
     "term": "at risk",
-    "definition": "showing two or more negative signals in the last 30 days with no positive signal in the last 7 days."
+    "definition": "showing two or more negative engagement signals in the last 30 days with no positive signal in the last 7 days."
   }
 ]
 ```
 
-:::tip
-Add a semantic hint whenever a business term appears in user intent expressions that has a specific, non-obvious meaning in your domain. "Active user" means different things in different products. The hint resolves this permanently for the lifetime of this context version.
-:::
+**How to decide what to add:**
 
-### calibration_bias
+Go through the monitoring requests your team is likely to make. Any word or phrase that has a specific meaning in your organisation — not the common English meaning — should have a hint.
 
-Declares the cost asymmetry between false negatives (missing a real signal) and false positives (firing on a non-event). The compiler uses this to bias threshold resolution, and the calibration engine uses it to adjust recommendations away from the raw statistical optimum.
+Common candidates:
+
+| Term | Why it needs a hint |
+|---|---|
+| "active" | Does login count? Does viewing count? Only creating/editing? |
+| "high value" | What is the ARR / revenue threshold? |
+| "at risk" | How many signals? Over what time window? |
+| "engaged" | What actions count as engagement in your product? |
+| "stalled" | How many days of inactivity? Does it apply to both sides? |
+| "serious" (clinical) | The ICH E2A legal definition — not the everyday meaning |
+| "related" (clinical) | Reasonable possibility of causality — a specific standard |
+| "unusual" (AML) | Deviation from the customer's 90-day baseline, not absolute value |
+
+Write definitions the way you would explain the term to a new analyst on their first day — unambiguous, operational, no room for interpretation.
+
+---
+
+## Part 5 — Calibration Bias
+
+This tells the system which type of error is worse in your domain: missing a real signal (false negative) or firing when nothing is wrong (false positive).
 
 ```json
-// Missing a churning account is worse than an unnecessary outreach
 "calibration_bias": {
   "false_negative_cost": "high",
   "false_positive_cost": "medium"
 }
-
-// A false block of a legitimate payment is worse than a missed fraud
-"calibration_bias": {
-  "false_negative_cost": "medium",
-  "false_positive_cost": "high"
-}
-
-// Patient safety — never miss a safety signal
-"calibration_bias": {
-  "false_negative_cost": "high",
-  "false_positive_cost": "low"
-}
 ```
 
-`bias_direction` is auto-derived and cannot be set manually:
-- `false_negative_cost > false_positive_cost` → `recall` bias (lower thresholds)
-- `false_positive_cost > false_negative_cost` → `precision` bias (higher thresholds)
-- Equal → `balanced`
+Both values can be `high`, `medium`, or `low`. The system automatically derives the direction:
+- If missing signals is worse → system leans toward **sensitivity** (catches more, may have more false alarms)
+- If false alarms are worse → system leans toward **precision** (fewer false alarms, may miss more)
+- If equal → **balanced**
+
+**Which to use:**
+
+| Scenario | false_negative_cost | false_positive_cost | Reason |
+|---|---|---|---|
+| SaaS churn detection | `high` | `medium` | Missing a churning account costs more than an extra customer success call |
+| Automated fraud blocking | `medium` | `high` | Blocking a legitimate customer transaction is highly costly |
+| AML / compliance monitoring | `high` | `medium` | Regulators expect you to catch suspicious activity |
+| Clinical trial safety | `high` | `low` | Never miss a safety signal — patient safety is paramount |
+| Credit risk early warning | `high` | `low` | Missing deterioration leads to unexpected defaults |
+| DevOps SLO monitoring | `high` | `medium` | A missed incident is worse than a brief false page |
 
 ---
 
-## Complete Examples
+## Complete Context Examples
 
 ### SaaS Churn Detection
 
@@ -212,11 +259,11 @@ Declares the cost asymmetry between false negatives (missing a real signal) and 
     "entities": [
       {
         "name": "account",
-        "description": "A company-level subscription — the unit of billing and the primary entity for churn monitoring."
+        "description": "A company-level subscription — the billing and contract unit. The primary subject of churn monitoring."
       },
       {
         "name": "user",
-        "description": "An individual platform user within an account. User-level signals aggregate to account health scores."
+        "description": "An individual platform user within an account."
       }
     ],
     "decisions": ["churn_risk", "expansion_opportunity", "support_escalation"]
@@ -229,15 +276,15 @@ Declares the cost asymmetry between false negatives (missing a real signal) and 
   "semantic_hints": [
     {
       "term": "active user",
-      "definition": "logged in AND performed at least one core action (create, edit, share, or export) in the last 14 days. Login alone does not qualify."
+      "definition": "logged in AND performed at least one core action (create, edit, share, or export) in the last 14 days. Login alone does not count."
     },
     {
       "term": "high value account",
       "definition": "ARR above $50,000 regardless of seat count."
     },
     {
-      "term": "core feature",
-      "definition": "the primary workflow action the account subscribed for — document creation, data export, or API integration depending on plan type."
+      "term": "core action",
+      "definition": "creating, editing, sharing, or exporting a document — not just logging in or viewing."
     }
   ],
   "calibration_bias": {
@@ -260,10 +307,10 @@ Declares the cost asymmetry between false negatives (missing a real signal) and 
       },
       {
         "name": "transaction",
-        "description": "An individual payment, wire transfer, cash deposit, or withdrawal event. The primary unit of real-time evaluation."
+        "description": "An individual payment, wire transfer, cash deposit, or withdrawal event."
       }
     ],
-    "decisions": ["sar_required", "enhanced_due_diligence", "transaction_hold", "account_review"]
+    "decisions": ["sar_required", "enhanced_due_diligence", "account_review"]
   },
   "behavioural": {
     "data_cadence": "streaming",
@@ -273,15 +320,15 @@ Declares the cost asymmetry between false negatives (missing a real signal) and 
   "semantic_hints": [
     {
       "term": "unusual",
-      "definition": "materially different from the customer's established 90-day rolling baseline — more than 3 standard deviations from their mean transaction value or velocity."
+      "definition": "more than 3 standard deviations from the customer's rolling 90-day average transaction value or velocity — not unusual in absolute terms, but unusual relative to that specific customer's history."
     },
     {
       "term": "structuring",
-      "definition": "a pattern of multiple transactions designed to remain below the $10,000 CTR reporting threshold within any 24-hour window."
+      "definition": "a pattern of multiple transactions intentionally kept below the $10,000 CTR reporting threshold within any 24-hour window."
     },
     {
       "term": "high risk jurisdiction",
-      "definition": "a country on the current FATF grey or black list, or subject to OFAC sanctions programme."
+      "definition": "a country currently on the FATF grey or black list, or subject to an active OFAC sanctions programme."
     }
   ],
   "calibration_bias": {
@@ -296,7 +343,7 @@ Declares the cost asymmetry between false negatives (missing a real signal) and 
 ```json
 {
   "domain": {
-    "description": "Clinical trial safety monitoring and pharmacovigilance for a Phase 3 oncology programme. We continuously evaluate adverse event patterns against both internal trial data and external FDA safety signals to protect patient safety and ensure ICH E2A compliance.",
+    "description": "Clinical trial safety monitoring for a Phase 3 oncology programme. We continuously evaluate adverse event patterns to protect patient safety and ensure compliance with ICH E2A and FDA 21 CFR reporting requirements.",
     "entities": [
       {
         "name": "patient",
@@ -304,10 +351,10 @@ Declares the cost asymmetry between false negatives (missing a real signal) and 
       },
       {
         "name": "trial",
-        "description": "The clinical study with a defined safety monitoring plan and pre-specified stopping rules."
+        "description": "The clinical study with defined safety monitoring plan and pre-specified stopping rules."
       }
     ],
-    "decisions": ["sae_assessment_required", "dsmb_notification", "stopping_rule_proximity", "susar_reporting"]
+    "decisions": ["sae_assessment_required", "dsmb_notification", "susar_reporting"]
   },
   "behavioural": {
     "data_cadence": "batch",
@@ -317,15 +364,15 @@ Declares the cost asymmetry between false negatives (missing a real signal) and 
   "semantic_hints": [
     {
       "term": "serious",
-      "definition": "results in death, is life-threatening, requires inpatient hospitalisation, results in persistent disability, or is a congenital anomaly. Per ICH E2A definition."
+      "definition": "results in death, is life-threatening, requires inpatient hospitalisation, results in persistent or significant disability, or is a congenital anomaly. Per ICH E2A definition — not the everyday meaning of serious."
     },
     {
       "term": "unexpected",
-      "definition": "the nature, severity, or frequency is not consistent with the current Investigator Brochure or reference safety information."
+      "definition": "the nature, severity, or frequency is not consistent with the current Investigator Brochure or reference safety information for this compound."
     },
     {
       "term": "related",
-      "definition": "there is a reasonable possibility that the investigational medicinal product caused the adverse event — based on temporal relationship, known pharmacology, and absence of alternative explanation."
+      "definition": "there is a reasonable possibility that the investigational medicinal product caused the adverse event — assessed on temporal relationship, known pharmacology, and absence of alternative explanation."
     }
   ],
   "calibration_bias": {
@@ -337,50 +384,50 @@ Declares the cost asymmetry between false negatives (missing a real signal) and 
 
 ---
 
-## Deploying a Context Update
+## Submitting Your Context
 
-Context is versioned. Every `POST /context` creates a new immutable version (`v1`, `v2`, `v3`...) and deactivates the previous one.
+Once you have written your context JSON:
 
 ```bash
-# Deploy updated context
-curl -X POST https://your-domain/context \
+# Save your context to a file, e.g. context.json
+# Then submit it:
+curl -X POST https://your-memintel-domain/context \
   -H "Content-Type: application/json" \
-  -d @updated-context.json
-
-# Check which tasks are now on an older version
-curl https://your-domain/context/impact
-# {
-#   "current_version": "v2",
-#   "tasks_on_current_version": 14,
-#   "tasks_on_older_versions": [{ "version": "v1", "task_count": 8 }],
-#   "total_stale_tasks": 8
-# }
+  -d @context.json
 ```
 
-Tasks on older versions continue running correctly — they are pinned to their compiled version and fully reproducible. But they do not benefit from the updated context. Trigger recompilation for affected tasks to incorporate the new domain understanding.
+You should receive a response like:
 
-```bash
-# Recompile tasks on older context versions
-await adminClient.tasks.recompile(
-  task_ids: ["tsk_001", "tsk_002", ...],
-  reason: "Context updated — new semantic hints for high value account"
-)
+```json
+{
+  "context_id": "ctx_8f3k2m",
+  "version": "v1",
+  "is_active": true
+}
 ```
+
+The `version: v1` confirms it was received. Every time you update context, the version number increments (`v2`, `v3`...) and the previous version is kept for audit purposes.
+
+---
+
+## Updating Context Later
+
+You can update context at any time without restarting the server. Just submit a new `POST /context` call with your updated content. The new version immediately becomes active.
+
+After updating, ask your data engineer to recompile any existing tasks so they benefit from the updated context.
 
 ---
 
 ## Common Mistakes
 
-**Writing a vague description.** The compiler cannot derive useful context from "a business intelligence platform." Be specific about what the application does, what domain it operates in, and what decisions it makes.
+**Writing a vague description.** "A monitoring platform" tells the system nothing useful. Be specific about industry, use case, and what is being monitored.
 
-**Omitting semantic hints for ambiguous terms.** Any term that appears in user intent and has a non-obvious domain-specific meaning should have a hint. "Active", "high risk", "stalled", "at risk", "material" — these all mean different things in different domains.
+**Skipping semantic hints.** This is the most common mistake. If your team uses terms like "active user", "high value", "at risk", or "unusual" in their monitoring requests — and those terms have specific meanings in your organisation — the system will guess what they mean. Define them explicitly.
 
-**Setting the wrong calibration bias.** The bias directly affects the thresholds the compiler selects. If your application takes automated action on every alert (blocking a transaction, suspending an account), `false_positive_cost` should be `high`. If alerts go to a human reviewer who can apply judgement, `false_positive_cost` can be `medium` or `low`.
-
-**Forgetting to check context impact after an update.** After every context version bump, run `GET /context/impact` to see how many tasks are on older versions. Tasks compiled under v1 do not automatically benefit from v2.
+**Setting the wrong calibration bias.** If your system takes automated action on every alert (blocks a transaction, suspends an account), false positives are very costly — set `false_positive_cost: high`. If alerts go to a human reviewer who can apply judgement, false positives are more tolerable.
 
 ---
 
 ## Next Step
 
-[Configure Primitives →](/docs/admin-guide/admin-primitives)
+→ [Step 2: Primitives](/docs/admin-guide/admin-primitives)

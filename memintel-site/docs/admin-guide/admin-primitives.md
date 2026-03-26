@@ -1,477 +1,385 @@
 ---
 id: admin-primitives
-title: Configuring Primitives
-sidebar_label: Primitives
+title: Step 2 — Primitives
+sidebar_label: Step 2 — Primitives
 ---
 
-# Configuring Primitives
+# Step 2 — Primitives
 
-Primitives are the signal vocabulary of your Memintel deployment. They declare what signals exist, how they are typed, and where they come from. The compiler can only use primitives that are registered — and users can only monitor signals that have been declared as primitives.
+A primitive is a single signal that you want Memintel to be able to monitor. Think of primitives as the **vocabulary of measurable things** in your domain — the building blocks that all monitoring tasks are made from.
 
-Getting primitives right is the most consequential configuration decision in a Memintel deployment. This page explains how to design them well and what to avoid.
+Before you can create a monitoring task for "deal engagement" or "patient adverse event severity", those concepts need to be broken down into their underlying measurable signals. Those signals are your primitives.
 
----
+:::note The key distinction
+**Primitives are raw, observable facts. They are not interpretations.**
 
-## What a Primitive Is
+- ✓ "Days since last email reply" — a primitive (directly measurable)
+- ✗ "Deal health" — not a primitive (an interpretation of multiple signals)
+- ✓ "Transaction amount divided by customer 90-day average" — a primitive (computable)
+- ✗ "Transaction risk" — not a primitive (a concept derived from multiple signals)
 
-A primitive is a **typed, normalised declaration of a single observable signal**. It is not a formula. It is not a concept. It is not a derived score. It is a direct representation of one thing that can be measured.
-
-```yaml
-# This is a primitive — one observable fact, strictly typed
-- id: customer.days_since_last_login
-  type: int
-  source: auth_pipeline
-  entity: customer_id
-  description: Days since the customer last authenticated successfully
-
-# This is NOT a primitive — it combines two things
-- id: customer.engagement_and_health  # Wrong — two concepts bundled together
-  type: float
-```
-
-The rule: if you find yourself describing a primitive with "and" or "or", it is not a primitive — it is a concept. Break it apart.
-
----
-
-## The Primitives Config File
-
-Primitives are defined in `memintel_primitives.yaml`. This file is loaded at server startup via the `MEMINTEL_CONFIG_PATH` environment variable. Changes require a server restart.
-
-### File Structure
-
-```yaml
-# memintel_primitives.yaml
-
-primitives:
-  - id: <string>           # required — unique identifier, dot-namespaced
-    type: <type>           # required — see type system below
-    source: <string>       # required — which data pipeline provides this
-    entity: <string>       # required — the entity ID field this maps to
-    description: <string>  # required — plain English, one sentence
-    nullable: <bool>       # optional — default false
-```
-
-### Naming Convention
-
-Use dot-namespaced IDs in the format `entity.signal_name`. This makes the registry browsable and prevents naming collisions as it grows.
-
-```yaml
-# Good — clear, domain-readable, unambiguous
-customer.days_since_last_login
-account.active_user_rate_30d
-transaction.value_vs_baseline_ratio
-provider.license_expiry_days
-service.error_rate_trend_1h
-
-# Bad — too generic, not domain-readable
-feature_3
-engagement_score
-metric_a
-```
-
----
-
-## The Type System
-
-Every primitive must declare a type. The type determines which evaluation strategies are available at compile time.
-
-### Scalar Types
-
-| Type | Description | Strategies Available |
-|---|---|---|
-| `float` | Continuous numeric value | `threshold`, `percentile`, `z_score`, `change` |
-| `int` | Integer numeric value | `threshold`, `percentile`, `change` |
-| `boolean` | True or false | `equals` |
-| `string` | Free text | `equals` |
-| `categorical` | Enumerated value from a defined set | `equals` |
-
-### Container Types
-
-| Type | Description | Strategies Available |
-|---|---|---|
-| `time_series<float>` | Ordered sequence of float values over time | `z_score`, `change`, `percentile` |
-| `time_series<int>` | Ordered sequence of integer values over time | `z_score`, `change`, `percentile` |
-
-### Nullable Types
-
-Any type can be declared nullable by appending `?`. A nullable primitive may return `null` when no value is available — for example, a `float?` sentiment score for a customer with no recent emails.
-
-```yaml
-- id: deal.last_call_sentiment_score
-  type: float?     # null if no calls recorded in window
-  description: Sentiment score from last call recording — null if no calls
-```
-
-:::warning
-Do not use `float` for a signal that sometimes has no value. Use `float?`. An unexpected `null` on a non-nullable primitive causes a runtime evaluation error. Always declare nullability explicitly.
+The compiler derives concepts from primitives. Your job is to define the primitives.
 :::
 
-### Choosing the Right Type
-
-```yaml
-# A ratio or percentage → float
-- id: account.active_user_rate_30d
-  type: float
-  description: Ratio of active users to total seats, 0-1
-
-# A count or duration → int
-- id: deal.thread_stalled_days
-  type: int
-  description: Days since last email reply in deal thread
-
-# A true/false flag → boolean
-- id: customer.payment_failed_flag
-  type: boolean
-  description: True if most recent payment attempt failed
-
-# A status from a fixed set → categorical
-- id: customer.risk_tier
-  type: categorical
-  description: Risk classification — standard | elevated | high | blocked
-
-# A historical sequence for trend analysis → time_series<float>
-- id: service.error_rate_trend_1h
-  type: time_series<float>
-  description: Error rate sampled every 5 minutes over last hour
-
-# A value that may not always exist → float?
-- id: borrower.management_sentiment_score
-  type: float?
-  description: LLM-extracted sentiment from last management commentary — null if no commentary available
-```
-
 ---
 
-## Primitive Design Principles
+## Where Primitives Live
 
-### 1 — One signal per primitive
-
-Never bundle two signals into one primitive. If the description contains "and" or "or", it is not a primitive.
+Primitives are defined in the `primitives:` section of your `memintel_config.yaml` file:
 
 ```yaml
-# Wrong — two signals combined
-- id: deal.engagement_and_sentiment
-  type: float
-
-# Right — two separate primitives
-- id: deal.engagement_score
-  type: float
-  description: Composite engagement activity score, 0-1
-
-- id: deal.sentiment_score
-  type: float
-  description: LLM-extracted sentiment from recent communications, 0-1
-```
-
-### 2 — Observable facts, not interpretations
-
-A primitive should be directly measurable or computable from raw data without requiring domain interpretation. "Customer health" is not a primitive — it is a concept derived from primitives. "Days since last login" is a primitive.
-
-```yaml
-# Wrong — this is a concept, not a primitive
-- id: customer.health_score
-  type: float
-  description: Overall customer health
-
-# Right — this is an observable fact
-- id: customer.days_since_last_login
-  type: int
-  description: Days since the customer last authenticated
-
-- id: customer.feature_adoption_score
-  type: float
-  description: Ratio of activated features to total available features, 0-1
-```
-
-### 3 — Register time-series variants for trend detection
-
-If a signal changes meaningfully over time and you want the compiler to detect trends, register a time-series variant alongside the scalar.
-
-```yaml
-# Point-in-time — current value only
-- id: borrower.dscr
-  type: float
-  description: Current debt service coverage ratio
-
-# Time-series — last 4 quarters, enables trend and z_score strategies
-- id: borrower.dscr_trend_4q
-  type: time_series<float>
-  description: DSCR over last 4 quarters, oldest to newest
-```
-
-When a user says "alert me when DSCR is declining significantly", the compiler can use `change` strategy on `borrower.dscr_trend_4q` to detect trajectory — not just current level.
-
-### 4 — Pair LLM-extracted signals with confidence scores
-
-When a signal is extracted by an LLM or ML model, register the confidence score alongside the signal value. The compiler can use this to weight the signal appropriately.
-
-```yaml
-- id: deal.sentiment_score
-  type: float
-  description: LLM-extracted sentiment from recent deal communications, 0-1
-
-- id: deal.sentiment_confidence
-  type: float
-  description: Model confidence for the sentiment extraction, 0-1
-```
-
-### 5 — Separate external state from internal state
-
-External signals — regulatory data, market data, peer benchmarks — should be registered as explicitly as internal signals. This makes the dual memory structure visible in the primitive registry.
-
-```yaml
-# Internal — the company's own data
-- id: filing.deprecated_tag_count
-  type: int
-  source: filing_history_pipeline
-  entity: filing_id
-  description: Number of deprecated XBRL tags in this draft filing
-
-# External — regulatory environment data
-- id: taxonomy.deprecated_in_current_version
-  type: boolean
-  source: sec_taxonomy_pipeline
-  entity: xbrl_tag_id
-  description: True if this tag is deprecated in the current SEC taxonomy version
-```
-
----
-
-## Complete Example — SaaS Churn Detection
-
-```yaml
-# memintel_primitives_saas.yaml
+# memintel_config.yaml
 
 primitives:
-
-  # User engagement signals
-  - id: user.days_since_last_login
-    type: int
-    source: auth_pipeline
-    entity: user_id
-    description: Days since the user last authenticated successfully
-
-  - id: user.core_actions_30d
-    type: int
-    source: activity_pipeline
-    entity: user_id
-    description: Count of core workflow actions performed in last 30 days
-
-  - id: user.feature_breadth_score
-    type: float
-    source: activity_pipeline
-    entity: user_id
-    description: Ratio of distinct features used to total available features, 0-1
-
-  - id: user.session_frequency_trend_8w
-    type: time_series<float>
-    source: activity_pipeline
-    entity: user_id
-    description: Weekly session count over last 8 weeks — enables trend detection
-
-  # Account health signals
   - id: account.active_user_rate_30d
     type: float
     source: activity_pipeline
     entity: account_id
-    description: Ratio of active users to total licensed seats, 0-1
-
-  - id: account.seat_utilization_rate
-    type: float
-    source: billing_pipeline
-    entity: account_id
-    description: Ratio of seats in use to seats licensed, 0-1
-
-  - id: account.support_ticket_rate_30d
-    type: float
-    source: support_pipeline
-    entity: account_id
-    description: Support tickets per user per 30 days — elevated rate indicates friction
-
-  - id: account.nps_score
-    type: float?
-    source: survey_pipeline
-    entity: account_id
-    description: Most recent NPS score, 0-10 — null if no survey response in last 180d
+    description: "Ratio of active users to total licensed seats over last 30 days, 0-1"
 
   - id: account.days_to_renewal
     type: int
     source: billing_pipeline
     entity: account_id
-    description: Days until next renewal date — negative if past due
+    description: "Days until the next subscription renewal date"
+```
 
-  # Payment signals
+Each primitive is a list item (starting with `-`) with four required fields.
+
+---
+
+## The Four Required Fields
+
+### id — the signal's name
+
+A unique identifier for this signal. Use the format `entity.signal_name` — lowercase, with a dot separating the entity type from the signal name, and underscores between words.
+
+```yaml
+id: account.active_user_rate_30d
+id: customer.days_since_last_login
+id: borrower.debt_service_coverage_ratio
+id: patient.adverse_event_severity_score
+id: service.error_rate_5m
+```
+
+:::tip Naming convention
+The part before the dot is the **entity type** — the thing being measured (account, customer, patient, deal).
+The part after the dot is the **signal name** — what is being measured, often including a time window.
+This makes the registry easy to browse as it grows.
+:::
+
+### type — what kind of data it contains
+
+The type tells the system what kind of values this signal produces and which evaluation strategies are available for it.
+
+| Type | What it means | Example signals |
+|---|---|---|
+| `float` | A decimal number, usually between 0 and 1 or a ratio | Sentiment score, engagement rate, LTV ratio |
+| `int` | A whole number | Days since login, count of events, number of calls |
+| `boolean` | True or false only | Payment failed flag, OIG exclusion flag, license active |
+| `categorical` | One value from a fixed list | Risk tier (low/medium/high), status (active/paused/closed) |
+| `time_series<float>` | A sequence of decimal values over time | Error rate over last hour, DSCR over last 4 quarters |
+| `time_series<int>` | A sequence of whole numbers over time | Daily transaction count over last 30 days |
+
+**When to use `time_series` vs a plain number:**
+
+Use a time series when you want the system to be able to detect **trends and trajectories** — not just the current value. For example:
+
+- `borrower.dscr` (type: `float`) — the current DSCR value right now
+- `borrower.dscr_trend_4q` (type: `time_series<float>`) — the DSCR across the last 4 quarters, enabling detection of a declining trend
+
+If a user might say "alert me when X is declining" or "alert me when X is trending upward", register a time series variant.
+
+**Nullable signals:**
+
+If a signal sometimes has no value — for example, a sentiment score for a customer who has never sent an email — add `?` to make it nullable:
+
+```yaml
+- id: deal.last_call_sentiment
+  type: float?      # null if no calls have been recorded
+  description: "Sentiment score from the last call recording — null if no calls"
+```
+
+### source — which data pipeline provides this
+
+The name of the data pipeline or system that this signal comes from. This is used by your data engineer to know which resolver function to write. It does not affect how the signal is evaluated — it is a label for the technical team.
+
+```yaml
+source: billing_pipeline
+source: activity_pipeline
+source: crm_system
+source: safety_database
+source: sec_taxonomy_feed
+```
+
+Use a short, descriptive name that matches how your data team refers to that data source.
+
+### description — plain English explanation
+
+A one-sentence description of what this signal measures. Write it clearly enough that a new team member could implement the data fetch without asking questions.
+
+```yaml
+# Too vague
+description: "A metric for the user"
+
+# Good
+description: "Days since the customer last authenticated to the platform"
+description: "Ratio of active users to total licensed seats in the last 30 days, expressed as a value between 0 and 1"
+description: "True if the most recent payment attempt for this account failed"
+```
+
+---
+
+## One Signal Per Primitive
+
+The most important design rule: **each primitive measures exactly one thing**.
+
+If you find yourself writing "and" or "or" in a description, you are probably trying to combine two signals into one primitive. Split them.
+
+```yaml
+# Wrong — two signals combined
+- id: deal.engagement_and_sentiment
+  type: float
+  description: "Combined engagement and sentiment score"
+
+# Right — two separate primitives
+- id: deal.engagement_score
+  type: float
+  description: "Composite activity score based on email, call, and meeting frequency, 0-1"
+
+- id: deal.sentiment_score
+  type: float
+  description: "LLM-extracted sentiment from recent deal communications, 0-1"
+```
+
+The system combines primitives into concepts automatically. Your job is to provide the raw signals, not pre-combine them.
+
+---
+
+## Internal vs External Signals
+
+One of Memintel's key capabilities is evaluating **your internal data against external signals** — regulatory changes, market data, peer benchmarks. Both types are registered as primitives.
+
+```yaml
+primitives:
+
+  # Internal signal — your own data
+  - id: filing.deprecated_tag_count
+    type: int
+    source: filing_history_pipeline
+    entity: filing_id
+    description: "Number of XBRL tags in this draft that are deprecated in the new taxonomy"
+
+  # External signal — regulatory environment data
+  - id: taxonomy.tag_deprecated_flag
+    type: boolean
+    source: sec_taxonomy_feed
+    entity: xbrl_tag_id
+    description: "True if this tag is deprecated in the current SEC GAAP taxonomy version"
+
+  # External signal — peer benchmark data
+  - id: provider.peer_deviation_percentile
+    type: float
+    source: benchmarking_pipeline
+    entity: provider_id
+    description: "This provider's billing deviation percentile within their specialty peer group, 0-100"
+```
+
+Register external signals the same way as internal ones. Your data engineer connects them to the appropriate external data source.
+
+---
+
+## Complete Examples by Domain
+
+### SaaS Churn Detection
+
+```yaml
+primitives:
+
+  # User engagement
+  - id: user.days_since_last_login
+    type: int
+    source: auth_pipeline
+    entity: user_id
+    description: "Days since this user last authenticated to the platform"
+
+  - id: user.core_actions_30d
+    type: int
+    source: activity_pipeline
+    entity: user_id
+    description: "Count of core workflow actions (create, edit, share, export) in last 30 days"
+
+  - id: user.session_frequency_trend_8w
+    type: time_series<float>
+    source: activity_pipeline
+    entity: user_id
+    description: "Weekly session count over last 8 weeks, oldest to newest — enables trend detection"
+
+  # Account health
+  - id: account.active_user_rate_30d
+    type: float
+    source: activity_pipeline
+    entity: account_id
+    description: "Ratio of active users to total licensed seats in last 30 days, 0-1"
+
+  - id: account.seat_utilization_rate
+    type: float
+    source: billing_pipeline
+    entity: account_id
+    description: "Ratio of seats currently in use to seats licensed, 0-1"
+
+  - id: account.days_to_renewal
+    type: int
+    source: billing_pipeline
+    entity: account_id
+    description: "Days until next renewal date — negative if past due"
+
   - id: account.payment_failed_flag
     type: boolean
     source: billing_pipeline
     entity: account_id
-    description: True if most recent payment attempt failed
+    description: "True if the most recent payment attempt for this account failed"
 
-  - id: account.invoice_overdue_days
-    type: int
-    source: billing_pipeline
-    entity: account_id
-    description: Days the current invoice is overdue — 0 if not overdue
-
-  # Product signals
-  - id: account.api_call_volume_trend_8w
-    type: time_series<int>
-    source: api_pipeline
-    entity: account_id
-    description: Weekly API call count over last 8 weeks
-
-  - id: account.integration_active_count
-    type: int
-    source: product_pipeline
-    entity: account_id
-    description: Number of active third-party integrations configured
-
-  # External signals
-  - id: account.company_headcount_change_pct
+  - id: account.nps_score
     type: float?
-    source: firmographic_pipeline
+    source: survey_pipeline
     entity: account_id
-    description: Percentage change in employee headcount in last 6 months — from external firmographic data. Null if not available.
+    description: "Most recent NPS score, 0-10 — null if no survey response in last 180 days"
+
+  - id: account.support_ticket_rate_30d
+    type: float
+    source: support_pipeline
+    entity: account_id
+    description: "Support tickets per user per 30 days — elevated rate indicates friction"
 ```
 
----
-
-## Complete Example — AML Transaction Monitoring
+### Credit Risk Monitoring
 
 ```yaml
-# memintel_primitives_aml.yaml
-
 primitives:
 
-  # Customer behavior baseline
-  - id: customer.avg_transaction_value_90d
+  # Borrower financial health
+  - id: borrower.dscr
     type: float
-    source: transaction_pipeline
-    entity: customer_id
-    description: Average transaction value over trailing 90 days
+    source: financial_analysis_pipeline
+    entity: borrower_id
+    description: "Debt service coverage ratio — EBITDA divided by total debt service. Below 1.0 means insufficient cash flow to service debt."
 
-  - id: customer.transaction_velocity_30d
-    type: time_series<int>
-    source: transaction_pipeline
-    entity: customer_id
-    description: Daily transaction count over last 30 days — enables velocity change detection
+  - id: borrower.dscr_trend_4q
+    type: time_series<float>
+    source: financial_analysis_pipeline
+    entity: borrower_id
+    description: "DSCR across last 4 quarters, oldest to newest — enables declining trend detection"
 
-  - id: customer.counterparty_jurisdiction_risk
+  - id: borrower.leverage_ratio
     type: float
-    source: risk_pipeline
-    entity: customer_id
-    description: Weighted average jurisdiction risk score of recent counterparties, 0-1
+    source: financial_analysis_pipeline
+    entity: borrower_id
+    description: "Total debt divided by EBITDA — higher values indicate more leverage"
 
-  - id: customer.risk_tier
-    type: categorical
-    source: kyc_pipeline
-    entity: customer_id
-    description: Current KYC risk classification — standard | elevated | high
+  - id: borrower.management_sentiment_score
+    type: float?
+    source: nlp_pipeline
+    entity: borrower_id
+    description: "LLM-extracted sentiment from most recent management commentary, 0-1 — null if no commentary available"
 
-  # Transaction signals
-  - id: transaction.value_vs_baseline_ratio
+  # Loan and covenant signals
+  - id: loan.covenant_headroom_pct
     type: float
-    source: transaction_pipeline
-    entity: transaction_id
-    description: This transaction's value divided by customer's 90-day average — 1.0 = at baseline
+    source: covenant_monitoring_pipeline
+    entity: loan_id
+    description: "Distance to nearest covenant threshold as a percentage — negative means breach has occurred"
 
-  - id: transaction.structuring_signal
+  - id: loan.days_since_financial_submission
+    type: int
+    source: covenant_monitoring_pipeline
+    entity: loan_id
+    description: "Days since borrower last submitted required financial statements"
+```
+
+### Clinical Trial Safety
+
+```yaml
+primitives:
+
+  # Patient adverse event signals
+  - id: patient.ae_severity_score
     type: float
-    source: transaction_pipeline
-    entity: transaction_id
-    description: Probability score for structuring pattern — multiple sub-threshold transactions, 0-1
+    source: safety_database
+    entity: patient_id
+    description: "Composite adverse event severity score based on MedDRA grades, 0-1. Higher = more severe."
 
-  - id: transaction.narrative_risk_score
+  - id: patient.ae_relatedness_signal
     type: float
     source: nlp_pipeline
-    entity: transaction_id
-    description: LLM-extracted risk score from transaction narrative and reference fields, 0-1
+    entity: patient_id
+    description: "LLM-extracted probability that the most recent adverse event is related to the study drug, 0-1"
 
-  - id: transaction.narrative_confidence
+  - id: patient.ae_relatedness_confidence
     type: float
     source: nlp_pipeline
-    entity: transaction_id
-    description: Model confidence for narrative risk extraction, 0-1
+    entity: patient_id
+    description: "Confidence score for the relatedness assessment, 0-1"
+
+  - id: patient.sae_count_30d
+    type: int
+    source: safety_database
+    entity: patient_id
+    description: "Number of serious adverse events reported for this patient in the last 30 days"
+
+  # Trial-level signals
+  - id: trial.treatment_vs_comparator_ratio
+    type: float
+    source: edc_pipeline
+    entity: trial_id
+    description: "Ratio of AE incidence rate in treatment arm to AE incidence rate in comparator arm"
+
+  - id: trial.stopping_rule_proximity_score
+    type: float
+    source: safety_monitoring_pipeline
+    entity: trial_id
+    description: "How close current safety data is to the pre-specified stopping thresholds, 0-1. Values above 0.75 warrant DSMB review."
 
   # External regulatory signals
-  - id: customer.watchlist_match_score
+  - id: compound.faers_signal_score
     type: float
-    source: sanctions_pipeline
-    entity: customer_id
-    description: Highest fuzzy match score against current OFAC/UN/EU watchlists, 0-1
+    source: faers_pipeline
+    entity: compound_id
+    description: "Disproportionality signal score from FDA FAERS database for this compound class, 0-1"
 
-  - id: customer.jurisdiction_fatf_status
-    type: categorical
-    source: regulatory_pipeline
-    entity: customer_id
-    description: FATF status of customer primary jurisdiction — clean | grey | black
-
-  - id: typology.recent_match_score
-    type: float
-    source: regulatory_pipeline
-    entity: customer_id
-    description: Similarity of customer transaction pattern to recently published AML typologies, 0-1
+  - id: compound.fda_class_safety_alert_flag
+    type: boolean
+    source: fda_guidance_pipeline
+    entity: compound_id
+    description: "True if FDA has issued a safety communication for this compound class in the last 90 days"
 ```
 
 ---
 
-## Loading and Validating
+## Working with Your Data Engineer
 
-Primitives are loaded at startup from the file path set in `MEMINTEL_CONFIG_PATH`. The server validates the file on startup and refuses to start if any primitive definition is malformed.
+Your data engineer's job is to connect each primitive you declare to the actual data source. For each primitive you add:
 
-```bash
-# Set the config path
-export MEMINTEL_CONFIG_PATH="/etc/memintel/memintel_config.yaml"
+1. **You define it** — write the entry in `memintel_config.yaml` with the id, type, source, and description
+2. **They implement it** — write a resolver function that fetches the value for a given entity at a given point in time
+3. **You test it** — verify that monitoring tasks using this primitive produce sensible results
 
-# Start the server — will validate primitives on startup
-uvicorn app.main:app --host 0.0.0.0 --port 8000
-
-# Verify primitives loaded correctly
-curl http://localhost:8000/definitions?type=primitive
-```
-
-To validate without restarting:
-
-```bash
-python -c "
-from app.config.loader import ConfigLoader
-config = ConfigLoader('/etc/memintel/memintel_config.yaml')
-config.validate()
-print(f'{len(config.primitives)} primitives loaded successfully')
-"
-```
-
-### Startup Validation Checks
-
-The server performs these checks on every primitive at startup:
-
-| Check | What it verifies |
-|---|---|
-| ID format | Dot-namespaced, lowercase, no spaces |
-| Type validity | Type is in the declared type system |
-| Uniqueness | No duplicate IDs |
-| Description present | Non-empty description |
-| Source declared | Source pipeline is named |
-| Entity declared | Entity field is named |
-
-If any check fails, the server logs the specific primitive ID and the validation error, then refuses to start.
+A clear description makes the data engineer's job much easier. The better you describe what the signal measures and what its value range means, the faster they can implement it correctly.
 
 ---
 
 ## Common Mistakes
 
-**Defining concepts as primitives.** `customer.health_score`, `deal.risk_level`, `account.engagement` — these are concepts derived from multiple signals, not primitives. Register the underlying signals instead and let the compiler derive the concept.
+**Defining concepts as primitives.** "Deal health score", "customer risk level", "account engagement" — these are concepts that the compiler derives from primitive signals. Register the underlying signals instead.
 
-**Missing nullable declarations.** If a signal sometimes has no value, declare it as `type?`. A runtime null on a non-nullable primitive causes evaluation failures that are hard to diagnose.
+**Forgetting to mark nullable signals.** If a signal sometimes has no value (a customer with no calls, a borrower with no commentary), declare it as `type?`. An unexpected null on a non-nullable primitive causes evaluation errors.
 
-**Not registering time-series variants.** If you want the compiler to detect trends and trajectories, register `time_series<float>` variants alongside scalar types. A user saying "alert me when X is declining" cannot be resolved without a time-series primitive.
+**Missing time-series variants.** If you want to detect trends — "declining over the last 4 quarters", "increasing over the last 8 weeks" — register a `time_series<float>` or `time_series<int>` variant. The plain `float` version only tells you the current value.
 
-**Overly generic descriptions.** "A metric for the user" is not a useful description. Write descriptions that would allow a new developer to implement the resolver without asking questions.
-
-**Not pairing LLM signals with confidence scores.** An LLM-extracted score without a confidence score cannot be appropriately weighted by the compiler. Always register both.
+**Writing vague descriptions.** Your data engineer will implement exactly what you describe. "A metric for the account" will result in a question back to you. "Ratio of active users to total licensed seats in the last 30 days, expressed as a decimal between 0 and 1" will not.
 
 ---
 
 ## Next Step
 
-[Configure Guardrails →](/docs/admin-guide/admin-guardrails)
+→ [Step 3: Guardrails](/docs/admin-guide/admin-guardrails)
