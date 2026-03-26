@@ -52,7 +52,7 @@ from app.persistence.db import get_db
 from app.persistence.stores import get_task_store
 from app.registry.definitions import DefinitionRegistry
 from app.services.task_authoring import TaskAuthoringService
-from app.stores import TaskStore, DefinitionStore
+from app.stores import TaskStore, DefinitionStore, ContextStore
 
 log = structlog.get_logger(__name__)
 
@@ -81,6 +81,7 @@ async def get_task_authoring_service(
         task_store=task_store,
         definition_registry=definition_registry,
         guardrails=guardrails,
+        context_store=ContextStore(pool),
     )
 
 

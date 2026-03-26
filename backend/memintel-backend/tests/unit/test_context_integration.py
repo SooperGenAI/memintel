@@ -391,3 +391,130 @@ class TestCalibrationBiasAdjustment:
         assert result.recommended_params["value"] <= 1.0, (
             f"recommended_params['value'] ({result.recommended_params['value']}) exceeds 1.0"
         )
+
+
+# ── Tests 11–13: Production wiring and guardrails-bounds clamping ──────────────
+
+class TestProductionWiring:
+
+    def test_task_authoring_service_receives_context_store(self) -> None:
+        """
+        get_task_authoring_service must wire a ContextStore instance as
+        context_store — not None — so that context_version and
+        context_warning are populated on created tasks.
+        """
+        from app.api.routes.tasks import get_task_authoring_service
+        from app.stores import ContextStore
+
+        mock_pool    = MagicMock()
+        mock_request = MagicMock()
+        mock_request.app.state.guardrails_store = None
+
+        service = asyncio.run(
+            get_task_authoring_service(request=mock_request, pool=mock_pool)
+        )
+        assert isinstance(service._context_store, ContextStore), (
+            f"Expected ContextStore, got {type(service._context_store)}"
+        )
+
+    def test_calibration_service_receives_context_store(self) -> None:
+        """
+        get_calibration_service must wire a ContextStore instance as
+        context_store — not None — so that calibration_bias adjustments
+        fire when an active context with calibration_bias is defined.
+        """
+        from app.api.routes.conditions import get_calibration_service
+        from app.stores import ContextStore
+
+        mock_pool    = MagicMock()
+        mock_request = MagicMock()
+        mock_request.app.state.guardrails_store = MagicMock()
+
+        service = asyncio.run(
+            get_calibration_service(pool=mock_pool, request=mock_request)
+        )
+        assert isinstance(service._context_store, ContextStore), (
+            f"Expected ContextStore, got {type(service._context_store)}"
+        )
+
+    def test_bias_adjustment_respects_guardrails_bounds(self) -> None:
+        """
+        The bias adjustment (up to 10%) must never push the adjusted value
+        outside the strategy-specific guardrails threshold_bounds.
+
+        change strategy, value=0.14, direction=tighten:
+          adjust_params: step=0.1, new_val=0.24 (within bounds [0.01, 0.25])
+          statistically_optimal = 0.24
+          precision bias (high, factor=0.10): 0.24 * 1.10 = 0.264 → exceeds max
+          expected: context_adjusted clamped to 0.25; explanation mentions bound
+        """
+        _CHANGE_COND_BODY = {
+            "condition_id": "test.change_bounds",
+            "version": "1.0",
+            "concept_id": "test.concept",
+            "concept_version": "1.0",
+            "namespace": "personal",
+            "strategy": {
+                "type": "change",
+                "params": {"direction": "increase", "value": 0.14, "window": "1d"},
+            },
+        }
+
+        class _ChangeRegistry:
+            async def get(self, cid, version):
+                return dict(_CHANGE_COND_BODY)
+
+            async def register(self, body, namespace=None, definition_type=None):
+                return {}
+
+        class _ChangeBoundsGuardrailsStore:
+            def get_threshold_bounds(self, strategy: str) -> dict:
+                return {"min": 0.01, "max": 0.25}
+
+            def get_guardrails(self):
+                g = MagicMock()
+                g.constraints.on_bounds_exceeded = "clamp"
+                return g
+
+        class _PrecisionContextStore:
+            async def get_active(self):
+                return _make_context(
+                    calibration_bias=CalibrationBias(
+                        false_negative_cost="low",
+                        false_positive_cost="high",
+                    )
+                )
+
+        service = CalibrationService(
+            feedback_store=_MockFeedbackStore(),
+            token_store=_MockTokenStore(),
+            task_store=_MockTaskStoreCalibration(),
+            definition_registry=_ChangeRegistry(),
+            guardrails_store=_ChangeBoundsGuardrailsStore(),
+            context_store=_PrecisionContextStore(),
+        )
+        req = CalibrateRequest(
+            condition_id="test.change_bounds",
+            condition_version="1.0",
+            feedback_direction="tighten",
+        )
+        result = _calibrate_sync(service, req)
+
+        assert result.status == CalibrationStatus.RECOMMENDATION_AVAILABLE
+        assert result.statistically_optimal is not None
+        assert abs(result.statistically_optimal - 0.24) < 1e-9, (
+            f"Expected statistically_optimal=0.24, got {result.statistically_optimal}"
+        )
+        assert result.context_adjusted is not None
+        assert result.context_adjusted <= 0.25, (
+            f"context_adjusted ({result.context_adjusted}) exceeds guardrails bound 0.25"
+        )
+        assert result.recommended_params is not None
+        assert result.recommended_params["value"] <= 0.25, (
+            f"recommended_params['value'] ({result.recommended_params['value']}) "
+            "exceeds guardrails bound 0.25"
+        )
+        assert result.adjustment_explanation is not None
+        assert "guardrails bound" in result.adjustment_explanation, (
+            "adjustment_explanation must name the guardrails bound when clamping is applied"
+        )
