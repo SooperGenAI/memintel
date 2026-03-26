@@ -41,11 +41,13 @@ connectors:
     url: ${USER_DB_URL}
 ```
 
-### memintel_guardrails.yaml — Policy Config
+### memintel_guardrails.yaml — Policy Config (Seed and Fallback)
 
 **Who owns this: you, the admin.**
 
-This is your file. It defines the policy layer — which evaluation strategies are permitted, what parameter ranges are acceptable, how severity language maps to numeric thresholds. The path to this file is declared inside `memintel_config.yaml` under `guardrails_path`.
+This file defines the initial guardrails policy — which evaluation strategies are permitted, what parameter ranges are acceptable, how severity language maps to numeric thresholds. The path to this file is declared inside `memintel_config.yaml` under `guardrails_path`.
+
+For most deployments, you will manage guardrails via the API instead — which is simpler, takes effect immediately, and requires no server restart. The file is used as a seed on first deployment and as a fallback. Once you post guardrails via the API, the API version always takes precedence over the file.
 
 ```yaml
 # memintel_guardrails.yaml — your file as admin
@@ -94,16 +96,15 @@ As admin, your configuration work happens in two places:
 
 ## The Admin Setup Flow
 
-```
-Step 1 — Application Context    POST /context (API call, any time)
-         ↓
-Step 2 — Guardrails             memintel_guardrails.yaml (requires server restart)
-         ↓
-Step 3 — Validate               ask your data engineer to restart + smoke test
-```
+| Step | Action | Requires restart? |
+|---|---|---|
+| **Step 1** | `POST /context` — define application context | No |
+| **Step 2A** *(recommended)* | `POST /guardrails` — define guardrails via API | No |
+| **Step 2B** *(advanced)* | Edit `memintel_guardrails.yaml` on server | Yes |
+| **Step 3** | Ask your data engineer to verify startup and run smoke test | N/A |
 
 :::tip
-Application context can be updated at any time without a server restart — it takes effect immediately. Changes to `memintel_guardrails.yaml` require a server restart to take effect.
+Use Step 2A (API) unless you need to set guardrails before the server is running for the first time. The API is simpler, takes effect immediately, and keeps a full version history.
 :::
 
 ---
@@ -112,10 +113,13 @@ Application context can be updated at any time without a server restart — it t
 
 Both config files live on the server, outside the Git repository, and are excluded from version control via `.gitignore`. They are never committed to Git.
 
-| File | Typical location | In Git? | Restart needed? |
+| File / Store | Location | In Git? | Restart needed? |
 |---|---|---|---|
 | `memintel_config.yaml` | `/etc/memintel/memintel_config.yaml` | Never | Yes |
-| `memintel_guardrails.yaml` | `/etc/memintel/memintel_guardrails.yaml` | Never | Yes |
+| `memintel_guardrails.yaml` | `/etc/memintel/memintel_guardrails.yaml` | Never | Yes (file changes only) |
+| Guardrails via API | Stored in PostgreSQL database | N/A | No |
+
+Guardrails managed via `POST /guardrails` are stored in the database — same security boundary as all other Memintel data. The elevated key (`MEMINTEL_ELEVATED_KEY`) is required to post guardrails via API — treat it with the same care as database credentials.
 
 The path to `memintel_config.yaml` is set by the `MEMINTEL_CONFIG_PATH` environment variable on the server. The path to `memintel_guardrails.yaml` is declared inside `memintel_config.yaml` under `guardrails_path`. Ask your data engineer for both paths before you begin editing.
 
@@ -128,7 +132,8 @@ Never send these files by email or store them in a shared document. They contain
 ## Pages in This Guide
 
 - [Step 1 — Application Context](/docs/admin-guide/admin-application-context) — domain briefing via API call
-- [Step 2 — Guardrails](/docs/admin-guide/admin-guardrails) — your policy config file
+- [Step 2A — Guardrails via API](/docs/admin-guide/admin-guardrails-api) — recommended: manage guardrails without a server restart
+- [Step 2B — Guardrails via File](/docs/admin-guide/admin-guardrails) — advanced: edit `memintel_guardrails.yaml` directly
 
 ---
 

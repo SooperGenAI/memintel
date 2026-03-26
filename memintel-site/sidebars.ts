@@ -21,6 +21,7 @@ const sidebars: SidebarsConfig = {
       items: [
         'admin-guide/admin-overview',
         'admin-guide/admin-application-context',
+        'admin-guide/admin-guardrails-api',
         'admin-guide/admin-guardrails',
       ],
     },
@@ -63,6 +64,8 @@ const sidebars: SidebarsConfig = {
       collapsible: true,
       collapsed: false,
       items: [
+        'api-reference/context',
+        'api-reference/guardrails',
         'api-reference/tasks',
         'api-reference/execution',
         'api-reference/conditions',
