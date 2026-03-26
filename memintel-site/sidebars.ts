@@ -104,10 +104,9 @@ const sidebars: SidebarsConfig = {
   tutorialsSidebar: [
     {
       type: 'category',
-      label: 'Tutorials',
+      label: 'Case Studies',
       collapsible: false,
       items: [
-        'tutorials/application-context',
         'tutorials/deal-intelligence',
         'tutorials/xbrl-compliance',
         'tutorials/financial-risk-monitoring',
