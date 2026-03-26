@@ -2,6 +2,32 @@ import type {SidebarsConfig} from '@docusaurus/plugin-content-docs';
 
 const sidebars: SidebarsConfig = {
 
+  deploySidebar: [
+    {
+      type: 'category',
+      label: 'Deploy',
+      collapsible: false,
+      items: [
+        'intro/self-hosting',
+      ],
+    },
+  ],
+
+  adminSidebar: [
+    {
+      type: 'category',
+      label: 'Admin Guide',
+      collapsible: false,
+      items: [
+        'admin-guide/admin-overview',
+        'admin-guide/admin-application-context',
+        'admin-guide/admin-primitives',
+        'admin-guide/admin-guardrails',
+        'admin-guide/admin-actions',
+      ],
+    },
+  ],
+
   introSidebar: [
     {
       type: 'category',
