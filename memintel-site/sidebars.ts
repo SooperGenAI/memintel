@@ -87,6 +87,7 @@ const sidebars: SidebarsConfig = {
         'tutorials/financial-risk-monitoring',
         'tutorials/healthcare-payor-provider',
         'tutorials/devops-observability',
+        'tutorials/clinical-trials-fda',
       ],
     },
   ],
