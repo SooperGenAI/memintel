@@ -42,6 +42,7 @@ from app.api.routes import (
     decisions,
     execute,
     feedback,
+    guardrails_api,
     jobs,
     registry,
     tasks,
@@ -125,6 +126,23 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log.error("startup_failed", reason=f"DB pool creation failed: {e}")
         sys.exit(1)
+
+    # ── Step 6a: Check for API guardrails override in DB ───────────────────────
+    # If an admin has previously posted to POST /guardrails, the API version
+    # takes precedence over the file-based guardrails from this point forward.
+    # Failure here is non-fatal — file-based guardrails remain active.
+    try:
+        from app.stores.guardrails import GuardrailsStore as GuardrailsVersionStore
+        guardrails_version_store = GuardrailsVersionStore(db_pool)
+        db_reloaded = await guardrails_store.reload_from_db(guardrails_version_store)
+        if db_reloaded:
+            active_ver = guardrails_store.get_active_version()
+            log.info(
+                "guardrails_api_version_loaded",
+                version=active_ver.version if active_ver else None,
+            )
+    except Exception as e:
+        log.warning("guardrails_db_check_failed", reason=str(e))
 
     # ── Step 7: Redis client ───────────────────────────────────────────────────
     try:
@@ -240,3 +258,4 @@ app.include_router(feedback.router,         prefix="/feedback",   tags=["Feedbac
 app.include_router(actions.router,          prefix="/actions",    tags=["Actions"])
 app.include_router(jobs.router,             prefix="/jobs",       tags=["Jobs"])
 app.include_router(context.router,          prefix="/context",    tags=["Context"])
+app.include_router(guardrails_api.router,                        tags=["Guardrails"])

@@ -110,17 +110,19 @@ class TaskAuthoringService:
         llm_client: Any = None,
         max_retries: int | None = None,
         context_store: Any = None,
+        guardrails_store: Any = None,
     ) -> None:
-        self._task_store        = task_store
+        self._task_store          = task_store
         self._definition_registry = definition_registry
-        self._guardrails        = guardrails
-        self._llm               = llm_client if llm_client is not None else self._select_llm_client()
-        self._max_retries       = (
+        self._guardrails          = guardrails
+        self._llm                 = llm_client if llm_client is not None else self._select_llm_client()
+        self._max_retries         = (
             max_retries
             if max_retries is not None
             else int(os.environ.get("MAX_RETRIES", _MAX_RETRIES_DEFAULT))
         )
-        self._context_store     = context_store
+        self._context_store       = context_store
+        self._guardrails_store    = guardrails_store  # app.config.guardrails_store.GuardrailsStore
 
     @staticmethod
     def _select_llm_client() -> Any:
@@ -207,9 +209,17 @@ class TaskAuthoringService:
                 "Define context via POST /context for more accurate results."
             )
 
+        # Determine guardrails_version for the persisted task.
+        guardrails_version: str | None = None
+        if self._guardrails_store is not None:
+            active_gr_version = self._guardrails_store.get_active_version()
+            if active_gr_version is not None:
+                guardrails_version = active_gr_version.version
+
         # Register and persist.
         return await self._register_and_persist(
-            concept, condition, action, request, context_version, context_warning
+            concept, condition, action, request,
+            context_version, context_warning, guardrails_version,
         )
 
     async def update_task(self, task_id: str, body: TaskUpdateRequest) -> Task:
@@ -598,6 +608,7 @@ class TaskAuthoringService:
         request: CreateTaskRequest,
         context_version: str | None = None,
         context_warning: str | None = None,
+        guardrails_version: str | None = None,
     ) -> Task:
         """
         Register concept, condition, and action definitions; then create the Task.
@@ -643,6 +654,7 @@ class TaskAuthoringService:
             delivery=request.delivery,
             status=TaskStatus.ACTIVE,
             context_version=context_version,
+            guardrails_version=guardrails_version,
         )
         created_task = await self._task_store.create(task)
 
@@ -659,5 +671,6 @@ class TaskAuthoringService:
             condition_version=condition.version,
             action_id=action.action_id,
             context_version=context_version,
+            guardrails_version=guardrails_version,
         )
         return created_task

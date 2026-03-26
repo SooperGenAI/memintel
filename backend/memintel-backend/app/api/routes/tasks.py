@@ -82,6 +82,7 @@ async def get_task_authoring_service(
         definition_registry=definition_registry,
         guardrails=guardrails,
         context_store=ContextStore(pool),
+        guardrails_store=guardrails_store,
     )
 
 
