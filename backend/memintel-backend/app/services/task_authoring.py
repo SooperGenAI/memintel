@@ -51,9 +51,11 @@ from typing import Any
 import structlog
 
 from app.llm.fixtures import LLMFixtureClient
+from app.llm.prompts import build_context_prefix
 from app.models.action import ActionDefinition
 from app.models.concept import ConceptDefinition
 from app.models.condition import ConditionDefinition
+from app.models.context import ApplicationContext
 from app.models.errors import ErrorType, MemintelError, NotFoundError
 from app.models.guardrails import Guardrails
 from app.models.result import DryRunResult, ValidationResult
@@ -107,6 +109,7 @@ class TaskAuthoringService:
         guardrails: Guardrails | None = None,
         llm_client: Any = None,
         max_retries: int | None = None,
+        context_store: Any = None,
     ) -> None:
         self._task_store        = task_store
         self._definition_registry = definition_registry
@@ -117,6 +120,7 @@ class TaskAuthoringService:
             if max_retries is not None
             else int(os.environ.get("MAX_RETRIES", _MAX_RETRIES_DEFAULT))
         )
+        self._context_store     = context_store
 
     @staticmethod
     def _select_llm_client() -> Any:
@@ -151,7 +155,18 @@ class TaskAuthoringService:
                                                 invalid after all retries.
           MemintelError(ACTION_BINDING_FAILED) — action could not be resolved.
         """
-        context = self._build_context(request)
+        # Fetch active context — never raises; proceed without context on any error.
+        # This is the only point where the context store is consulted; context is
+        # never consulted on the evaluation path (invariant: context injection is
+        # task-creation-only).
+        app_context: ApplicationContext | None = None
+        if self._context_store is not None:
+            try:
+                app_context = await self._context_store.get_active()
+            except Exception as exc:
+                log.error("context_fetch_failed", error=str(exc))
+
+        context = self._build_context(request, app_context)
         llm_output = await self._generate_with_retries(request.intent, context)
 
         concept_dict   = llm_output.get("concept")   or {}
@@ -183,8 +198,19 @@ class TaskAuthoringService:
         if request.dry_run:
             return self._build_dry_run_result(concept, condition, action)
 
+        # Determine context_version and context_warning for the persisted task.
+        context_version = app_context.version if app_context is not None else None
+        context_warning: str | None = None
+        if app_context is None:
+            context_warning = (
+                "No application context defined. Task created without domain context. "
+                "Define context via POST /context for more accurate results."
+            )
+
         # Register and persist.
-        return await self._register_and_persist(concept, condition, action, request)
+        return await self._register_and_persist(
+            concept, condition, action, request, context_version, context_warning
+        )
 
     async def update_task(self, task_id: str, body: TaskUpdateRequest) -> Task:
         """
@@ -473,18 +499,30 @@ class TaskAuthoringService:
 
     # ── LLM prompt context ──────────────────────────────────────────────────────
 
-    def _build_context(self, request: CreateTaskRequest) -> dict:
+    def _build_context(
+        self,
+        request: CreateTaskRequest,
+        app_context: ApplicationContext | None = None,
+    ) -> dict:
         """
         Build the LLM prompt context.
 
         Injection order is STRICT — do not reorder:
+          [0] Application context prefix (dynamic domain knowledge; injected
+              BEFORE all other instructions when an active context exists)
           [1] Type system summary
           [2] Guardrails (strategy registry, bounds, priors, bias rules)
-          [3] Application context
+          [3] Application context (guardrails-level, reserved)
           [4] Parameter bias rules
           [5] Primitive registry
         """
         context: dict = {}
+
+        # [0] Application context prefix — injected first so the LLM sees domain
+        # knowledge before any technical instructions. Empty string when no context.
+        prefix = build_context_prefix(app_context)
+        if prefix:
+            context["context_prefix"] = prefix
 
         # [1] Type system summary — always present.
         context["type_system"] = _TYPE_SYSTEM_SUMMARY
@@ -558,6 +596,8 @@ class TaskAuthoringService:
         condition: ConditionDefinition,
         action: ActionDefinition,
         request: CreateTaskRequest,
+        context_version: str | None = None,
+        context_warning: str | None = None,
     ) -> Task:
         """
         Register concept, condition, and action definitions; then create the Task.
@@ -602,8 +642,14 @@ class TaskAuthoringService:
             entity_scope=request.entity_scope,
             delivery=request.delivery,
             status=TaskStatus.ACTIVE,
+            context_version=context_version,
         )
         created_task = await self._task_store.create(task)
+
+        # context_warning is not a DB field — set it on the returned object
+        # so callers receive the informational message when no context existed.
+        created_task.context_warning = context_warning
+
         log.info(
             "task_created",
             task_id=created_task.task_id,
@@ -612,5 +658,6 @@ class TaskAuthoringService:
             condition_id=condition.condition_id,
             condition_version=condition.version,
             action_id=action.action_id,
+            context_version=context_version,
         )
         return created_task

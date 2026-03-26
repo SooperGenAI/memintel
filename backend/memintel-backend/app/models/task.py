@@ -194,6 +194,14 @@ class Task(BaseModel):
     created_at: datetime | None = None
     last_triggered_at: datetime | None = None
 
+    # ── Context tracking ──────────────────────────────────────────────────────
+    # context_version — the active ApplicationContext version at task creation
+    # time. NULL when no context existed at creation. Stored in the DB.
+    # context_warning — informational only; populated on creation when no
+    # context was defined. Not stored in DB; not present on subsequent reads.
+    context_version: str | None = None
+    context_warning: str | None = None
+
     # ── Internal DB fields — excluded from API serialisation ──────────────────
     # These fields are written to / read from the DB by the store layer.
     # They must never appear in HTTP responses.
