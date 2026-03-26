@@ -104,12 +104,14 @@ class CalibrationService:
         task_store: Any,
         definition_registry: Any,
         guardrails_store: Any,
+        context_store: Any = None,
     ) -> None:
         self._feedback_store    = feedback_store
         self._token_store       = token_store
         self._task_store        = task_store
         self._registry          = definition_registry
         self._guardrails_store  = guardrails_store
+        self._context_store     = context_store
 
     # ── Public API ──────────────────────────────────────────────────────────────
 
@@ -178,6 +180,87 @@ class CalibrationService:
                 current_params=current_params,
             )
 
+        # 4b. Apply context calibration bias adjustment.
+        #
+        # Extract the primary numeric parameter for this strategy:
+        #   z_score  → "threshold"   (all others → "value")
+        # The statistically_optimal value is the raw output of adjust_params().
+        # When an active context with calibration_bias exists, we shift it by
+        # a small bias factor and clamp to [0.0, 1.0].
+        param_key = "threshold" if condition.strategy.type == StrategyType.Z_SCORE else "value"
+        statistically_optimal_val: float | None = None
+        context_adjusted_val: float | None = None
+        adjustment_explanation: str | None = None
+
+        if param_key in recommended:
+            statistically_optimal_val = float(recommended[param_key])
+
+            # Fetch active context — never raises; skip adjustment on any error.
+            app_context = None
+            if self._context_store is not None:
+                try:
+                    app_context = await self._context_store.get_active()
+                except Exception as exc:
+                    log.error("context_fetch_failed_calibration", error=str(exc))
+
+            if app_context is not None and app_context.calibration_bias is not None:
+                bias        = app_context.calibration_bias
+                bias_dir    = bias.bias_direction
+                _BIAS_FACTOR: dict[str, float] = {"high": 0.10, "medium": 0.05, "low": 0.02}
+
+                if bias_dir == "recall":
+                    bf           = _BIAS_FACTOR[bias.false_negative_cost]
+                    adjusted_val = statistically_optimal_val * (1.0 - bf)
+                    cost_label   = f"false_negative_cost={bias.false_negative_cost}"
+                elif bias_dir == "precision":
+                    bf           = _BIAS_FACTOR[bias.false_positive_cost]
+                    adjusted_val = statistically_optimal_val * (1.0 + bf)
+                    cost_label   = f"false_positive_cost={bias.false_positive_cost}"
+                else:  # balanced — no adjustment
+                    adjusted_val = statistically_optimal_val
+                    cost_label   = None
+
+                # Clamp to [0.0, 1.0] — bias must never produce an invalid threshold.
+                adjusted_val = max(0.0, min(1.0, adjusted_val))
+
+                if adjusted_val != statistically_optimal_val:
+                    context_adjusted_val = adjusted_val
+                    recommended = dict(recommended)
+                    recommended[param_key] = adjusted_val
+                    adjustment_explanation = (
+                        f"Threshold adjusted from {statistically_optimal_val:.4f} to "
+                        f"{adjusted_val:.4f} toward {bias_dir} based on application "
+                        f"context ({cost_label})"
+                    )
+
+            # Apply meaningful_windows constraint if configured.
+            if (
+                app_context is not None
+                and app_context.behavioural.meaningful_windows is not None
+            ):
+                mw      = app_context.behavioural.meaningful_windows
+                mw_min  = mw.get("min")
+                mw_max  = mw.get("max")
+                cur_val = float(recommended.get(param_key, statistically_optimal_val))
+                clamped = cur_val
+
+                if mw_min is not None and cur_val < float(mw_min):
+                    clamped = float(mw_min)
+                if mw_max is not None and cur_val > float(mw_max):
+                    clamped = float(mw_max)
+
+                if clamped != cur_val:
+                    recommended = dict(recommended)
+                    recommended[param_key] = clamped
+                    window_note = (
+                        f"Window parameter clamped to {clamped} per domain context "
+                        f"constraints (valid range: {mw_min}-{mw_max})"
+                    )
+                    if adjustment_explanation:
+                        adjustment_explanation += "; " + window_note
+                    else:
+                        adjustment_explanation = window_note
+
         # 5. Estimate directional impact
         impact = self._estimate_impact(direction)
 
@@ -200,6 +283,8 @@ class CalibrationService:
             recommended_params=recommended,
             delta_alerts=impact.delta_alerts,
             feedback_direction=direction,
+            statistically_optimal=statistically_optimal_val,
+            context_adjusted=context_adjusted_val,
         )
 
         return CalibrationResult(
@@ -208,6 +293,9 @@ class CalibrationService:
             recommended_params=recommended,
             calibration_token=token_string,
             impact=impact,
+            statistically_optimal=statistically_optimal_val,
+            context_adjusted=context_adjusted_val,
+            adjustment_explanation=adjustment_explanation,
         )
 
     async def apply_calibration(
