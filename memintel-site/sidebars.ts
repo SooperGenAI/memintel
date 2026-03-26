@@ -95,6 +95,8 @@ const sidebars: SidebarsConfig = {
       collapsible: false,
       items: [
         'python-sdk/python-overview',
+        'python-sdk/application-context',
+        'python-sdk/guardrails',
         'python-sdk/concept-execution',
         'python-sdk/condition-evaluation',
         'python-sdk/compilation',
