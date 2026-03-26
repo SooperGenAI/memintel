@@ -14,6 +14,7 @@ from app.stores.calibration_token import CalibrationTokenStore
 from app.stores.graph import GraphStore
 from app.stores.job import JobStore
 from app.stores.context import ContextStore
+from app.stores.guardrails import GuardrailsStore as GuardrailsVersionStore
 
 __all__ = [
     "TaskStore",
@@ -23,4 +24,5 @@ __all__ = [
     "GraphStore",
     "JobStore",
     "ContextStore",
+    "GuardrailsVersionStore",
 ]
