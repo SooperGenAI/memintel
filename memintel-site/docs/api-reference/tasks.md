@@ -160,7 +160,7 @@ PATCH /tasks/{id}
 Updates operational settings. Cannot modify concept logic, condition logic, strategy, or action logic — those require the calibration flow.
 
 :::note Rebinding
-Passing `conditionVersion` rebinds the task to a new condition version — the final step of the calibration flow. Verify the new version with `GET /conditions/{id}` and `POST /conditions/explain` before rebinding.
+Passing `conditionVersion` rebinds the task to a new condition version — the final step of the calibration flow. Verify the new version with `GET /conditions/&#123;id&#125;` and `POST /conditions/explain` before rebinding.
 :::
 
 ### Request Body (all optional, at least one required)
