@@ -27,6 +27,25 @@ User behavior → LLM signal → Memintel decision → Action
 
 ---
 
+## Recommended Setup Order
+
+Before creating your first task, follow this sequence to get the most accurate results from day one:
+
+:::tip
+Defining application context first gives the LLM the domain knowledge it needs to generate more accurate concept and condition definitions. Without context, task creation still works but produces generic definitions that may need more calibration cycles to reach production accuracy.
+:::
+
+| Step | Action | Endpoint |
+|---|---|---|
+| **1** (Recommended) | Define application context | `POST /context` |
+| **2** | Register primitives | `POST /definitions` (primitives) |
+| **3** | Create tasks | `POST /tasks` |
+| **4** | Execute | `POST /execute/full` |
+
+See the [Application Context](/docs/intro/application-context) page for full details on configuring context before you begin.
+
+---
+
 ## Step 1 — Minimal Setup
 
 Create a config file:

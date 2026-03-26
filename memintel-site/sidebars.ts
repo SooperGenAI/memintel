@@ -13,6 +13,7 @@ const sidebars: SidebarsConfig = {
         'intro/why-not-rules',
         'intro/quickstart',
         'intro/builder-workflow',
+        'intro/application-context',
         'intro/guardrails',
         'intro/patterns',
         'intro/common-mistakes',
@@ -82,6 +83,7 @@ const sidebars: SidebarsConfig = {
       label: 'Tutorials',
       collapsible: false,
       items: [
+        'tutorials/application-context',
         'tutorials/deal-intelligence',
         'tutorials/xbrl-compliance',
         'tutorials/financial-risk-monitoring',

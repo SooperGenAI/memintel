@@ -6,7 +6,47 @@ sidebar_label: End-to-End Workflow
 
 # End-to-End Workflow
 
-A complete walkthrough from task creation to calibration, showing how endpoints chain together and how the guardrails system shapes each step.
+A complete walkthrough from context configuration to calibration, showing how endpoints chain together and how the guardrails system shapes each step.
+
+---
+
+## Step 0 — Define Application Context (Recommended)
+
+Define domain context before creating primitives or tasks. This gives the LLM the domain knowledge it needs to compile accurate, domain-aware definitions from user intent.
+
+```typescript
+// POST /context
+const context = await client.context.create({
+  domain: {
+    description: "B2B SaaS churn detection for mid-market software companies.",
+    entities: [
+      { name: "user",    description: "individual platform user" },
+      { name: "account", description: "company-level subscription" }
+    ],
+    decisions: ["churn_risk", "expansion_opportunity"]
+  },
+  behavioural: {
+    data_cadence: "batch",
+    meaningful_windows: { min: "30d", max: "90d" },
+    regulatory: ["GDPR", "SOC2"]
+  },
+  semantic_hints: [
+    { term: "active user", definition: "logged in AND performed core action in last 14 days" },
+    { term: "high value account", definition: "ARR above $50,000" }
+  ],
+  calibration_bias: {
+    false_negative_cost: "high",
+    false_positive_cost: "medium"
+  }
+});
+
+// context.version → "v1"
+// context.calibration_bias.bias_direction → "recall" (auto-derived)
+```
+
+:::tip
+Skipping this step is valid — the system works without context. But task definitions will be less domain-accurate and will require more calibration cycles to reach production quality.
+:::
 
 ---
 

@@ -896,6 +896,43 @@ Back to ONGOING LOOP with improved detection sensitivity
 
 ---
 
+## Application Context
+
+Before creating primitives and tasks for this use case, define the application context so the LLM can compile accurate, domain-aware monitoring definitions.
+
+**SRE / SLO monitoring context:**
+
+```json
+{
+  "domain": {
+    "description": "Production reliability monitoring for a cloud-native SaaS platform. We monitor service health and SLO compliance to detect degradation before it impacts customers.",
+    "entities": [
+      { "name": "service",    "description": "a production microservice with defined SLOs" },
+      { "name": "deployment", "description": "a code or configuration change deployed to production" }
+    ],
+    "decisions": ["slo_breach_risk", "deployment_block", "incident_early_warning", "memory_leak"]
+  },
+  "behavioural": {
+    "data_cadence": "streaming",
+    "meaningful_windows": { "min": "5m", "max": "24h" }
+  },
+  "semantic_hints": [
+    { "term": "degradation",     "definition": "sustained increase in error rate or latency over at least 15 minutes" },
+    { "term": "high risk deploy", "definition": "includes DB migration, dependency update, or >500 lines changed" },
+    { "term": "peak traffic",    "definition": "14:00-18:00 UTC weekdays based on historical p95 traffic patterns" }
+  ],
+  "calibration_bias": {
+    "false_negative_cost": "high",
+    "false_positive_cost": "medium"
+  }
+}
+```
+
+The `streaming` cadence and short minimum window (`5m`) tell the compiler this is a real-time monitoring context — it will prefer event-driven strategies and short evaluation windows over batch approaches. The semantic hint for "degradation" means "alert me when this service shows early signs of degradation" compiles to a sustained trend condition, not a single-point threshold breach. `false_negative_cost: high` because a missed incident early warning is worse than a brief false page.
+
+---
+
+
 ## Role Summary
 
 | Step | Who | Deployment Risk | SLO Monitoring |
