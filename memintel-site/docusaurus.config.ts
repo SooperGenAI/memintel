@@ -122,6 +122,12 @@ const config: Config = {
         },
         {
           type: 'docSidebar',
+          sidebarId: 'adminSidebar',
+          position: 'left',
+          label: 'Admin Guide',
+        },
+        {
+          type: 'docSidebar',
           sidebarId: 'apiSidebar',
           position: 'left',
           label: 'API Reference',
