@@ -369,8 +369,8 @@ class EnvironmentConfig(BaseModel):
 
 class ConfigSchema(BaseModel):
     """
-    Top-level validated config object. Produced by ConfigLoader from the
-    merged YAML blocks in `memintel.config.md`.
+    Top-level validated config object. Produced by ConfigLoader from
+    `memintel_config.yaml`.
 
     Validation is two-pass:
       Pass 1 — schema validation (field types, enum values, credential format)
@@ -379,7 +379,7 @@ class ConfigSchema(BaseModel):
     ConfigLoader raises ConfigError on any failure. The system must not
     start with a partially valid config — all-or-nothing.
 
-    guardrails_path defaults to 'memintel.guardrails.md' in the same
+    guardrails_path defaults to 'memintel_guardrails.yaml' in the same
     directory as the config file. ConfigLoader resolves this to an absolute
     path before loading the guardrails.
     """
@@ -387,7 +387,7 @@ class ConfigSchema(BaseModel):
     connectors: dict[str, ConnectorConfig]
     llm: LLMConfig
     environment: EnvironmentConfig = Field(default_factory=EnvironmentConfig)
-    guardrails_path: str = "memintel.guardrails.md"
+    guardrails_path: str = "memintel_guardrails.yaml"
 
     @field_validator("primitives")
     @classmethod
