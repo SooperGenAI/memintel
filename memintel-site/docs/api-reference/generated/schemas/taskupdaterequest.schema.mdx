@@ -1,0 +1,33 @@
+---
+id: taskupdaterequest
+title: "TaskUpdateRequest"
+description: "All fields are optional. At least one field must be provided. The SDK must NOT require status or conditionVersion specifically — delivery and entity_scope are equally valid standalone updates. Condition logic, concept definition, strategy, and action logic MUST NOT be modified via this endpoint — those require the calibration flow (calibrate → apply → rebind)."
+sidebar_label: "TaskUpdateRequest"
+hide_title: true
+hide_table_of_contents: true
+schema: true
+sample: {"condition_version":"string","delivery":{"type":"webhook","channel":"string","endpoint":"string","workflow_id":"string"},"entity_scope":"string","status":"active"}
+custom_edit_url: null
+---
+
+import Schema from "@theme/Schema";
+import Heading from "@theme/Heading";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"TaskUpdateRequest"}
+>
+</Heading>
+
+
+
+All fields are optional. At least one field must be provided. The SDK must NOT require status or conditionVersion specifically — delivery and entity_scope are equally valid standalone updates. Condition logic, concept definition, strategy, and action logic MUST NOT be modified via this endpoint — those require the calibration flow (calibrate → apply → rebind).
+
+
+<Schema
+  {...require("./taskupdaterequest.Schema.json")}
+>
+  
+</Schema>
+            

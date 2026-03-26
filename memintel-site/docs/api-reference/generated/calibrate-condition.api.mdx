@@ -1,0 +1,70 @@
+---
+id: calibrate-condition
+title: "Generate calibration recommendation for a condition"
+description: "Analyses stored feedback and/or a target alert volume to recommend adjusted parameters. Returns no_recommendation for equals strategy (no numeric parameter to adjust) or when no valid adjustment exists within declared threshold_bounds. Does NOT modify the existing condition — call apply-calibration to create a new version."
+sidebar_label: "Generate calibration recommendation for a condition"
+hide_title: true
+hide_table_of_contents: true
+api: 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
+sidebar_class_name: "post api-method"
+info_path: docs/api-reference/generated/memintel-app-developer-api
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Generate calibration recommendation for a condition"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"post"}
+  path={"/conditions/calibrate"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Analyses stored feedback and/or a target alert volume to recommend adjusted parameters. Returns no_recommendation for equals strategy (no numeric parameter to adjust) or when no valid adjustment exists within declared threshold_bounds. Does NOT modify the existing condition — call apply-calibration to create a new version.
+
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  parameters={undefined}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./calibrate-condition.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./calibrate-condition.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

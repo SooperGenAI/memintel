@@ -1,0 +1,70 @@
+---
+id: submit-feedback
+title: "Submit feedback on a decision"
+description: "Records user feedback on a specific decision result. Feedback is stored and consumed by POST /conditions/calibrate to derive tighten/relax direction. false_positive → tighten (condition too sensitive). false_negative → relax (condition too strict). correct → no-op. Note: feedback on an equals strategy condition is stored but will always result in no_recommendation from calibrate (no numeric parameter to adjust)."
+sidebar_label: "Submit feedback on a decision"
+hide_title: true
+hide_table_of_contents: true
+api: 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
+sidebar_class_name: "post api-method"
+info_path: docs/api-reference/generated/memintel-app-developer-api
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Submit feedback on a decision"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"post"}
+  path={"/feedback/decision"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Records user feedback on a specific decision result. Feedback is stored and consumed by POST /conditions/calibrate to derive tighten/relax direction. false_positive → tighten (condition too sensitive). false_negative → relax (condition too strict). correct → no-op. Note: feedback on an equals strategy condition is stored but will always result in no_recommendation from calibrate (no numeric parameter to adjust).
+
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  parameters={undefined}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./submit-feedback.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./submit-feedback.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

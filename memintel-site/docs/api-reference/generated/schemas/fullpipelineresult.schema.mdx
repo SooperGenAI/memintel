@@ -1,0 +1,33 @@
+---
+id: fullpipelineresult
+title: "FullPipelineResult"
+description: "The result of a full pipeline execution (psi to phi to alpha). result (Rt) contains the concept execution output. decision (At) contains the condition evaluation output, including actions_triggered[]. Actions are nested inside decision, not at the top level of this object."
+sidebar_label: "FullPipelineResult"
+hide_title: true
+hide_table_of_contents: true
+schema: true
+sample: {"result":{"value":0,"type":"float","entity":"string","version":"string","deterministic":true,"timestamp":"2024-07-29T15:51:28.071Z","explanation":{"output":0,"contributions":{},"nodes":[{"node_id":"string","op":"string","inputs":{},"params":{},"output_value":0,"output_type":"string"}],"trace":[{}]}},"decision":{"value":true,"type":"boolean","entity":"string","condition_id":"string","condition_version":"string","timestamp":"2024-07-29T15:51:28.071Z","actions_triggered":[{"action_id":"string","action_version":"string","status":"triggered","payload_sent":{},"error":{"error":{"type":"syntax_error","message":"string","location":"string","suggestion":"string"}}}]},"dry_run":true,"entity":"string","timestamp":"2024-07-29T15:51:28.071Z"}
+custom_edit_url: null
+---
+
+import Schema from "@theme/Schema";
+import Heading from "@theme/Heading";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"FullPipelineResult"}
+>
+</Heading>
+
+
+
+The result of a full pipeline execution (psi to phi to alpha). result (Rt) contains the concept execution output. decision (At) contains the condition evaluation output, including actions_triggered[]. Actions are nested inside decision, not at the top level of this object.
+
+
+<Schema
+  {...require("./fullpipelineresult.Schema.json")}
+>
+  
+</Schema>
+            
