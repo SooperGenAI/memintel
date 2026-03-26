@@ -12,6 +12,7 @@ const sidebars: SidebarsConfig = {
         'intro/core-concepts',
         'intro/why-not-rules',
         'intro/quickstart',
+        'intro/self-hosting',
         'intro/builder-workflow',
         'intro/application-context',
         'intro/guardrails',
