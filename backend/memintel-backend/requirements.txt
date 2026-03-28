@@ -9,6 +9,8 @@ pydantic-settings==2.7.0
 # Database
 asyncpg==0.30.0
 alembic==1.14.0
+psycopg2-binary>=2.9.0
+
 
 # Cache
 # aioredis >= 2.x repackaged under redis.asyncio; use redis-py for both sync and async.
