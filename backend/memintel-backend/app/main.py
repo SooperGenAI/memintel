@@ -122,7 +122,7 @@ async def lifespan(app: FastAPI):
 
     # ── Step 6: DB pool ────────────────────────────────────────────────────────
     try:
-        db_pool = await create_db_pool()
+        db_pool = await create_db_pool(os.environ["DATABASE_URL"])
     except Exception as e:
         log.error("startup_failed", reason=f"DB pool creation failed: {e}")
         sys.exit(1)
@@ -146,7 +146,7 @@ async def lifespan(app: FastAPI):
 
     # ── Step 7: Redis client ───────────────────────────────────────────────────
     try:
-        redis = await create_redis_client()
+        redis = await create_redis_client(os.environ["REDIS_URL"])
     except Exception as e:
         log.error("startup_failed", reason=f"Redis client creation failed: {e}")
         sys.exit(1)
