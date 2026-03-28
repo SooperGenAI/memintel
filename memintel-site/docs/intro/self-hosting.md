@@ -493,5 +493,5 @@ This patch is applied to your local venv only and does not affect the source cod
 - [Quickstart](/docs/intro/quickstart) — your first task in 5 minutes
 - [API Reference](/docs/api-reference/overview) — full endpoint documentation
 - [GitHub Repository](https://github.com/SooperGenAI/memintel) — source code, issues, and discussions
- 
- <!-- deploy: 2026-03-28 18:42:22 -->
+
+ 
