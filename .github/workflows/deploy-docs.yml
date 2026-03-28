@@ -25,8 +25,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
-          cache-dependency-path: memintel-site/package-lock.json
       - name: Install dependencies
         run: npm install
         working-directory: memintel-site
@@ -36,24 +34,10 @@ jobs:
       - name: Build site
         run: npm run build
         working-directory: memintel-site
-      - name: List build output
-        run: find . -name "build" -type d 2>/dev/null | head -20
-      - name: Copy build to root
-        run: cp -r memintel-site/build ./build
-      - name: Debug filesystem
-        run: |
-          echo "=== Repo root ==="
-          ls -la
-          echo "=== memintel-site ==="
-          ls -la memintel-site/
-          echo "=== Looking for build ==="
-          find . -name "build" -type d
-      - name: Copy build to root
-        run: cp -r memintel-site/build ./build
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: build
+          path: memintel-site/build
   deploy:
     name: Deploy
     needs: build
