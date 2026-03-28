@@ -34,10 +34,10 @@ jobs:
       - name: Build site
         run: npm run build
         working-directory: memintel-site
+      - name: Copy build output
+        run: cp -r memintel-site/build build
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
-        with:
-          path: memintel-site/build
   deploy:
     name: Deploy
     needs: build
