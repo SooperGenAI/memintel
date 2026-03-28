@@ -37,11 +37,17 @@ jobs:
       - name: Copy build output
         run: cp -r memintel-site/build build
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-artifact@v4
+        with:
+          name: github-pages
+          path: build/
   deploy:
     name: Deploy
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
