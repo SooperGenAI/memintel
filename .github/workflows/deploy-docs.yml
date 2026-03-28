@@ -36,6 +36,8 @@ jobs:
       - name: Build site
         run: npm run build
         working-directory: memintel-site
+      - name: List build output
+        run: find . -name "build" -type d 2>/dev/null | head -20
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
