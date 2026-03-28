@@ -40,6 +40,16 @@ jobs:
         run: find . -name "build" -type d 2>/dev/null | head -20
       - name: Copy build to root
         run: cp -r memintel-site/build ./build
+      - name: Debug filesystem
+        run: |
+          echo "=== Repo root ==="
+          ls -la
+          echo "=== memintel-site ==="
+          ls -la memintel-site/
+          echo "=== Looking for build ==="
+          find . -name "build" -type d
+      - name: Copy build to root
+        run: cp -r memintel-site/build ./build
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
