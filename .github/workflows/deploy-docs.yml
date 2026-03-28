@@ -38,10 +38,12 @@ jobs:
         working-directory: memintel-site
       - name: List build output
         run: find . -name "build" -type d 2>/dev/null | head -20
+      - name: Copy build to root
+        run: cp -r memintel-site/build ./build
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ${{ github.workspace }}/memintel-site/build
+          path: build
   deploy:
     name: Deploy
     needs: build
