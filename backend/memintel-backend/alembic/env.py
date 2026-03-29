@@ -13,7 +13,14 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-DATABASE_URL = os.environ["DATABASE_URL"]
+_raw_url = os.environ["DATABASE_URL"]
+# create_async_engine requires the asyncpg dialect scheme.
+# DATABASE_URL may be plain postgresql:// or postgresql+psycopg2:// — normalise both.
+DATABASE_URL = (
+    _raw_url
+    .replace("postgresql+psycopg2://", "postgresql+asyncpg://")
+    .replace("postgresql://", "postgresql+asyncpg://", 1)
+)
 
 
 def run_migrations_offline() -> None:

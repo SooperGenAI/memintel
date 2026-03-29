@@ -398,6 +398,8 @@ class TypeChecker:
         if op_name == 'equals':
             # Carry the input categorical label set into the decision type.
             input_type = input_types.get('input', 'categorical')
+            if _strip_nullable(input_type) == 'string':
+                return 'decision<categorical>'
             return f'decision<{input_type}>'
 
         if op_name == 'unwrap_decision':

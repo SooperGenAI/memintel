@@ -1,0 +1,340 @@
+INFO:     Started server process [62200]
+INFO:     Waiting for application startup.
+{"primitives": 6, "strategies": 6, "event": "startup_complete", "level": "info", "timestamp": "2026-03-29T08:18:35.729233Z"}
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     127.0.0.1:57358 - "GET /actions/org.test_webhook_action?version=1.0 HTTP/1.1" 200 OK
+{"action_id": "org.test_webhook_action", "version": "1.0", "action_type": "webhook", "dry_run": false, "event": "trigger_action_request", "level": "info", "timestamp": "2026-03-29T08:19:01.413533Z"}
+{"action_id": "org.test_webhook_action", "condition_id": "high_score", "event": "action_triggered", "level": "info", "timestamp": "2026-03-29T08:19:01.413533Z"}
+{"action_id": "org.test_webhook_action", "version": "1.0", "entity": "acct_http_test", "dry_run": false, "status": "triggered", "event": "action_service_trigger", "level": "info", "timestamp": "2026-03-29T08:19:01.413533Z"}
+INFO:     127.0.0.1:57380 - "POST /actions/org.test_webhook_action/trigger HTTP/1.1" 200 OK
+{"action_id": "org.test_webhook_action", "version": "1.0", "action_type": "webhook", "dry_run": true, "event": "trigger_action_request", "level": "info", "timestamp": "2026-03-29T08:19:07.317768Z"}
+{"action_id": "org.test_webhook_action", "condition_id": "high_score", "event": "action_would_trigger", "level": "info", "timestamp": "2026-03-29T08:19:07.317768Z"}
+{"action_id": "org.test_webhook_action", "version": "1.0", "entity": "acct_http_test", "dry_run": true, "status": "would_trigger", "event": "action_service_trigger", "level": "info", "timestamp": "2026-03-29T08:19:07.317768Z"}
+INFO:     127.0.0.1:57397 - "POST /actions/org.test_webhook_action/trigger HTTP/1.1" 200 OK
+{"error_type": "not_found", "location": "action_id", "event": "memintel_error", "level": "warning", "timestamp": "2026-03-29T08:19:07.583266Z"}
+INFO:     127.0.0.1:57399 - "POST /actions/does.not.exist/trigger HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:51074 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51076 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51078 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51080 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51082 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51084 - "GET /conditions/high_revenue?version=1.0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58500 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58504 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54352 - "GET /concepts/revenue_value?version=1.0 HTTP/1.1" 404 Not Found
+{"id": "revenue_value", "version": "1.0", "entity_count": 3, "event": "execute_batch_request", "level": "info", "timestamp": "2026-03-29T08:25:44.802256Z"}
+{"concept_id": "revenue_value", "version": "1.0", "total": 3, "failed": 3, "event": "service_execute_batch", "level": "info", "timestamp": "2026-03-29T08:25:44.830811Z"}
+INFO:     127.0.0.1:54354 - "POST /execute/batch HTTP/1.1" 200 OK
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:25:54.942138Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"condition_id": "high_revenue", "condition_version": "1.0", "entity": "acme_corp", "decision": true, "event": "execute_static", "level": "info", "timestamp": "2026-03-29T08:25:54.945412Z"}
+INFO:     127.0.0.1:54356 - "POST /execute/static HTTP/1.1" 200 OK
+{"concept_id": "revenue_value", "version": "1.0", "entity": "small_co", "timestamp": "2026-03-29T08:25:55.409924Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"condition_id": "high_revenue", "condition_version": "1.0", "entity": "small_co", "decision": false, "event": "execute_static", "level": "info", "timestamp": "2026-03-29T08:25:55.409924Z"}
+INFO:     127.0.0.1:54358 - "POST /execute/static HTTP/1.1" 200 OK
+{"concept_id": "revenue_value", "version": "1.0", "entity": "mid_co", "timestamp": "2026-03-29T08:25:55.870335Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"condition_id": "high_revenue", "condition_version": "1.0", "entity": "mid_co", "decision": true, "event": "execute_static", "level": "info", "timestamp": "2026-03-29T08:25:55.870335Z"}
+INFO:     127.0.0.1:54360 - "POST /execute/static HTTP/1.1" 200 OK
+{"id": "revenue_value", "version": "1.0", "entity": "acme_corp", "event": "execute_range_request", "level": "info", "timestamp": "2026-03-29T08:26:02.772498Z"}
+{"exc_type": "TypeError", "exc_str": "float() argument must be a string or a real number, not 'NoneType'", "event": "unhandled_exception", "level": "error", "timestamp": "2026-03-29T08:26:02.772498Z"}
+INFO:     127.0.0.1:54362 - "POST /execute/range HTTP/1.1" 500 Internal Server Error
+ERROR:    Exception in ASGI application
+Traceback (most recent call last):
+  File "C:\Users\user\AppData\Local\Programs\Python\Python311\Lib\site-packages\uvicorn\protocols\http\httptools_impl.py", line 409, in run_asgi
+    result = await app(  # type: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\AppData\Local\Programs\Python\Python311\Lib\site-packages\uvicorn\middleware\proxy_headers.py", line 60, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\AppData\Local\Programs\Python\Python311\Lib\site-packages\fastapi\applications.py", line 1054, in __call__
+    await super().__call__(scope, receive, send)
+  File "C:\Users\user\AppData\Local\Programs\Python\Python311\Lib\site-packages\starlette\applications.py", line 113, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "C:\Users\user\AppData\Local\Programs\Python\Python311\Lib\site-packages\starlette\middleware\errors.py", line 187, in __call__
+    raise exc
+  File "C:\Users\user\AppData\Local\Programs\Python\Python311\Lib\site-packages\starlette\middleware\errors.py", line 165, in __call__
+    await self.app(scope, receive, _send)
+  File "C:\Users\user\AppData\Local\Programs\Python\Python311\Lib\site-packages\starlette\middleware\cors.py", line 85, in __call__
+    await self.app(scope, receive, send)
+  File "C:\Users\user\AppData\Local\Programs\Python\Python311\Lib\site-packages\starlette\middleware\exceptions.py", line 62, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "C:\Users\user\AppData\Local\Programs\Python\Python311\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "C:\Users\user\AppData\Local\Programs\Python\Python311\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "C:\Users\user\AppData\Local\Programs\Python\Python311\Lib\site-packages\starlette\routing.py", line 715, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "C:\Users\user\AppData\Local\Programs\Python\Python311\Lib\site-packages\starlette\routing.py", line 735, in app
+    await route.handle(scope, receive, send)
+  File "C:\Users\user\AppData\Local\Programs\Python\Python311\Lib\site-packages\starlette\routing.py", line 288, in handle
+    await self.app(scope, receive, send)
+  File "C:\Users\user\AppData\Local\Programs\Python\Python311\Lib\site-packages\starlette\routing.py", line 76, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "C:\Users\user\AppData\Local\Programs\Python\Python311\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "C:\Users\user\AppData\Local\Programs\Python\Python311\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "C:\Users\user\AppData\Local\Programs\Python\Python311\Lib\site-packages\starlette\routing.py", line 73, in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+  File "C:\Users\user\AppData\Local\Programs\Python\Python311\Lib\site-packages\fastapi\routing.py", line 301, in app
+    raw_response = await run_endpoint_function(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\AppData\Local\Programs\Python\Python311\Lib\site-packages\fastapi\routing.py", line 212, in run_endpoint_function
+    return await dependant.call(**values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Arun\Memintel\CC\backend\memintel-backend\app\api\routes\execute.py", line 335, in execute_range
+    return await service.execute_range(req)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Arun\Memintel\CC\backend\memintel-backend\app\services\execute.py", line 471, in execute_range
+    result = executor.execute_graph(
+             ^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Arun\Memintel\CC\backend\memintel-backend\app\runtime\executor.py", line 288, in execute_graph
+    result = self._run(
+             ^^^^^^^^^^
+  File "D:\Arun\Memintel\CC\backend\memintel-backend\app\runtime\executor.py", line 388, in _run
+    value = self._execute_node(
+            ^^^^^^^^^^^^^^^^^^^
+  File "D:\Arun\Memintel\CC\backend\memintel-backend\app\runtime\executor.py", line 479, in _execute_node
+    return op_fn(resolved_inputs, dict(node.params))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Arun\Memintel\CC\backend\memintel-backend\app\runtime\executor.py", line 136, in _op_z_score_op
+    return float(inputs["input"])
+           ^^^^^^^^^^^^^^^^^^^^^^
+TypeError: float() argument must be a string or a real number, not 'NoneType'
+{"id": "revenue_value", "version": "1.0", "entity": "acme_corp", "event": "execute_async_request", "level": "info", "timestamp": "2026-03-29T08:26:30.654513Z"}
+{"job_id": "d137c7c2-bc68-490b-98b6-1bd0981a5b27", "concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "event": "service_execute_async", "level": "info", "timestamp": "2026-03-29T08:26:30.682684Z"}
+INFO:     127.0.0.1:54364 - "POST /execute/async HTTP/1.1" 202 Accepted
+{"job_id": "d137c7c2-bc68-490b-98b6-1bd0981a5b27", "event": "get_job_request", "level": "info", "timestamp": "2026-03-29T08:26:39.301734Z"}
+INFO:     127.0.0.1:54366 - "GET /jobs/d137c7c2-bc68-490b-98b6-1bd0981a5b27 HTTP/1.1" 200 OK
+{"job_id": "d137c7c2-bc68-490b-98b6-1bd0981a5b27", "event": "cancel_job_request", "level": "info", "timestamp": "2026-03-29T08:26:47.498130Z"}
+INFO:     127.0.0.1:54368 - "DELETE /jobs/d137c7c2-bc68-490b-98b6-1bd0981a5b27 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50094 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50097 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56171 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56173 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56175 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56177 - "GET /openapi.json HTTP/1.1" 200 OK
+{"extra": {"condition_id": "high_revenue", "condition_version": "1.0", "feedback": "false_positive"}, "event": "submit_feedback_request", "level": "info", "timestamp": "2026-03-29T08:35:07.593772Z"}
+{"feedback_id": "cd7621bf-e3b0-47ab-8977-f56914ad376c", "condition_id": "high_revenue", "condition_version": "1.0", "entity": "acme_corp", "feedback": "false_positive", "event": "feedback_submitted", "level": "info", "timestamp": "2026-03-29T08:35:07.874297Z"}
+INFO:     127.0.0.1:65437 - "POST /feedback/decision HTTP/1.1" 200 OK
+{"extra": {"condition_id": "high_revenue", "condition_version": "1.0", "feedback": "false_positive"}, "event": "submit_feedback_request", "level": "info", "timestamp": "2026-03-29T08:35:08.369024Z"}
+{"feedback_id": "e930713a-42f6-4a20-b4eb-82e5b5b876e0", "condition_id": "high_revenue", "condition_version": "1.0", "entity": "big_co", "feedback": "false_positive", "event": "feedback_submitted", "level": "info", "timestamp": "2026-03-29T08:35:08.374713Z"}
+INFO:     127.0.0.1:65440 - "POST /feedback/decision HTTP/1.1" 200 OK
+{"extra": {"condition_id": "high_revenue", "condition_version": "1.0", "feedback": "false_positive"}, "event": "submit_feedback_request", "level": "info", "timestamp": "2026-03-29T08:35:08.828024Z"}
+{"feedback_id": "f963de59-0acf-42a3-8257-2faf520cc553", "condition_id": "high_revenue", "condition_version": "1.0", "entity": "mega_corp", "feedback": "false_positive", "event": "feedback_submitted", "level": "info", "timestamp": "2026-03-29T08:35:08.834256Z"}
+INFO:     127.0.0.1:65442 - "POST /feedback/decision HTTP/1.1" 200 OK
+{"extra": {"condition_id": "high_revenue", "condition_version": "1.0"}, "event": "calibrate_condition_request", "level": "info", "timestamp": "2026-03-29T08:35:45.910464Z"}
+{"condition_id": "high_revenue", "condition_version": "1.0", "strategy_type": "threshold", "old_params": {"direction": "above", "value": 10000.0}, "recommended_params": {"direction": "above", "value": 11000.0}, "delta_alerts": -1.0, "feedback_direction": "tighten", "statistically_optimal": 11000.0, "context_adjusted": null, "event": "calibration_recommended", "level": "info", "timestamp": "2026-03-29T08:35:45.930421Z"}
+INFO:     127.0.0.1:65447 - "POST /conditions/calibrate HTTP/1.1" 200 OK
+{"event": "apply_calibration_request", "level": "info", "timestamp": "2026-03-29T08:35:55.225895Z"}
+{"error_type": "conflict", "location": "high_revenue:1.1", "event": "memintel_error", "level": "warning", "timestamp": "2026-03-29T08:35:55.242108Z"}
+INFO:     127.0.0.1:65449 - "POST /conditions/apply-calibration HTTP/1.1" 409 Conflict
+{"event": "apply_calibration_request", "level": "info", "timestamp": "2026-03-29T08:36:03.794965Z"}
+{"error_type": "parameter_error", "location": "calibration_token", "event": "memintel_error", "level": "warning", "timestamp": "2026-03-29T08:36:03.797950Z"}
+INFO:     127.0.0.1:57116 - "POST /conditions/apply-calibration HTTP/1.1" 400 Bad Request
+{"extra": {"condition_id": "high_revenue", "condition_version": "1.0"}, "event": "calibrate_condition_request", "level": "info", "timestamp": "2026-03-29T08:36:20.076672Z"}
+{"condition_id": "high_revenue", "condition_version": "1.0", "strategy_type": "threshold", "old_params": {"direction": "above", "value": 10000.0}, "recommended_params": {"direction": "above", "value": 11000.0}, "delta_alerts": -1.0, "feedback_direction": "tighten", "statistically_optimal": 11000.0, "context_adjusted": null, "event": "calibration_recommended", "level": "info", "timestamp": "2026-03-29T08:36:20.076672Z"}
+INFO:     127.0.0.1:57122 - "POST /conditions/calibrate HTTP/1.1" 200 OK
+{"event": "apply_calibration_request", "level": "info", "timestamp": "2026-03-29T08:36:29.279805Z"}
+{"error_type": "not_found", "location": "high_revenue:1.2", "event": "memintel_error", "level": "warning", "timestamp": "2026-03-29T08:36:29.289899Z"}
+{"condition_id": "high_revenue", "previous_version": "1.0", "new_version": "1.2", "params_applied": {"value": 11000.0, "direction": "above"}, "tasks_pending_rebind": 0, "event": "calibration_applied", "level": "info", "timestamp": "2026-03-29T08:36:29.311376Z"}
+INFO:     127.0.0.1:57124 - "POST /conditions/apply-calibration HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60106 - "GET /conditions/high_revenue?version=1.2 HTTP/1.1" 200 OK
+{"event": "apply_calibration_request", "level": "info", "timestamp": "2026-03-29T08:36:47.278333Z"}
+{"error_type": "parameter_error", "location": "calibration_token", "event": "memintel_error", "level": "warning", "timestamp": "2026-03-29T08:36:47.278333Z"}
+INFO:     127.0.0.1:62506 - "POST /conditions/apply-calibration HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:57164 - "GET /openapi.json HTTP/1.1" 200 OK
+{"concept_id": "revenue_value", "version": "1.0", "event": "compile_request", "level": "info", "timestamp": "2026-03-29T08:41:52.843001Z"}
+{"concept_id": "revenue_value", "version": "1.0", "graph_id": "34243bca50718b89ad29eba35478ae67", "ir_hash": "1f85456eeaf8557e65d09fbbbd70206290330b48a5c1aee7635d757f0b14a420", "event": "compile_complete", "level": "info", "timestamp": "2026-03-29T08:41:52.981438Z"}
+INFO:     127.0.0.1:51610 - "POST /compile HTTP/1.1" 200 OK
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "event": "get_graph_request", "level": "info", "timestamp": "2026-03-29T08:42:08.789490Z"}
+INFO:     127.0.0.1:51613 - "GET /compile/graphs/34243bca50718b89ad29eba35478ae67 HTTP/1.1" 200 OK
+{"concept_id": "revenue_value", "version": "1.0", "event": "compile_request", "level": "info", "timestamp": "2026-03-29T08:42:09.530308Z"}
+{"concept_id": "revenue_value", "version": "1.0", "graph_id": "34243bca50718b89ad29eba35478ae67", "ir_hash": "1f85456eeaf8557e65d09fbbbd70206290330b48a5c1aee7635d757f0b14a420", "event": "compile_complete", "level": "info", "timestamp": "2026-03-29T08:42:09.536964Z"}
+INFO:     127.0.0.1:51615 - "POST /compile HTTP/1.1" 200 OK
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "event": "execute_graph_request", "level": "info", "timestamp": "2026-03-29T08:42:26.237822Z"}
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:42:26.247167Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 14, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "timestamp": "2026-03-29T08:42:26.247167Z", "event": "service_execute_graph", "level": "info"}
+INFO:     127.0.0.1:59255 - "POST /execute/graph HTTP/1.1" 200 OK
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:42:26.984963Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"condition_id": "high_revenue", "condition_version": "1.0", "entity": "acme_corp", "decision": false, "event": "execute_static", "level": "info", "timestamp": "2026-03-29T08:42:26.984963Z"}
+INFO:     127.0.0.1:59257 - "POST /execute/static HTTP/1.1" 200 OK
+{"concept_id": "revenue_value_mod", "version": "1.0", "event": "compile_request", "level": "info", "timestamp": "2026-03-29T08:42:43.737717Z"}
+{"concept_id": "revenue_value_mod", "version": "1.0", "graph_id": "8ccf1785dc13561cd0fe98af4a7c1e98", "ir_hash": "301d646f2ed316edbe9bbd3dc1d987836223244d280f0d331f05f51dcdb9c2f0", "event": "compile_complete", "level": "info", "timestamp": "2026-03-29T08:42:43.741022Z"}
+INFO:     127.0.0.1:59259 - "POST /compile HTTP/1.1" 200 OK
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "event": "execute_graph_request", "level": "info", "timestamp": "2026-03-29T08:42:44.181635Z"}
+{"error_type": "conflict", "location": "ir_hash", "event": "memintel_error", "level": "warning", "timestamp": "2026-03-29T08:42:44.186444Z"}
+INFO:     127.0.0.1:59261 - "POST /execute/graph HTTP/1.1" 409 Conflict
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:43:04.063574Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"condition_id": "high_revenue", "condition_version": "1.0", "entity": "acme_corp", "decision": true, "event": "execute_static", "level": "info", "timestamp": "2026-03-29T08:43:04.063574Z"}
+INFO:     127.0.0.1:59263 - "POST /execute/static HTTP/1.1" 200 OK
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:43:06.116006Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"condition_id": "high_revenue", "condition_version": "1.0", "entity": "acme_corp", "decision": true, "event": "execute_static", "level": "info", "timestamp": "2026-03-29T08:43:06.116006Z"}
+INFO:     127.0.0.1:59265 - "POST /execute/static HTTP/1.1" 200 OK
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:43:08.153903Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"condition_id": "high_revenue", "condition_version": "1.0", "entity": "acme_corp", "decision": true, "event": "execute_static", "level": "info", "timestamp": "2026-03-29T08:43:08.153903Z"}
+INFO:     127.0.0.1:59267 - "POST /execute/static HTTP/1.1" 200 OK
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:43:10.198447Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"condition_id": "high_revenue", "condition_version": "1.0", "entity": "acme_corp", "decision": true, "event": "execute_static", "level": "info", "timestamp": "2026-03-29T08:43:10.198447Z"}
+INFO:     127.0.0.1:59269 - "POST /execute/static HTTP/1.1" 200 OK
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:43:12.243189Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"condition_id": "high_revenue", "condition_version": "1.0", "entity": "acme_corp", "decision": true, "event": "execute_static", "level": "info", "timestamp": "2026-03-29T08:43:12.243189Z"}
+INFO:     127.0.0.1:59271 - "POST /execute/static HTTP/1.1" 200 OK
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:43:14.279420Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"condition_id": "high_revenue", "condition_version": "1.0", "entity": "acme_corp", "decision": true, "event": "execute_static", "level": "info", "timestamp": "2026-03-29T08:43:14.279420Z"}
+INFO:     127.0.0.1:59273 - "POST /execute/static HTTP/1.1" 200 OK
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:43:16.314143Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"condition_id": "high_revenue", "condition_version": "1.0", "entity": "acme_corp", "decision": true, "event": "execute_static", "level": "info", "timestamp": "2026-03-29T08:43:16.314143Z"}
+INFO:     127.0.0.1:59275 - "POST /execute/static HTTP/1.1" 200 OK
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:43:18.364860Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"condition_id": "high_revenue", "condition_version": "1.0", "entity": "acme_corp", "decision": true, "event": "execute_static", "level": "info", "timestamp": "2026-03-29T08:43:18.364860Z"}
+INFO:     127.0.0.1:59277 - "POST /execute/static HTTP/1.1" 200 OK
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:43:20.412740Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"condition_id": "high_revenue", "condition_version": "1.0", "entity": "acme_corp", "decision": true, "event": "execute_static", "level": "info", "timestamp": "2026-03-29T08:43:20.412740Z"}
+INFO:     127.0.0.1:59279 - "POST /execute/static HTTP/1.1" 200 OK
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:43:22.449843Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"condition_id": "high_revenue", "condition_version": "1.0", "entity": "acme_corp", "decision": true, "event": "execute_static", "level": "info", "timestamp": "2026-03-29T08:43:22.449843Z"}
+INFO:     127.0.0.1:59281 - "POST /execute/static HTTP/1.1" 200 OK
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "event": "execute_graph_request", "level": "info", "timestamp": "2026-03-29T08:43:24.488968Z"}
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:43:24.488968Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "timestamp": "2026-03-29T08:43:24.488968Z", "event": "service_execute_graph", "level": "info"}
+INFO:     127.0.0.1:59283 - "POST /execute/graph HTTP/1.1" 200 OK
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "event": "execute_graph_request", "level": "info", "timestamp": "2026-03-29T08:43:26.531547Z"}
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:43:26.531547Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "timestamp": "2026-03-29T08:43:26.531547Z", "event": "service_execute_graph", "level": "info"}
+INFO:     127.0.0.1:59285 - "POST /execute/graph HTTP/1.1" 200 OK
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "event": "execute_graph_request", "level": "info", "timestamp": "2026-03-29T08:43:28.574349Z"}
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:43:28.577631Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "timestamp": "2026-03-29T08:43:28.577631Z", "event": "service_execute_graph", "level": "info"}
+INFO:     127.0.0.1:59287 - "POST /execute/graph HTTP/1.1" 200 OK
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "event": "execute_graph_request", "level": "info", "timestamp": "2026-03-29T08:43:30.620683Z"}
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:43:30.620683Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "timestamp": "2026-03-29T08:43:30.620683Z", "event": "service_execute_graph", "level": "info"}
+INFO:     127.0.0.1:59289 - "POST /execute/graph HTTP/1.1" 200 OK
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "event": "execute_graph_request", "level": "info", "timestamp": "2026-03-29T08:43:32.664709Z"}
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:43:32.664709Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "timestamp": "2026-03-29T08:43:32.664709Z", "event": "service_execute_graph", "level": "info"}
+INFO:     127.0.0.1:59292 - "POST /execute/graph HTTP/1.1" 200 OK
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "event": "execute_graph_request", "level": "info", "timestamp": "2026-03-29T08:43:34.709144Z"}
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:43:34.711103Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "timestamp": "2026-03-29T08:43:34.711103Z", "event": "service_execute_graph", "level": "info"}
+INFO:     127.0.0.1:59294 - "POST /execute/graph HTTP/1.1" 200 OK
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "event": "execute_graph_request", "level": "info", "timestamp": "2026-03-29T08:43:36.734176Z"}
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:43:36.734176Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "timestamp": "2026-03-29T08:43:36.734176Z", "event": "service_execute_graph", "level": "info"}
+INFO:     127.0.0.1:59296 - "POST /execute/graph HTTP/1.1" 200 OK
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "event": "execute_graph_request", "level": "info", "timestamp": "2026-03-29T08:43:38.778157Z"}
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:43:38.778157Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "timestamp": "2026-03-29T08:43:38.778157Z", "event": "service_execute_graph", "level": "info"}
+INFO:     127.0.0.1:59299 - "POST /execute/graph HTTP/1.1" 200 OK
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "event": "execute_graph_request", "level": "info", "timestamp": "2026-03-29T08:43:40.819968Z"}
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:43:40.822525Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "timestamp": "2026-03-29T08:43:40.822525Z", "event": "service_execute_graph", "level": "info"}
+INFO:     127.0.0.1:59301 - "POST /execute/graph HTTP/1.1" 200 OK
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "event": "execute_graph_request", "level": "info", "timestamp": "2026-03-29T08:43:42.861257Z"}
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:43:42.863818Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "timestamp": "2026-03-29T08:43:42.863818Z", "event": "service_execute_graph", "level": "info"}
+INFO:     127.0.0.1:59303 - "POST /execute/graph HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62582 - "GET /conditions/high_revenue?version=1.0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62584 - "GET /conditions/high_revenue?version=1.0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62586 - "GET /conditions/high_revenue?version=1.0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62588 - "GET /conditions/high_revenue?version=1.0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62590 - "GET /conditions/high_revenue?version=1.0 HTTP/1.1" 200 OK
+{"concept_id": "revenue_value", "version": "1.0", "entity": "x", "timestamp": "2026-03-29T08:44:50.544879Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"condition_id": "high_revenue", "condition_version": "1.0", "entity": "x", "decision": false, "event": "execute_static", "level": "info", "timestamp": "2026-03-29T08:44:50.544879Z"}
+INFO:     127.0.0.1:62592 - "POST /execute/static HTTP/1.1" 200 OK
+{"concept_id": "revenue_value", "version": "1.0", "entity": "x", "timestamp": "2026-03-29T08:44:52.586592Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"condition_id": "high_revenue", "condition_version": "1.0", "entity": "x", "decision": false, "event": "execute_static", "level": "info", "timestamp": "2026-03-29T08:44:52.586592Z"}
+INFO:     127.0.0.1:64349 - "POST /execute/static HTTP/1.1" 200 OK
+{"concept_id": "revenue_value", "version": "1.0", "entity": "x", "timestamp": "2026-03-29T08:44:54.634259Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"condition_id": "high_revenue", "condition_version": "1.0", "entity": "x", "decision": false, "event": "execute_static", "level": "info", "timestamp": "2026-03-29T08:44:54.634259Z"}
+INFO:     127.0.0.1:64351 - "POST /execute/static HTTP/1.1" 200 OK
+{"concept_id": "revenue_value", "version": "1.0", "entity": "x", "timestamp": "2026-03-29T08:44:56.700651Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"condition_id": "high_revenue", "condition_version": "1.0", "entity": "x", "decision": false, "event": "execute_static", "level": "info", "timestamp": "2026-03-29T08:44:56.700651Z"}
+INFO:     127.0.0.1:64353 - "POST /execute/static HTTP/1.1" 200 OK
+{"concept_id": "revenue_value", "version": "1.0", "entity": "x", "timestamp": "2026-03-29T08:44:58.747888Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"condition_id": "high_revenue", "condition_version": "1.0", "entity": "x", "decision": false, "event": "execute_static", "level": "info", "timestamp": "2026-03-29T08:44:58.747888Z"}
+INFO:     127.0.0.1:64355 - "POST /execute/static HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62975 - "GET /conditions/high_revenue?version=1.0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62976 - "GET /conditions/high_revenue?version=1.0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62977 - "GET /conditions/high_revenue?version=1.0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62978 - "GET /conditions/high_revenue?version=1.0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62979 - "GET /conditions/high_revenue?version=1.0 HTTP/1.1" 200 OK
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:45:54.149363Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"condition_id": "high_revenue", "condition_version": "1.0", "entity": "acme_corp", "decision": true, "event": "execute_static", "level": "info", "timestamp": "2026-03-29T08:45:54.149363Z"}
+INFO:     127.0.0.1:62980 - "POST /execute/static HTTP/1.1" 200 OK
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "event": "execute_graph_request", "level": "info", "timestamp": "2026-03-29T08:45:54.151396Z"}
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:45:54.151396Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "timestamp": "2026-03-29T08:45:54.151396Z", "event": "service_execute_graph", "level": "info"}
+INFO:     127.0.0.1:62981 - "POST /execute/graph HTTP/1.1" 200 OK
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:45:54.151396Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"condition_id": "high_revenue", "condition_version": "1.0", "entity": "acme_corp", "decision": true, "event": "execute_static", "level": "info", "timestamp": "2026-03-29T08:45:54.151396Z"}
+INFO:     127.0.0.1:62982 - "POST /execute/static HTTP/1.1" 200 OK
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:45:54.151396Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"condition_id": "high_revenue", "condition_version": "1.0", "entity": "acme_corp", "decision": true, "event": "execute_static", "level": "info", "timestamp": "2026-03-29T08:45:54.151396Z"}
+INFO:     127.0.0.1:62983 - "POST /execute/static HTTP/1.1" 200 OK
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:45:54.160943Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"condition_id": "high_revenue", "condition_version": "1.0", "entity": "acme_corp", "decision": true, "event": "execute_static", "level": "info", "timestamp": "2026-03-29T08:45:54.160943Z"}
+INFO:     127.0.0.1:62984 - "POST /execute/static HTTP/1.1" 200 OK
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:45:54.166456Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"condition_id": "high_revenue", "condition_version": "1.0", "entity": "acme_corp", "decision": true, "event": "execute_static", "level": "info", "timestamp": "2026-03-29T08:45:54.166456Z"}
+INFO:     127.0.0.1:62985 - "POST /execute/static HTTP/1.1" 200 OK
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:45:54.172478Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"condition_id": "high_revenue", "condition_version": "1.0", "entity": "acme_corp", "decision": true, "event": "execute_static", "level": "info", "timestamp": "2026-03-29T08:45:54.172478Z"}
+INFO:     127.0.0.1:62986 - "POST /execute/static HTTP/1.1" 200 OK
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:45:54.176492Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"condition_id": "high_revenue", "condition_version": "1.0", "entity": "acme_corp", "decision": true, "event": "execute_static", "level": "info", "timestamp": "2026-03-29T08:45:54.176492Z"}
+INFO:     127.0.0.1:62987 - "POST /execute/static HTTP/1.1" 200 OK
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:45:54.176492Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"condition_id": "high_revenue", "condition_version": "1.0", "entity": "acme_corp", "decision": true, "event": "execute_static", "level": "info", "timestamp": "2026-03-29T08:45:54.176492Z"}
+INFO:     127.0.0.1:62988 - "POST /execute/static HTTP/1.1" 200 OK
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:45:54.182885Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"condition_id": "high_revenue", "condition_version": "1.0", "entity": "acme_corp", "decision": true, "event": "execute_static", "level": "info", "timestamp": "2026-03-29T08:45:54.182885Z"}
+INFO:     127.0.0.1:62989 - "POST /execute/static HTTP/1.1" 200 OK
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:45:54.188950Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"condition_id": "high_revenue", "condition_version": "1.0", "entity": "acme_corp", "decision": true, "event": "execute_static", "level": "info", "timestamp": "2026-03-29T08:45:54.188950Z"}
+INFO:     127.0.0.1:62990 - "POST /execute/static HTTP/1.1" 200 OK
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:45:54.188950Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"condition_id": "high_revenue", "condition_version": "1.0", "entity": "acme_corp", "decision": true, "event": "execute_static", "level": "info", "timestamp": "2026-03-29T08:45:54.188950Z"}
+INFO:     127.0.0.1:62991 - "POST /execute/static HTTP/1.1" 200 OK
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "event": "execute_graph_request", "level": "info", "timestamp": "2026-03-29T08:45:54.188950Z"}
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:45:54.188950Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "timestamp": "2026-03-29T08:45:54.188950Z", "event": "service_execute_graph", "level": "info"}
+INFO:     127.0.0.1:62992 - "POST /execute/graph HTTP/1.1" 200 OK
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "event": "execute_graph_request", "level": "info", "timestamp": "2026-03-29T08:45:54.188950Z"}
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:45:54.188950Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "timestamp": "2026-03-29T08:45:54.188950Z", "event": "service_execute_graph", "level": "info"}
+INFO:     127.0.0.1:62993 - "POST /execute/graph HTTP/1.1" 200 OK
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "event": "execute_graph_request", "level": "info", "timestamp": "2026-03-29T08:45:54.198127Z"}
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:45:54.199370Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "timestamp": "2026-03-29T08:45:54.201900Z", "event": "service_execute_graph", "level": "info"}
+INFO:     127.0.0.1:62994 - "POST /execute/graph HTTP/1.1" 200 OK
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "event": "execute_graph_request", "level": "info", "timestamp": "2026-03-29T08:45:54.203860Z"}
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:45:54.203860Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "timestamp": "2026-03-29T08:45:54.203860Z", "event": "service_execute_graph", "level": "info"}
+INFO:     127.0.0.1:62995 - "POST /execute/graph HTTP/1.1" 200 OK
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "event": "execute_graph_request", "level": "info", "timestamp": "2026-03-29T08:45:54.207056Z"}
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:45:54.207056Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "timestamp": "2026-03-29T08:45:54.207056Z", "event": "service_execute_graph", "level": "info"}
+INFO:     127.0.0.1:62996 - "POST /execute/graph HTTP/1.1" 200 OK
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "event": "execute_graph_request", "level": "info", "timestamp": "2026-03-29T08:45:54.208715Z"}
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:45:54.208715Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "timestamp": "2026-03-29T08:45:54.208715Z", "event": "service_execute_graph", "level": "info"}
+INFO:     127.0.0.1:62997 - "POST /execute/graph HTTP/1.1" 200 OK
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "event": "execute_graph_request", "level": "info", "timestamp": "2026-03-29T08:45:54.208715Z"}
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:45:54.214065Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "timestamp": "2026-03-29T08:45:54.214065Z", "event": "service_execute_graph", "level": "info"}
+INFO:     127.0.0.1:62998 - "POST /execute/graph HTTP/1.1" 200 OK
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "event": "execute_graph_request", "level": "info", "timestamp": "2026-03-29T08:45:54.214065Z"}
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:45:54.214065Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "timestamp": "2026-03-29T08:45:54.218020Z", "event": "service_execute_graph", "level": "info"}
+INFO:     127.0.0.1:62999 - "POST /execute/graph HTTP/1.1" 200 OK
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "event": "execute_graph_request", "level": "info", "timestamp": "2026-03-29T08:45:54.219599Z"}
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:45:54.220729Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "timestamp": "2026-03-29T08:45:54.220729Z", "event": "service_execute_graph", "level": "info"}
+INFO:     127.0.0.1:63000 - "POST /execute/graph HTTP/1.1" 200 OK
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "event": "execute_graph_request", "level": "info", "timestamp": "2026-03-29T08:45:54.220729Z"}
+{"concept_id": "revenue_value", "version": "1.0", "entity": "acme_corp", "timestamp": "2026-03-29T08:45:54.220729Z", "deterministic": false, "cache_hit": false, "compute_time_ms": 0, "result_type": "float", "event": "concept_executed", "level": "info"}
+{"graph_id": "34243bca50718b89ad29eba35478ae67", "entity": "acme_corp", "timestamp": "2026-03-29T08:45:54.220729Z", "event": "service_execute_graph", "level": "info"}
+INFO:     127.0.0.1:63001 - "POST /execute/graph HTTP/1.1" 200 OK

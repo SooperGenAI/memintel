@@ -482,3 +482,34 @@ class TestNoCrossCallDedup:
         results = trigger.trigger_bound_actions(true_decision, [action])
         assert results[0].status == ActionTriggeredStatus.SKIPPED
         assert len(call_count) == 0  # not dispatched
+
+
+# ── 9. None-input guard on numeric operators ──────────────────────────────────
+
+class TestNoneInputGuard:
+    """
+    Operators must not crash when an upstream primitive_fetch returns None
+    (e.g. missing_data_policy='null' and the connector found no data).
+
+    Each test calls the operator function directly so we can check the
+    returned value without building a full graph.
+    """
+
+    def test_z_score_op_none_input_propagates_none(self):
+        """z_score_op with None input and no policy → returns None (null propagation)."""
+        from app.runtime.executor import _op_z_score_op
+        result = _op_z_score_op({"input": None}, {})
+        assert result is None
+
+    def test_normalize_none_input_zero_policy_substitutes_zero(self):
+        """normalize with None input and missing_data_policy='zero' → normalize(0.0) = 0.0."""
+        from app.runtime.executor import _op_normalize
+        # _guard_none sees policy='zero' → substitutes 0.0 → normalize(0.0) = 0.0/(1+0.0) = 0.0
+        result = _op_normalize({"input": None}, {"missing_data_policy": "zero"})
+        assert result == 0.0
+
+    def test_add_none_input_propagates_none(self):
+        """Binary operator with one None operand propagates None regardless of other input."""
+        from app.runtime.executor import _op_add
+        assert _op_add({"a": None, "b": 5.0}, {}) is None
+        assert _op_add({"a": 3.0,  "b": None}, {}) is None

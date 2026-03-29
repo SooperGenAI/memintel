@@ -55,7 +55,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 import asyncpg
-import aioredis
+import redis.asyncio as aioredis
 from fastapi import FastAPI, Request
 
 log = logging.getLogger(__name__)

@@ -52,7 +52,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from pydantic import BaseModel, Field, FieldValidationInfo, field_validator, model_validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 
 
 # ── Credential validation constant ────────────────────────────────────────────
@@ -235,7 +235,7 @@ class ConnectorConfig(BaseModel):
     @field_validator("password", mode="before")
     @classmethod
     def _validate_password(
-        cls, v: str | None, info: FieldValidationInfo
+        cls, v: str | None, info: ValidationInfo
     ) -> str | None:
         # Skip format check when re-validating after env var resolution
         if info.context and info.context.get("resolved"):
@@ -297,7 +297,7 @@ class LLMConfig(BaseModel):
 
     @field_validator("api_key")
     @classmethod
-    def _validate_api_key(cls, v: str, info: FieldValidationInfo) -> str:
+    def _validate_api_key(cls, v: str, info: ValidationInfo) -> str:
         # Skip format check when re-validating after env var resolution
         if info.context and info.context.get("resolved"):
             return v

@@ -153,7 +153,7 @@ async def lifespan(app: FastAPI):
 
     # ── Store singletons on app.state ──────────────────────────────────────────
     app.state.config = config
-    app.state.db_pool = db_pool
+    app.state.db = db_pool
     app.state.redis = redis
     app.state.guardrails_store = guardrails_store
     app.state.primitive_registry = primitive_registry
@@ -251,11 +251,11 @@ app.include_router(execute.router,          prefix="/execute",    tags=["Executi
 app.include_router(compile.router,          prefix="/compile",    tags=["Compiler"])
 app.include_router(registry.router,         prefix="/registry",   tags=["Registry"])
 app.include_router(agents.router,           prefix="/agents",     tags=["Agents"])
-app.include_router(tasks.router,            prefix="/tasks",      tags=["Tasks"])
-app.include_router(conditions.router,       prefix="/conditions", tags=["Conditions"])
-app.include_router(decisions.router,        prefix="/decisions",  tags=["Decisions"])
-app.include_router(feedback.router,         prefix="/feedback",   tags=["Feedback"])
-app.include_router(actions.router,          prefix="/actions",    tags=["Actions"])
+app.include_router(tasks.router,                                  tags=["Tasks"])
+app.include_router(conditions.router,                             tags=["Conditions"])
+app.include_router(decisions.router,                              tags=["Decisions"])
+app.include_router(feedback.router,                               tags=["Feedback"])
+app.include_router(actions.router,                                tags=["Actions"])
 app.include_router(jobs.router,             prefix="/jobs",       tags=["Jobs"])
-app.include_router(context.router,          prefix="/context",    tags=["Context"])
+app.include_router(context.router,                                tags=["Context"])
 app.include_router(guardrails_api.router,                        tags=["Guardrails"])

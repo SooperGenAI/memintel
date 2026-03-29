@@ -1,7 +1,7 @@
 """
 tests/unit/test_data_resolver.py
 ──────────────────────────────────────────────────────────────────────────────
-Unit tests for DataResolver, MockConnector, and the retry helper.
+Unit tests for DataResolver, MockConnector, StaticDataConnector, and retry.
 
 Coverage:
   1. timestamp fetch returns point-in-time data (not current state)
@@ -14,6 +14,11 @@ Coverage:
   8. rate limit: retries with delay (treated as transient)
   9. batch: multiple primitives for same entity fetched in one request
  10. request-scoped cache: same primitive+entity fetched only once per request
+ 11. StaticDataConnector: fetch() returns value for known primitive
+ 12. StaticDataConnector: fetch() returns None for unknown primitive
+ 13. StaticDataConnector: ignores entity_id and timestamp
+ 14. StaticDataConnector: fetch_batch() returns full dict
+ 15. StaticDataConnector: fetch_batch() returns None for unknown names
 
 Test isolation: every test creates its own MockConnector and DataResolver.
 No shared mutable state between tests.
@@ -28,6 +33,7 @@ from app.runtime.data_resolver import (
     DataResolver,
     MockConnector,
     RateLimitConnectorError,
+    StaticDataConnector,
     TransientConnectorError,
 )
 
@@ -331,3 +337,61 @@ class TestRequestScopedCache:
 
         # Two distinct keys → 2 connector calls total.
         assert connector.fetch_call_count == 2
+
+
+# ── 11-15. StaticDataConnector ────────────────────────────────────────────────
+
+class TestStaticDataConnector:
+    """StaticDataConnector — in-memory connector for /execute/static tests."""
+
+    def test_fetch_returns_value_for_known_primitive(self):
+        connector = StaticDataConnector({"revenue": 15000.0, "score": 0.9})
+        assert connector.fetch("revenue", "any_entity", None) == 15000.0
+
+    def test_fetch_returns_none_for_unknown_primitive(self):
+        connector = StaticDataConnector({"revenue": 15000.0})
+        assert connector.fetch("missing_prim", "any_entity", None) is None
+
+    def test_fetch_ignores_entity_id_and_timestamp(self):
+        connector = StaticDataConnector({"revenue": 42.0})
+        # Different entity_id and timestamp — value must still be returned.
+        assert connector.fetch("revenue", "entity_A", "2024-01-01T00:00:00Z") == 42.0
+        assert connector.fetch("revenue", "entity_B", None) == 42.0
+        assert connector.fetch("revenue", "entity_C", "2099-12-31T23:59:59Z") == 42.0
+
+    def test_fetch_batch_returns_dict_of_all_requested_names(self):
+        connector = StaticDataConnector({"revenue": 100.0, "score": 0.5, "tier": "gold"})
+        result = connector.fetch_batch(["revenue", "score"], "ent", None)
+        assert result == {"revenue": 100.0, "score": 0.5}
+
+    def test_fetch_batch_returns_none_for_unknown_names(self):
+        connector = StaticDataConnector({"revenue": 100.0})
+        result = connector.fetch_batch(["revenue", "no_such_prim"], "ent", None)
+        assert result["revenue"] == 100.0
+        assert result["no_such_prim"] is None
+
+    def test_fetch_batch_empty_request_returns_empty_dict(self):
+        connector = StaticDataConnector({"revenue": 100.0})
+        assert connector.fetch_batch([], "ent", None) == {}
+
+    def test_works_with_data_resolver_fetch(self):
+        """DataResolver wraps StaticDataConnector correctly."""
+        connector = StaticDataConnector({"revenue": 5000.0})
+        resolver = DataResolver(connector, backoff_base=0.0)
+        pv = resolver.fetch("revenue", "acme", None)
+        assert pv.value == 5000.0
+        assert pv.nullable is False
+
+    def test_works_with_data_resolver_fetch_missing_uses_null_policy(self):
+        connector = StaticDataConnector({})   # no data
+        resolver = DataResolver(connector, backoff_base=0.0)
+        pv = resolver.fetch("revenue", "acme", None, policy=MissingDataPolicy.NULL)
+        assert pv.value is None
+        assert pv.nullable is True
+
+    def test_works_with_data_resolver_fetch_missing_uses_zero_policy(self):
+        connector = StaticDataConnector({})
+        resolver = DataResolver(connector, backoff_base=0.0)
+        pv = resolver.fetch("revenue", "acme", None, policy=MissingDataPolicy.ZERO)
+        assert pv.value == 0.0
+        assert pv.nullable is False

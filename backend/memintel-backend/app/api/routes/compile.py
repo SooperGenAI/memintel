@@ -139,7 +139,7 @@ async def compile_semantic(
     """
     log.info(
         "compile_semantic_request",
-        concept_id=req.concept.id,
+        concept_id=req.concept.concept_id,
         version=req.concept.version,
     )
     return await service.compile_semantic(req.concept)
@@ -170,7 +170,7 @@ async def compile_explain_plan(
     """
     log.info(
         "compile_explain_plan_request",
-        concept_id=req.concept.id,
+        concept_id=req.concept.concept_id,
         version=req.concept.version,
     )
     return await service.explain_plan(req.concept)
@@ -236,7 +236,7 @@ async def compile_concept(
     """
     log.info(
         "compile_request",
-        concept_id=req.concept.id,
+        concept_id=req.concept.concept_id,
         version=req.concept.version,
     )
     return await service.compile(req.concept)

@@ -81,7 +81,7 @@ from __future__ import annotations
 import logging
 from urllib.parse import quote
 
-import aioredis
+import redis.asyncio as aioredis
 from fastapi import Request
 
 from app.models.result import ConceptResult

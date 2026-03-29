@@ -66,13 +66,19 @@ main.py — routes do not catch them here.
 """
 from __future__ import annotations
 
+import json
 import structlog
 
 import asyncpg
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
+from typing import Any
 
 from app.api.deps import require_elevated_key
+from app.compiler.dag_builder import DAGBuilder
+from app.models.concept import ConceptDefinition
+from app.models.condition import ConditionDefinition
+from app.models.errors import ErrorType, MemintelError
 from app.models.result import (
     BatchExecuteResult,
     ConceptResult,
@@ -83,7 +89,25 @@ from app.models.result import (
     Job,
 )
 from app.persistence.db import get_db
+from app.runtime.cache import ResultCache
+from app.runtime.data_resolver import DataResolver, StaticDataConnector
+from app.runtime.executor import ConceptExecutor
 from app.services.execute import ExecuteService
+from app.strategies.change import ChangeStrategy as ChangeStrategyImpl
+from app.strategies.composite import CompositeStrategy as CompositeStrategyImpl
+from app.strategies.equals import EqualsStrategy as EqualsStrategyImpl
+from app.strategies.percentile import PercentileStrategy as PercentileStrategyImpl
+from app.strategies.threshold import ThresholdStrategy as ThresholdStrategyImpl
+from app.strategies.z_score import ZScoreStrategy as ZScoreStrategyImpl
+
+_STRATEGY_IMPLS = {
+    "threshold":  ThresholdStrategyImpl,
+    "percentile": PercentileStrategyImpl,
+    "z_score":    ZScoreStrategyImpl,
+    "change":     ChangeStrategyImpl,
+    "equals":     EqualsStrategyImpl,
+    "composite":  CompositeStrategyImpl,
+}
 
 log = structlog.get_logger(__name__)
 
@@ -378,6 +402,115 @@ async def execute_graph(
         entity=req.entity,
     )
     return await service.execute_graph(req)
+
+
+# ── POST /execute/static ───────────────────────────────────────────────────────
+
+class StaticExecuteRequest(BaseModel):
+    condition_id: str
+    condition_version: str
+    entity: str
+    data: dict[str, Any]      # {primitive_name: value}
+
+
+@router.post(
+    "/static",
+    summary="Evaluate a condition with inline data (test-only)",
+    status_code=200,
+)
+async def execute_static(
+    req: StaticExecuteRequest,
+    pool: asyncpg.Pool = Depends(get_db),
+) -> dict:
+    """
+    Evaluate a registered condition using caller-supplied primitive values.
+
+    No real data connectors or memintel_config.yaml entries are needed.
+    Compiles the linked concept on the fly, evaluates it with the provided
+    data dict, then runs the condition strategy.
+
+    This endpoint is for local testing only — it does not require auth and
+    bypasses the production data pipeline entirely.
+
+    Returns the DecisionValue as a JSON object.
+    """
+    # 1. Fetch condition definition body from DB.
+    row = await pool.fetchrow(
+        """
+        SELECT body FROM definitions
+        WHERE definition_id = $1 AND version = $2
+          AND definition_type = 'condition'
+        LIMIT 1
+        """,
+        req.condition_id,
+        req.condition_version,
+    )
+    if row is None:
+        raise MemintelError(
+            ErrorType.NOT_FOUND,
+            f"Condition '{req.condition_id}' version '{req.condition_version}' not found.",
+            location=f"{req.condition_id}:{req.condition_version}",
+        )
+    raw_condition = row["body"]
+    condition_dict = json.loads(raw_condition) if isinstance(raw_condition, str) else (raw_condition or {})
+    condition = ConditionDefinition(**condition_dict)
+
+    # 2. Fetch concept definition body from DB.
+    concept_row = await pool.fetchrow(
+        """
+        SELECT body FROM definitions
+        WHERE definition_id = $1 AND version = $2
+          AND definition_type = 'concept'
+        LIMIT 1
+        """,
+        condition.concept_id,
+        condition.concept_version,
+    )
+    if concept_row is None:
+        raise MemintelError(
+            ErrorType.NOT_FOUND,
+            f"Concept '{condition.concept_id}' version '{condition.concept_version}' not found.",
+            location=f"{condition.concept_id}:{condition.concept_version}",
+        )
+    raw_concept = concept_row["body"]
+    concept_dict = json.loads(raw_concept) if isinstance(raw_concept, str) else (raw_concept or {})
+    concept = ConceptDefinition(**concept_dict)
+
+    # 3. Compile concept → ExecutionGraph.
+    graph = DAGBuilder().build_dag(concept)
+
+    # 4. Wire inline data through StaticDataConnector.
+    connector = StaticDataConnector(req.data)
+    resolver = DataResolver(connector, backoff_base=0.0)
+
+    # 5. Execute concept to get ConceptResult.
+    executor = ConceptExecutor(ResultCache())
+    concept_result = executor.execute_graph(graph, req.entity, resolver)
+
+    # 6. Evaluate condition strategy → DecisionValue.
+    strategy_cls = _STRATEGY_IMPLS.get(condition.strategy.type.value)
+    if strategy_cls is None:
+        raise MemintelError(
+            ErrorType.EXECUTION_ERROR,
+            f"Unknown strategy type '{condition.strategy.type.value}'.",
+        )
+    strategy_instance = strategy_cls()
+    decision = strategy_instance.evaluate(
+        concept_result,
+        [],
+        condition.strategy.params.model_dump(),
+        condition_id=req.condition_id,
+        condition_version=req.condition_version,
+    )
+
+    log.info(
+        "execute_static",
+        condition_id=req.condition_id,
+        condition_version=req.condition_version,
+        entity=req.entity,
+        decision=decision.value,
+    )
+    return decision.model_dump()
 
 
 # ── POST /execute ──────────────────────────────────────────────────────────────

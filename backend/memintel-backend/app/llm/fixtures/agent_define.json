@@ -1,0 +1,25 @@
+{
+  "draft": {
+    "concept_id": "org.revenue_score",
+    "version": "1.0",
+    "namespace": "org",
+    "output_type": "float",
+    "description": "Monthly recurring revenue normalised to [0, 1).",
+    "primitives": {
+      "mrr": {"type": "float", "missing_data_policy": "zero"}
+    },
+    "features": {
+      "revenue_score": {
+        "op": "normalize",
+        "inputs": {"input": "mrr"},
+        "params": {}
+      }
+    },
+    "output_feature": "revenue_score"
+  },
+  "validation_notes": [
+    "Concept draft generated from natural language description.",
+    "Review primitives and feature DAG before registering."
+  ],
+  "requires_review": true
+}

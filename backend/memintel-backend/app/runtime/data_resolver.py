@@ -147,6 +147,29 @@ class ConnectorBase(ABC):
         )
 
 
+# ── StaticDataConnector ───────────────────────────────────────────────────────
+
+class StaticDataConnector(ConnectorBase):
+    """
+    In-memory connector that returns values from a flat {primitive_name: value}
+    dict, ignoring entity_id and timestamp.
+
+    Intended for POST /execute/static (local testing only) — no network calls,
+    no connector configuration required.
+    """
+
+    def __init__(self, data: dict[str, Any]) -> None:
+        self._data = data
+
+    def fetch(self, primitive_name: str, entity_id: str, timestamp: str | None) -> Any:
+        return self._data.get(primitive_name)
+
+    def fetch_batch(
+        self, primitive_names: list[str], entity_id: str, timestamp: str | None
+    ) -> dict[str, Any]:
+        return {name: self._data.get(name) for name in primitive_names}
+
+
 # ── MockConnector ─────────────────────────────────────────────────────────────
 
 class MockConnector(ConnectorBase):

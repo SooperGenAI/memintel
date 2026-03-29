@@ -63,8 +63,14 @@ def resolve_primitive_type(prim_ref) -> str:
       'zero'          → T    (null replaced with 0; non-nullable)
       'forward_fill'  → T    (null replaced with last known value; non-nullable)
       'backward_fill' → T    (null replaced with next known value; non-nullable)
+
+    For categorical primitives with a declared label set (prim_ref.labels),
+    the label set is encoded into the type string as categorical{a,b,c} so the
+    type checker can enforce Rule 12 (no bare 'categorical' as a node output).
     """
     base = prim_ref.type
+    if base == MemintelType.CATEGORICAL and getattr(prim_ref, 'labels', None):
+        base = 'categorical{' + ','.join(sorted(prim_ref.labels)) + '}'
     if prim_ref.missing_data_policy in (None, MissingDataPolicy.NULL):
         return MemintelType.nullable(base) if not MemintelType.is_nullable(base) else base
     # zero / forward_fill / backward_fill → non-nullable

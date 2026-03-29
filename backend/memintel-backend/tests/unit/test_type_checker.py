@@ -267,7 +267,7 @@ class TestCheckNode:
     def test_equals_strategy_on_string_valid(self, checker):
         node = GraphNode(op='equals', node_id='n21')
         result = checker.check_node(node, {'input': 'string'})
-        assert result == 'decision<string>'
+        assert result == 'decision<categorical>'
 
     # ── composite strategy: rejects decision<categorical> (§9.1) ─────────────
 

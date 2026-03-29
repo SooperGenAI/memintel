@@ -56,43 +56,94 @@ from app.runtime.data_resolver import DataResolver, PrimitiveValue
 # Inputs are already-resolved values (not node_ids).
 # Raises MemintelError(EXECUTION_ERROR) on runtime failures (e.g. div-by-zero).
 
-def _op_add(inputs: dict, params: dict) -> float:
-    return float(inputs["a"]) + float(inputs["b"])
+
+def _guard_none(value: Any, params: dict) -> float | None:
+    """
+    Coerce a scalar primitive value to float, respecting missing_data_policy
+    when the value is None.
+
+    Called by scalar numeric operators before touching their input.  If a
+    primitive_fetch node's missing_data_policy is 'null' (or not set), the
+    DataResolver propagates None downstream.  Operators must not crash on None.
+
+    Policy resolution (from params, falls back to null propagation):
+      'zero'                         → substitute 0.0
+      'null' / 'forward_fill' /
+      'backward_fill' / unset / None → propagate None (caller must short-circuit)
+    """
+    if value is None:
+        if params.get("missing_data_policy") == "zero":
+            return 0.0
+        return None
+    return float(value)
 
 
-def _op_subtract(inputs: dict, params: dict) -> float:
-    return float(inputs["a"]) - float(inputs["b"])
+def _guard_none_list(vals: Any) -> list | None:
+    """Return None if vals itself is None (upstream produced no value)."""
+    return None if vals is None else vals
 
 
-def _op_multiply(inputs: dict, params: dict) -> float:
-    return float(inputs["a"]) * float(inputs["b"])
+def _op_add(inputs: dict, params: dict) -> float | None:
+    a = _guard_none(inputs["a"], params)
+    b = _guard_none(inputs["b"], params)
+    if a is None or b is None:
+        return None
+    return a + b
 
 
-def _op_divide(inputs: dict, params: dict) -> float:
-    b = float(inputs["b"])
+def _op_subtract(inputs: dict, params: dict) -> float | None:
+    a = _guard_none(inputs["a"], params)
+    b = _guard_none(inputs["b"], params)
+    if a is None or b is None:
+        return None
+    return a - b
+
+
+def _op_multiply(inputs: dict, params: dict) -> float | None:
+    a = _guard_none(inputs["a"], params)
+    b = _guard_none(inputs["b"], params)
+    if a is None or b is None:
+        return None
+    return a * b
+
+
+def _op_divide(inputs: dict, params: dict) -> float | None:
+    a = _guard_none(inputs["a"], params)
+    b = _guard_none(inputs["b"], params)
+    if a is None or b is None:
+        return None
     if b == 0.0:
         raise MemintelError(ErrorType.EXECUTION_ERROR, "Division by zero in 'divide' operator.")
-    return float(inputs["a"]) / b
+    return a / b
 
 
-def _op_mean(inputs: dict, params: dict) -> float:
-    vals = inputs["input"]
+def _op_mean(inputs: dict, params: dict) -> float | None:
+    vals = _guard_none_list(inputs["input"])
+    if vals is None:
+        return None
     if not vals:
         return 0.0
     return sum(float(v) for v in vals) / len(vals)
 
 
-def _op_sum(inputs: dict, params: dict) -> float:
-    return sum(float(v) for v in inputs["input"])
+def _op_sum(inputs: dict, params: dict) -> float | None:
+    vals = _guard_none_list(inputs["input"])
+    if vals is None:
+        return None
+    return sum(float(v) for v in vals)
 
 
-def _op_min(inputs: dict, params: dict) -> float:
-    vals = inputs["input"]
+def _op_min(inputs: dict, params: dict) -> float | None:
+    vals = _guard_none_list(inputs["input"])
+    if vals is None:
+        return None
     return min(float(v) for v in vals) if vals else 0.0
 
 
-def _op_max(inputs: dict, params: dict) -> float:
-    vals = inputs["input"]
+def _op_max(inputs: dict, params: dict) -> float | None:
+    vals = _guard_none_list(inputs["input"])
+    if vals is None:
+        return None
     return max(float(v) for v in vals) if vals else 0.0
 
 
@@ -100,8 +151,10 @@ def _op_count(inputs: dict, params: dict) -> int:
     return len(inputs["input"])
 
 
-def _op_pct_change(inputs: dict, params: dict) -> float:
-    vals = inputs["input"]
+def _op_pct_change(inputs: dict, params: dict) -> float | None:
+    vals = _guard_none_list(inputs["input"])
+    if vals is None:
+        return None
     if len(vals) < 2:
         return 0.0
     prev = float(vals[-2])
@@ -111,15 +164,19 @@ def _op_pct_change(inputs: dict, params: dict) -> float:
     return (curr - prev) / abs(prev)
 
 
-def _op_rate_of_change(inputs: dict, params: dict) -> float:
-    vals = inputs["input"]
+def _op_rate_of_change(inputs: dict, params: dict) -> float | None:
+    vals = _guard_none_list(inputs["input"])
+    if vals is None:
+        return None
     if len(vals) < 2:
         return 0.0
     return float(vals[-1]) - float(vals[-2])
 
 
-def _op_moving_average(inputs: dict, params: dict) -> float:
-    vals = inputs["input"]
+def _op_moving_average(inputs: dict, params: dict) -> float | None:
+    vals = _guard_none_list(inputs["input"])
+    if vals is None:
+        return None
     if not vals:
         return 0.0
     window = int(params.get("window", len(vals)))
@@ -128,34 +185,46 @@ def _op_moving_average(inputs: dict, params: dict) -> float:
     return sum(float(v) for v in recent) / len(recent)
 
 
-def _op_z_score_op(inputs: dict, params: dict) -> float:
+def _op_z_score_op(inputs: dict, params: dict) -> float | None:
     # Concept-level z_score op: normalises a scalar relative to a population.
     # Without population statistics available at node-eval time, returns the
     # raw value.  For full z-score anomaly detection use the z_score condition
     # strategy, which operates on the ConceptResult + historical results.
-    return float(inputs["input"])
+    v = _guard_none(inputs["input"], params)
+    if v is None:
+        return None
+    return v
 
 
-def _op_percentile_op(inputs: dict, params: dict) -> float:
+def _op_percentile_op(inputs: dict, params: dict) -> float | None:
     # Same note as z_score_op above.
-    return float(inputs["input"])
+    v = _guard_none(inputs["input"], params)
+    if v is None:
+        return None
+    return v
 
 
-def _op_normalize(inputs: dict, params: dict) -> float:
+def _op_normalize(inputs: dict, params: dict) -> float | None:
     # Sigmoid normalisation: maps any float to the open interval (0, 1).
     # Deterministic and monotone-increasing — larger inputs yield larger outputs.
-    x = float(inputs["input"])
+    x = _guard_none(inputs["input"], params)
+    if x is None:
+        return None
     return x / (1.0 + abs(x))
 
 
-def _op_weighted_sum(inputs: dict, params: dict) -> float:
+def _op_weighted_sum(inputs: dict, params: dict) -> float | None:
     vals = inputs["values"]
+    if vals is None:
+        return None
     weights = params.get("weights") or [1.0] * len(vals)
     return sum(float(v) * float(w) for v, w in zip(vals, weights))
 
 
-def _op_to_int(inputs: dict, params: dict) -> int:
-    v = float(inputs["input"])
+def _op_to_int(inputs: dict, params: dict) -> int | None:
+    v = _guard_none(inputs["input"], params)
+    if v is None:
+        return None
     if math.isnan(v) or math.isinf(v):
         raise MemintelError(ErrorType.EXECUTION_ERROR, "to_int: input is NaN or Inf.")
     return int(v)
@@ -483,13 +552,22 @@ class ConceptExecutor:
 
 def _output_type(type_str: str) -> ConceptOutputType:
     """Map a Memintel type string to ConceptOutputType enum."""
+    # Strip nullable modifier so float? → float, string? → string, etc.
+    base = type_str[:-1] if type_str.endswith("?") else type_str
     mapping = {
         "float": ConceptOutputType.FLOAT,
         "int":   ConceptOutputType.FLOAT,    # int widens to float at concept output
         "boolean": ConceptOutputType.BOOLEAN,
         "categorical": ConceptOutputType.CATEGORICAL,
+        "string": ConceptOutputType.CATEGORICAL,  # string concepts map to CATEGORICAL slot
     }
-    return mapping.get(type_str, ConceptOutputType.FLOAT)
+    result = mapping.get(base)
+    if result is not None:
+        return result
+    # labeled categorical: categorical{a,b,c} or categorical{a,b,c}? → CATEGORICAL
+    if base.startswith("categorical{"):
+        return ConceptOutputType.CATEGORICAL
+    return ConceptOutputType.FLOAT
 
 
 def _equal_contributions(signal_names: list[str], output_value: Any) -> dict[str, float]:

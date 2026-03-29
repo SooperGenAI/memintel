@@ -1,0 +1,41 @@
+{
+  "proposed": {
+    "concept_id": "org.churn_risk_score",
+    "version": "1.1",
+    "namespace": "org",
+    "output_type": "float",
+    "description": "Normalised churn risk score with recency decay.",
+    "primitives": {
+      "engagement_score": {"type": "float", "missing_data_policy": "zero"},
+      "recency_score": {"type": "float", "missing_data_policy": "zero"}
+    },
+    "features": {
+      "weighted": {
+        "op": "weighted_sum",
+        "inputs": {"a": "engagement_score", "b": "recency_score"},
+        "params": {"weights": [0.7, 0.3]}
+      },
+      "churn_score": {
+        "op": "normalize",
+        "inputs": {"input": "weighted"},
+        "params": {}
+      }
+    },
+    "output_feature": "churn_score"
+  },
+  "changes": [
+    {
+      "field": "primitives",
+      "from": "engagement_score only",
+      "to": "engagement_score + recency_score",
+      "reason": "Added recency decay as instructed."
+    },
+    {
+      "field": "features",
+      "from": "normalize(engagement_score)",
+      "to": "normalize(weighted_sum(engagement_score, recency_score))",
+      "reason": "Introduced weighted combination before normalisation."
+    }
+  ],
+  "breaking": true
+}

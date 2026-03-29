@@ -1,0 +1,19 @@
+{
+  "draft": {
+    "condition_id": "org.revenue_alert",
+    "version": "1.0",
+    "namespace": "org",
+    "strategy": {
+      "type": "threshold",
+      "params": {
+        "direction": "above",
+        "value": 0.80
+      }
+    }
+  },
+  "validation_notes": [
+    "Condition draft generated from natural language description.",
+    "Strategy 'threshold above 0.80' selected based on intent."
+  ],
+  "requires_review": false
+}

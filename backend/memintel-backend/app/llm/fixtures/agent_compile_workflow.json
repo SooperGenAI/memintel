@@ -1,0 +1,13 @@
+{
+  "concept_id": "workflow.revenue_monitor",
+  "version": "1.0",
+  "node_count": 3,
+  "execution_order": ["node_fetch_mrr", "node_normalize", "node_threshold"],
+  "parallelizable_groups": [
+    ["node_fetch_mrr"],
+    ["node_normalize"],
+    ["node_threshold"]
+  ],
+  "primitive_fetches": ["mrr"],
+  "critical_path_length": 3
+}

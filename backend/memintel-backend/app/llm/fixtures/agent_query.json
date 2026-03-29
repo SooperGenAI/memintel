@@ -1,0 +1,17 @@
+{
+  "results": [
+    {
+      "definition_id": "org.churn_risk_score",
+      "version": "1.0",
+      "score": 0.92,
+      "summary": "Normalised churn risk score derived from user engagement signal."
+    },
+    {
+      "definition_id": "org.high_churn_risk",
+      "version": "1.0",
+      "score": 0.85,
+      "summary": "Condition: churn risk score above 0.80 threshold."
+    }
+  ],
+  "total_count": 2
+}

@@ -197,6 +197,16 @@ class MemintelType:
         # list<int> → list<float>
         if expected == cls.LIST_FLOAT and actual == cls.LIST_INT:
             return True
+        # categorical{...} → categorical  (labeled is a subtype of bare)
+        # categorical{...} → categorical{...}  (same label set, already caught by ==)
+        actual_base = cls.base_of(actual)
+        expected_base = cls.base_of(expected)
+        actual_nullable = cls.is_nullable(actual)
+        expected_nullable = cls.is_nullable(expected)
+        if (actual_base.startswith("categorical{") and actual_base.endswith("}")
+                and expected_base == cls.CATEGORICAL
+                and actual_nullable == expected_nullable):
+            return True
         return False
 
 

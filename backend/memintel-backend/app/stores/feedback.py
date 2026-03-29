@@ -35,6 +35,7 @@ recorded_at         recorded_at
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 
 import asyncpg
 
@@ -42,6 +43,13 @@ from app.models.calibration import FeedbackRecord, FeedbackValue
 from app.models.errors import ConflictError
 
 log = logging.getLogger(__name__)
+
+
+def _to_datetime(ts: str | None) -> datetime | None:
+    """Convert an ISO 8601 timestamp string to datetime; pass None through."""
+    if ts is None:
+        return None
+    return datetime.fromisoformat(ts)
 
 
 class FeedbackStore:
@@ -81,7 +89,7 @@ class FeedbackStore:
                     condition_id, condition_version, entity,
                     decision_timestamp, feedback, note
                 )
-                VALUES ($1, $2, $3, $4::timestamptz, $5, $6)
+                VALUES ($1, $2, $3, $4, $5, $6)
                 RETURNING
                     feedback_id, condition_id, condition_version, entity,
                     decision_timestamp, feedback, note, recorded_at
@@ -89,7 +97,7 @@ class FeedbackStore:
                 record.condition_id,
                 record.condition_version,
                 record.entity,
-                record.timestamp,
+                _to_datetime(record.timestamp),
                 record.feedback.value,
                 record.note,
             )
@@ -165,12 +173,12 @@ class FeedbackStore:
             WHERE condition_id = $1
               AND condition_version = $2
               AND entity = $3
-              AND decision_timestamp = $4::timestamptz
+              AND decision_timestamp = $4
             """,
             condition_id,
             condition_version,
             entity,
-            timestamp,
+            _to_datetime(timestamp),
         )
         return _row_to_record(row) if row else None
 
