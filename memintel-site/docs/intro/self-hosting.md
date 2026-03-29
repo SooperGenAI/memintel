@@ -136,6 +136,10 @@ The server will refuse to start if any required variable is missing. This is by 
 `ANTHROPIC_API_KEY` is only required when `USE_LLM_FIXTURES=false` and using Anthropic as the provider. During initial setup and smoke testing, leave `USE_LLM_FIXTURES=true` — this validates the full pipeline without consuming LLM credits.
 :::
 
+:::note
+If your `memintel_config.yaml` references connector environment variables (for example `ANALYTICS_DB_HOST`, `ANALYTICS_DB_USER`, `ANALYTICS_DB_PASSWORD`, `ACCOUNTS_DB_HOST`, `ACCOUNTS_DB_USER`, `ACCOUNTS_DB_PASSWORD`), those must also be set before starting the server. The server will exit with a `ConfigError` naming the missing variable if any are absent.
+:::
+
 ### Setting Variables
 
 On Linux / Mac:
@@ -163,6 +167,24 @@ cd memintel/backend/memintel-backend
 
 ### Install Python Dependencies
 
+Memintel requires Python 3.11. If you have a newer Python version installed, create a virtual environment explicitly using 3.11:
+
+```bash
+python3.11 -m venv venv
+```
+
+Activate it:
+
+```bash
+# On Mac/Linux:
+source venv/bin/activate
+
+# On Windows:
+venv\Scripts\activate
+```
+
+Then install dependencies:
+
 ```bash
 pip install -r requirements.txt
 ```
@@ -172,13 +194,6 @@ Verify key packages are installed:
 ```bash
 python -c "import fastapi, pydantic, asyncpg, aioredis; print('OK')"
 ```
-
-:::tip
-If you see permission errors, use a virtual environment:
-```bash
-python -m venv venv && source venv/bin/activate
-```
-:::
 
 ### Run Unit Tests
 
@@ -208,6 +223,23 @@ INFO [alembic.runtime.migration] Running upgrade 0002 -> 0003, add_guardrails_ve
 
 :::warning
 If you see any error during migration, do not proceed. Fix the migration error before starting the server.
+:::
+
+:::warning
+If alembic reports a driver error such as `"scheme is expected to be either postgresql or postgres"`, temporarily set `DATABASE_URL` with the asyncpg prefix for the migration command only:
+
+```bash
+DATABASE_URL=postgresql+asyncpg://user:password@host:5432/memintel alembic upgrade head
+```
+
+On Windows PowerShell:
+
+```powershell
+$env:DATABASE_URL = "postgresql+asyncpg://user:password@host:5432/memintel"
+alembic upgrade head
+```
+
+Then revert `DATABASE_URL` back to `postgresql://` before starting the server.
 :::
 
 Verify the schema — you should see all seven tables:
@@ -261,11 +293,13 @@ If startup fails with `ConfigError`, check that all required environment variabl
 curl http://localhost:8000/health
 ```
 
-Expected response:
+If the health endpoint returns `Not Found`, verify the server is running by opening the Swagger API docs in your browser:
 
-```json
-{ "status": "healthy", "database": "connected", "cache": "connected" }
 ```
+http://localhost:8000/docs
+```
+
+A working deployment will show the full Memintel API reference. If the page loads, the server is running correctly.
 
 :::warning
 If `database` or `cache` shows `"disconnected"`, verify `DATABASE_URL` and `REDIS_URL` are correct and the services are reachable from the server.
@@ -425,9 +459,41 @@ Memintel emits structured logs with `trace_id`, `entity`, `concept_id`, and `con
 
 ---
 
+## Known Issues
+
+### aioredis compatibility with Python 3.11
+
+aioredis has a known incompatibility with Python 3.11 that causes this error on startup:
+
+```
+TypeError: duplicate base class TimeoutError
+```
+
+Fix it by patching the installed aioredis exceptions file after `pip install` completes.
+
+**On Mac/Linux:**
+
+```bash
+sed -i 's/class TimeoutError(asyncio.TimeoutError, builtins.TimeoutError, RedisError):/class TimeoutError(asyncio.TimeoutError, RedisError):/' venv/lib/python3.11/site-packages/aioredis/exceptions.py
+```
+
+**On Windows PowerShell:**
+
+```powershell
+(Get-Content venv\Lib\site-packages\aioredis\exceptions.py) -replace 'class TimeoutError\(asyncio\.TimeoutError, builtins\.TimeoutError, RedisError\):', 'class TimeoutError(asyncio.TimeoutError, RedisError):' | Set-Content venv\Lib\site-packages\aioredis\exceptions.py
+```
+
+This patch is applied to your local venv only and does not affect the source code. It will need to be reapplied if you recreate the venv.
+
+---
+
 ## Further Reading
 
 - [Application Context](/docs/intro/application-context) — configure domain context for more accurate task compilation
 - [Quickstart](/docs/intro/quickstart) — your first task in 5 minutes
 - [API Reference](/docs/api-reference/overview) — full endpoint documentation
 - [GitHub Repository](https://github.com/SooperGenAI/memintel) — source code, issues, and discussions
+
+ 
+
+
