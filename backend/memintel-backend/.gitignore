@@ -33,3 +33,7 @@ package-lock.json
 # OS
 .DS_Store
 Thumbs.db
+
+start_server.bat
+start_server.ps1
+start_server.sh
