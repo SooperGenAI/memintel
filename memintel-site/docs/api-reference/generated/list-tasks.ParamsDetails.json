@@ -1,1 +1,0 @@
-{"parameters":[{"name":"status","in":"query","schema":{"type":"string","enum":["active","paused","deleted"]}},{"name":"limit","in":"query","schema":{"type":"integer","default":20,"maximum":100}},{"name":"cursor","in":"query","schema":{"type":"string"}}]}

@@ -1,1 +1,0 @@
-{"schema":{"type":"object","properties":{"current_version":{"type":"string"},"tasks_on_current_version":{"type":"integer"},"tasks_on_older_versions":{"type":"array","items":{"type":"object","properties":{"version":{"type":"string"},"task_count":{"type":"integer"}}}},"total_stale_tasks":{"type":"integer"}},"title":"GuardrailsImpactResult"},"schemaType":"response"}
