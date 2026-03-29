@@ -1,0 +1,95 @@
+# =============================================================================
+# start_server.ps1.example
+# =============================================================================
+# Sanitised startup script for the Memintel backend server.
+# Copy this file to start_server.ps1, fill in your values, and run it.
+#
+# Usage:
+#   Copy-Item start_server.ps1.example start_server.ps1
+#   # Edit start_server.ps1 with your credentials
+#   .\start_server.ps1
+#
+# Prerequisites:
+#   - Python 3.11+       https://www.python.org/downloads/
+#   - PostgreSQL 15+     https://www.postgresql.org/download/
+#   - Redis 7+           https://redis.io/downloads/
+#   - pip install -r requirements.txt  (run once after cloning)
+#   - alembic upgrade head             (run once to initialise the schema)
+#
+# DO NOT commit start_server.ps1 — it contains real credentials.
+# This example file IS safe to commit.
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# Core — required for all routes
+# -----------------------------------------------------------------------------
+
+# Path to the YAML config file (data connectors, LLM settings, guardrails path)
+# Default: memintel_config.yaml in the project root
+$env:MEMINTEL_CONFIG_PATH = "memintel_config.yaml"
+
+# PostgreSQL connection URL for the primary Memintel database
+# Format: postgresql://USER:PASSWORD@HOST:PORT/DATABASE
+# This database stores condition/concept definitions, execution graphs,
+# feedback records, calibration tokens, and async job state.
+$env:DATABASE_URL = "postgresql://YOUR_DB_USER:YOUR_DB_PASSWORD@YOUR_DB_HOST:5432/memintel"
+
+# Redis connection URL used for the execution result cache
+# Format: redis://HOST:PORT  or  redis://:PASSWORD@HOST:PORT for auth
+$env:REDIS_URL = "redis://YOUR_REDIS_HOST:6379"
+
+# -----------------------------------------------------------------------------
+# Security — required for privileged operations
+# -----------------------------------------------------------------------------
+
+# Secret key that gates elevated-privilege endpoints:
+#   POST /compile            — compile a concept to an execution graph
+#   POST /conditions/register, /concepts/register, /actions/register
+#   POST /conditions/apply-calibration
+#   DELETE /jobs/{job_id}
+#
+# Pass this key in requests as the X-Elevated-Key header.
+# Use a long random string (e.g. openssl rand -hex 32).
+$env:MEMINTEL_ELEVATED_KEY = "YOUR_ELEVATED_KEY"
+
+# -----------------------------------------------------------------------------
+# LLM provider — required for /execute/full (pipeline with AI signal)
+# Not required if you only use deterministic endpoints (/execute/static,
+# /execute/graph, /compile, etc.)
+# -----------------------------------------------------------------------------
+
+# Anthropic API key — used by the LLM-assisted pipeline stage
+# Obtain at: https://console.anthropic.com/settings/api-keys
+$env:ANTHROPIC_API_KEY = "YOUR_ANTHROPIC_API_KEY"
+
+# -----------------------------------------------------------------------------
+# Data connector credentials — required for each connector declared in
+# memintel_config.yaml. Only add the variables needed for your connectors.
+# -----------------------------------------------------------------------------
+
+# Analytics database (postgres.analytics connector)
+# The host, user, and password for the analytics data source.
+$env:ANALYTICS_DB_HOST = "YOUR_ANALYTICS_DB_HOST"
+$env:ANALYTICS_DB_USER = "YOUR_ANALYTICS_DB_USER"
+$env:ANALYTICS_DB_PASSWORD = "YOUR_ANALYTICS_DB_PASSWORD"
+
+# Accounts database (postgres.accounts connector)
+$env:ACCOUNTS_DB_HOST = "YOUR_ACCOUNTS_DB_HOST"
+$env:ACCOUNTS_DB_USER = "YOUR_ACCOUNTS_DB_USER"
+$env:ACCOUNTS_DB_PASSWORD = "YOUR_ACCOUNTS_DB_PASSWORD"
+
+# Billing REST API (rest.billing_api connector)
+# BILLING_API_URL is the base URL; BILLING_API_TOKEN is a bearer token.
+$env:BILLING_API_URL = "https://YOUR_BILLING_API_HOST"
+$env:BILLING_API_TOKEN = "YOUR_BILLING_API_TOKEN"
+
+# -----------------------------------------------------------------------------
+# Start the server
+# -----------------------------------------------------------------------------
+
+Write-Host "Starting Memintel backend on http://0.0.0.0:8000 ..."
+Write-Host "OpenAPI docs: http://127.0.0.1:8000/docs"
+Write-Host ""
+
+uvicorn app.main:app --host 0.0.0.0 --port 8000
