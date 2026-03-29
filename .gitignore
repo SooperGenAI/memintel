@@ -29,3 +29,5 @@ package-lock.json
 # OS
 .DS_Store
 Thumbs.db
+
+Claude API Key.txt
