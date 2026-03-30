@@ -59,7 +59,9 @@ import structlog
 import asyncpg
 from fastapi import APIRouter, Depends, Query
 
+from app.api.deps import require_elevated_key
 from app.models.action import ActionDefinition, ActionResult, ActionTriggerRequest
+from app.models.concept import DefinitionResponse
 from app.models.errors import NotFoundError
 from app.persistence.db import get_db
 from app.persistence.stores import get_definition_store
@@ -84,6 +86,46 @@ async def get_action_service(
     ActionResult rather than raising exceptions — actions are best-effort.
     """
     return ActionService(pool=pool)
+
+
+# ── POST /actions ─────────────────────────────────────────────────────────────
+
+@router.post(
+    "",
+    summary="Register an action definition",
+    response_model=DefinitionResponse,
+    status_code=201,
+)
+async def register_action(
+    action: ActionDefinition,
+    store: DefinitionStore = Depends(get_definition_store),
+    _: None = Depends(require_elevated_key),
+) -> DefinitionResponse:
+    """
+    Register a new ActionDefinition in the definitions store.
+
+    The (action_id, version) pair is immutable once registered — calling
+    this endpoint again with the same action_id and version raises HTTP 409.
+
+    Requires elevated key (X-Elevated-Key header) → HTTP 403 if absent.
+
+    HTTP 201 — action registered successfully.
+    HTTP 403 — elevated key missing or invalid.
+    HTTP 409 — (action_id, version) already registered.
+    """
+    log.info(
+        "register_action_request",
+        action_id=action.action_id,
+        version=action.version,
+        action_type=action.config.type,
+    )
+    return await store.register(
+        definition_id=action.action_id,
+        version=action.version,
+        definition_type="action",
+        namespace=action.namespace.value,
+        body=action.model_dump(mode="json"),
+    )
 
 
 # ── GET /actions/{action_id} ───────────────────────────────────────────────────

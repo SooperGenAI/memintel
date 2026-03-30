@@ -53,6 +53,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api.deps import require_elevated_key
+from app.api.routes import actions as actions_route
 from app.api.routes import conditions as conditions_route
 from app.api.routes import execute as execute_route
 from app.api.routes import feedback as feedback_route
@@ -99,7 +100,7 @@ from app.models.task import (
     TaskList,
     TaskStatus,
 )
-from app.persistence.stores import get_task_store
+from app.persistence.stores import get_definition_store, get_task_store
 
 
 # ── Constants ──────────────────────────────────────────────────────────────────
@@ -336,6 +337,33 @@ class _MockRegistryServiceConflict:
         raise NotFoundError(f"Definition '{definition_id}' not found.")
 
 
+class _MockDefinitionStoreOk:
+    """Returns a DefinitionResponse for any register() call."""
+
+    async def register(self, definition_id, version, definition_type, namespace, body, **_) -> DefinitionResponse:
+        return DefinitionResponse(
+            definition_id=definition_id,
+            version=version,
+            definition_type=definition_type,
+            namespace=Namespace(namespace),
+        )
+
+    async def get(self, definition_id: str, version: str):
+        return None
+
+
+class _MockDefinitionStoreConflict:
+    """Raises ConflictError on register() — simulates a duplicate (id, version)."""
+
+    async def register(self, definition_id, version, **_) -> DefinitionResponse:
+        raise ConflictError(
+            f"Definition '{definition_id}' version '{version}' is already registered."
+        )
+
+    async def get(self, definition_id: str, version: str):
+        return None
+
+
 # ── Test app ───────────────────────────────────────────────────────────────────
 
 @asynccontextmanager
@@ -354,6 +382,7 @@ _app.include_router(execute_route.router,          prefix="/execute")    # /exec
 _app.include_router(feedback_route.router)                               # /feedback baked in
 _app.include_router(conditions_route.router)                             # /conditions baked in
 _app.include_router(registry_route.router,         prefix="/registry")   # /registry
+_app.include_router(actions_route.router)                                # /actions baked in
 
 
 # ── TASKS ──────────────────────────────────────────────────────────────────────
@@ -656,5 +685,84 @@ def test_get_definition_versions_404() -> None:
             r = client.get("/registry/definitions/org.does-not-exist/versions")
         assert r.status_code == 404, f"Expected 404, got {r.status_code}: {r.text}"
         assert r.json()["error"]["type"] == "not_found"
+    finally:
+        _app.dependency_overrides.clear()
+
+
+# ── ACTIONS ────────────────────────────────────────────────────────────────────
+
+_ACTION_BODY = {
+    "action_id": _ACTION_ID,
+    "version":   _ACTION_V,
+    "config": {
+        "type":     "webhook",
+        "endpoint": "https://hooks.example.com/action",
+    },
+    "trigger": {
+        "fire_on":           "true",
+        "condition_id":      _COND_ID,
+        "condition_version": _COND_V1,
+    },
+    "namespace": "org",
+}
+
+
+def test_register_action_201() -> None:
+    """
+    POST /actions with a valid ActionDefinition body and elevated key returns 201
+    with a DefinitionResponse carrying the registered action_id and version.
+    """
+    _app.dependency_overrides[get_definition_store] = lambda: _MockDefinitionStoreOk()
+    _app.dependency_overrides[require_elevated_key] = lambda: None
+    try:
+        with TestClient(_app) as client:
+            r = client.post(
+                "/actions",
+                json=_ACTION_BODY,
+                headers={"X-Elevated-Key": _ELEVATED_KEY},
+            )
+        assert r.status_code == 201, f"Expected 201, got {r.status_code}: {r.text}"
+        body = r.json()
+        assert body["definition_id"] == _ACTION_ID
+        assert body["version"] == _ACTION_V
+        assert body["definition_type"] == "action"
+    finally:
+        _app.dependency_overrides.clear()
+
+
+def test_register_action_403_missing_elevated_key() -> None:
+    """
+    POST /actions without the X-Elevated-Key header returns 403.
+
+    require_elevated_key is NOT overridden here so the real guard fires against
+    the test app's configured elevated key.  The _app fixture does not register
+    the HTTPException → ErrorResponse handler, so we assert only the status code
+    (body shape is covered by test_security_scenarios.py).
+    """
+    _app.dependency_overrides[get_definition_store] = lambda: _MockDefinitionStoreOk()
+    try:
+        with TestClient(_app) as client:
+            r = client.post("/actions", json=_ACTION_BODY)   # no X-Elevated-Key
+        assert r.status_code == 403, f"Expected 403, got {r.status_code}: {r.text}"
+    finally:
+        _app.dependency_overrides.clear()
+
+
+def test_register_action_409_duplicate() -> None:
+    """
+    POST /actions returns 409 when (action_id, version) is already registered —
+    immutability violation (definitions are permanent once written).
+    """
+    _app.dependency_overrides[get_definition_store] = lambda: _MockDefinitionStoreConflict()
+    _app.dependency_overrides[require_elevated_key] = lambda: None
+    try:
+        with TestClient(_app) as client:
+            r = client.post(
+                "/actions",
+                json=_ACTION_BODY,
+                headers={"X-Elevated-Key": _ELEVATED_KEY},
+            )
+        assert r.status_code == 409, f"Expected 409, got {r.status_code}: {r.text}"
+        assert r.json()["error"]["type"] == "conflict"
     finally:
         _app.dependency_overrides.clear()
