@@ -153,7 +153,7 @@ class TestTypeCheckerAlignment:
 
     def test_equals_accepts_string(self):
         output = self._check("equals", "string")
-        assert output == "decision<categorical>"
+        assert output == "decision<string>"
 
     def test_equals_rejects_float(self):
         with pytest.raises(MemintelError) as exc:
