@@ -40,6 +40,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
 
+from app.models.config import PrimitiveSourceConfig
 from app.models.result import MissingDataPolicy
 
 
@@ -305,14 +306,34 @@ class DataResolver:
         missing_policy: MissingDataPolicy = MissingDataPolicy.NULL,
         max_retries: int = _MAX_RETRIES,
         backoff_base: float = _BACKOFF_BASE,
+        primitive_sources: dict[str, PrimitiveSourceConfig] | None = None,
+        connector_registry: dict[str, ConnectorBase] | None = None,
     ) -> None:
         self._connector = connector
         self._default_policy = missing_policy
         self._max_retries = max_retries
         self._backoff_base = backoff_base
+        self._primitive_sources: dict[str, PrimitiveSourceConfig] = primitive_sources or {}
+        self._connector_registry: dict[str, ConnectorBase] = connector_registry or {}
         # Request-scoped cache: dict keyed by (primitive_name, entity_id, timestamp).
         # Discarded when the DataResolver instance goes out of scope.
         self._cache: dict[tuple[str, str, str | None], PrimitiveValue] = {}
+
+    def _get_connector(self, primitive_name: str) -> ConnectorBase:
+        """
+        Return the connector to use for a named primitive.
+
+        If the primitive has an entry in primitive_sources and the referenced
+        connector name is registered in connector_registry, that connector is
+        returned. Otherwise, falls back to the default connector passed at
+        construction time (MockConnector / StaticConnector behaviour).
+        """
+        source = self._primitive_sources.get(primitive_name)
+        if source is not None:
+            conn = self._connector_registry.get(source.connector)
+            if conn is not None:
+                return conn
+        return self._connector
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -335,8 +356,9 @@ class DataResolver:
         if cache_key in self._cache:
             return self._cache[cache_key]
 
+        conn = self._get_connector(primitive_name)
         raw = _with_retry(
-            lambda: self._connector.fetch(primitive_name, entity_id, timestamp),
+            lambda: conn.fetch(primitive_name, entity_id, timestamp),
             max_retries=self._max_retries,
             backoff_base=self._backoff_base,
         )
@@ -371,18 +393,29 @@ class DataResolver:
                 to_fetch.append(name)
 
         if to_fetch:
-            raw_batch = _with_retry(
-                lambda: self._connector.fetch_batch(to_fetch, entity_id, timestamp),
-                max_retries=self._max_retries,
-                backoff_base=self._backoff_base,
-            )
+            # Group cache misses by their resolved connector so each connector
+            # receives a single batch call (preserving the one-round-trip guarantee
+            # when all primitives use the same connector).
+            by_connector: dict[ConnectorBase, list[str]] = {}
             for name in to_fetch:
-                raw = raw_batch.get(name)
-                resolved = self._apply_policy(
-                    raw, name, entity_id, timestamp, effective_policy
+                conn = self._get_connector(name)
+                if conn not in by_connector:
+                    by_connector[conn] = []
+                by_connector[conn].append(name)
+
+            for conn, names in by_connector.items():
+                raw_batch = _with_retry(
+                    lambda _c=conn, _ns=names: _c.fetch_batch(_ns, entity_id, timestamp),
+                    max_retries=self._max_retries,
+                    backoff_base=self._backoff_base,
                 )
-                self._cache[(name, entity_id, timestamp)] = resolved
-                result[name] = resolved
+                for name in names:
+                    raw = raw_batch.get(name)
+                    resolved = self._apply_policy(
+                        raw, name, entity_id, timestamp, effective_policy
+                    )
+                    self._cache[(name, entity_id, timestamp)] = resolved
+                    result[name] = resolved
 
         return result
 

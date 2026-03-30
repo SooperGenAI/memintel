@@ -652,3 +652,192 @@ class TestPrimitiveRegistry:
 
         assert reg.get("old.signal") is None
         assert reg.get("user.score") is not None
+
+
+# ── guardrails_path config loading (Item 1) ────────────────────────────────────
+
+class TestGuardrailsPathConfig:
+    """5 focused tests for the guardrails_path field in ConfigSchema."""
+
+    def test_default_guardrails_path_is_yaml_filename(self):
+        """When not specified, guardrails_path defaults to 'memintel_guardrails.yaml'."""
+        raw = minimal_valid_config_dict()
+        raw.pop("guardrails_path", None)
+        import os
+        os.environ.setdefault("DB_HOST", "localhost")
+        os.environ.setdefault("DB_USER", "admin")
+        os.environ.setdefault("DB_PASSWORD", "secret")
+        os.environ.setdefault("ANTHROPIC_API_KEY", "sk-test")
+        config = ConfigLoader().load_from_dict(raw)
+        assert config.guardrails_path == "memintel_guardrails.yaml"
+
+    def test_custom_absolute_guardrails_path_preserved(self, monkeypatch):
+        """An absolute path like /etc/memintel/... is stored verbatim."""
+        monkeypatch.setenv("DB_HOST", "localhost")
+        monkeypatch.setenv("DB_USER", "admin")
+        monkeypatch.setenv("DB_PASSWORD", "secret")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+
+        raw = minimal_valid_config_dict()
+        raw["guardrails_path"] = "/etc/memintel/memintel_guardrails.yaml"
+        config = ConfigLoader().load_from_dict(raw)
+        assert config.guardrails_path == "/etc/memintel/memintel_guardrails.yaml"
+
+    def test_custom_relative_guardrails_path_preserved(self, monkeypatch):
+        """A relative path like 'config/guardrails.yaml' is stored verbatim."""
+        monkeypatch.setenv("DB_HOST", "localhost")
+        monkeypatch.setenv("DB_USER", "admin")
+        monkeypatch.setenv("DB_PASSWORD", "secret")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+
+        raw = minimal_valid_config_dict()
+        raw["guardrails_path"] = "config/guardrails.yaml"
+        config = ConfigLoader().load_from_dict(raw)
+        assert config.guardrails_path == "config/guardrails.yaml"
+
+    def test_guardrails_path_in_yaml_file_loaded_correctly(self, monkeypatch, tmp_path):
+        """guardrails_path set in a .yaml config file is returned on the loaded config."""
+        monkeypatch.setenv("DB_PASSWORD", "secret")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+
+        yaml_text = _minimal_config_yaml()
+        yaml_text = yaml_text.replace(
+            "guardrails_path: memintel_guardrails.yaml",
+            "guardrails_path: /opt/app/custom_guardrails.yaml",
+        )
+        config_file = tmp_path / "memintel_config.yaml"
+        config_file.write_text(yaml_text)
+
+        config = ConfigLoader().load(str(config_file))
+        assert config.guardrails_path == "/opt/app/custom_guardrails.yaml"
+
+    def test_guardrails_path_main_resolves_relative_to_config_dir(self, monkeypatch, tmp_path):
+        """
+        main.py resolves guardrails_path relative to the config file directory.
+        A relative guardrails_path on the loaded config combined with
+        Path(config_path).parent gives the expected absolute path.
+        """
+        from pathlib import Path
+
+        monkeypatch.setenv("DB_PASSWORD", "secret")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+
+        config_file = tmp_path / "memintel_config.yaml"
+        config_file.write_text(_minimal_config_yaml())
+        config = ConfigLoader().load(str(config_file))
+
+        # Simulate the resolution logic in main.py lifespan
+        resolved = str(Path(str(config_file)).parent / config.guardrails_path)
+        assert resolved == str(tmp_path / "memintel_guardrails.yaml")
+
+
+# ── primitive_sources config parsing and DataResolver lookup (Item 2) ─────────
+
+class TestPrimitiveSourcesConfig:
+    """5 tests for PrimitiveSourceConfig, ConfigSchema.primitive_sources, and
+    DataResolver connector lookup."""
+
+    def test_primitive_sources_valid_config_parses(self, monkeypatch):
+        """A config with a valid primitive_sources block loads without error."""
+        monkeypatch.setenv("DB_HOST", "localhost")
+        monkeypatch.setenv("DB_USER", "admin")
+        monkeypatch.setenv("DB_PASSWORD", "secret")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+
+        raw = minimal_valid_config_dict()
+        raw["primitive_sources"] = {
+            "user.score": {
+                "connector": "postgres.test",
+                "query": "SELECT score FROM t WHERE id = :entity_id AND ts <= :as_of",
+            }
+        }
+        config = ConfigLoader().load_from_dict(raw)
+        assert config.primitive_sources is not None
+        assert "user.score" in config.primitive_sources
+        assert config.primitive_sources["user.score"].connector == "postgres.test"
+        assert ":entity_id" in config.primitive_sources["user.score"].query
+
+    def test_primitive_sources_unknown_connector_raises_config_error(self, monkeypatch):
+        """A primitive_source referencing a connector not in connectors: raises ConfigError."""
+        monkeypatch.setenv("DB_PASSWORD", "secret")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+
+        raw = minimal_valid_config_dict()
+        raw["primitive_sources"] = {
+            "user.score": {
+                "connector": "postgres.nonexistent",
+                "query": "SELECT 1",
+            }
+        }
+        with pytest.raises(ConfigError, match="references unknown connector"):
+            ConfigLoader().load_from_dict(raw)
+
+    def test_primitive_sources_is_optional_absent_gives_none(self, monkeypatch):
+        """When primitive_sources is absent from the config, the field is None."""
+        monkeypatch.setenv("DB_HOST", "localhost")
+        monkeypatch.setenv("DB_USER", "admin")
+        monkeypatch.setenv("DB_PASSWORD", "secret")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+
+        raw = minimal_valid_config_dict()
+        raw.pop("primitive_sources", None)
+        config = ConfigLoader().load_from_dict(raw)
+        assert config.primitive_sources is None
+
+    def test_data_resolver_uses_primitive_source_connector(self):
+        """DataResolver routes a configured primitive to the specified connector."""
+        from app.models.config import PrimitiveSourceConfig
+        from app.runtime.data_resolver import DataResolver, MockConnector
+
+        _ENTITY = "acme"
+        _TS = "2024-01-01T00:00:00Z"
+
+        connector_default = MockConnector(data={})
+        connector_analytics = MockConnector(
+            data={("account.rate", _ENTITY, _TS): 0.75}
+        )
+
+        resolver = DataResolver(
+            connector=connector_default,
+            backoff_base=0.0,
+            primitive_sources={
+                "account.rate": PrimitiveSourceConfig(
+                    connector="postgres.analytics",
+                    query="SELECT rate FROM metrics WHERE id = :entity_id AND ts <= :as_of LIMIT 1",
+                )
+            },
+            connector_registry={"postgres.analytics": connector_analytics},
+        )
+
+        result = resolver.fetch("account.rate", _ENTITY, _TS)
+        assert result.value == 0.75
+        assert connector_analytics.fetch_call_count == 1
+        assert connector_default.fetch_call_count == 0
+
+    def test_data_resolver_falls_back_for_unconfigured_primitive(self):
+        """DataResolver uses the default connector for a primitive not in primitive_sources."""
+        from app.models.config import PrimitiveSourceConfig
+        from app.runtime.data_resolver import DataResolver, MockConnector
+
+        _ENTITY = "acme"
+
+        connector_default = MockConnector(data={("user.score", _ENTITY, None): 0.9})
+        connector_analytics = MockConnector(data={})
+
+        resolver = DataResolver(
+            connector=connector_default,
+            backoff_base=0.0,
+            primitive_sources={
+                "account.rate": PrimitiveSourceConfig(
+                    connector="postgres.analytics",
+                    query="SELECT rate FROM t WHERE id = :entity_id",
+                )
+            },
+            connector_registry={"postgres.analytics": connector_analytics},
+        )
+
+        # user.score has no primitive_source entry → default connector
+        result = resolver.fetch("user.score", _ENTITY, None)
+        assert result.value == 0.9
+        assert connector_default.fetch_call_count == 1
+        assert connector_analytics.fetch_call_count == 0

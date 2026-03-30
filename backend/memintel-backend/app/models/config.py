@@ -8,6 +8,7 @@ Covers:
   - ConnectorConfig                                  — database and API connections
   - LLMConfig                                        — LLM provider for task authoring
   - RateLimitConfig / ExecutionConfig / EnvironmentConfig — runtime settings
+  - PrimitiveSourceConfig                            — simplified primitive-to-connector mapping
   - ConfigSchema                                     — top-level merged YAML object
   - ApplicationContext                               — guardrails LLM injection block
   - ApplyResult                                      — ConfigApplyService.apply() response
@@ -178,6 +179,28 @@ class PrimitiveConfig(BaseModel):
                 f"Invalid examples: float_array, string_list."
             )
         return v
+
+
+# ── Primitive source config ────────────────────────────────────────────────────
+
+class PrimitiveSourceConfig(BaseModel):
+    """
+    A simplified primitive-to-connector mapping used by DataResolver at runtime.
+
+    Declares which connector and SQL query to use when fetching a named
+    primitive. The connector value must match a key in ConfigSchema.connectors.
+
+    Query placeholders:
+      :entity_id — substituted with the entity string at fetch time.
+      :as_of     — substituted with the ISO 8601 UTC timestamp (or NOW()
+                   in snapshot mode).
+
+    This is a lighter-weight alternative to the full PrimitiveConfig / SourceConfig
+    / AccessConfig structure; it is used by DataResolver to select the correct
+    connector and query for each primitive without requiring the full registry.
+    """
+    connector: str   # must match a key in ConfigSchema.connectors
+    query: str       # SQL with :entity_id and :as_of placeholders
 
 
 # ── Connector config ───────────────────────────────────────────────────────────
@@ -388,6 +411,7 @@ class ConfigSchema(BaseModel):
     llm: LLMConfig
     environment: EnvironmentConfig = Field(default_factory=EnvironmentConfig)
     guardrails_path: str = "memintel_guardrails.yaml"
+    primitive_sources: dict[str, PrimitiveSourceConfig] | None = Field(default=None)
 
     @field_validator("primitives")
     @classmethod
@@ -412,6 +436,21 @@ class ConfigSchema(BaseModel):
                 raise ValueError(
                     f"Primitive '{p.name}' references unknown connector "
                     f"'{p.source.identifier}'. "
+                    f"Available connectors: {sorted(connector_names)}"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_primitive_sources_connectors(self) -> ConfigSchema:
+        """Verify every primitive_source's connector exists in connectors."""
+        if self.primitive_sources is None:
+            return self
+        connector_names = set(self.connectors.keys())
+        for prim_name, source in self.primitive_sources.items():
+            if source.connector not in connector_names:
+                raise ValueError(
+                    f"primitive_sources['{prim_name}'] references unknown connector "
+                    f"'{source.connector}'. "
                     f"Available connectors: {sorted(connector_names)}"
                 )
         return self
