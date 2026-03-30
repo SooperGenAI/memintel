@@ -33,6 +33,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_redoc_html
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import (
     actions,
@@ -184,12 +185,15 @@ app = FastAPI(
 )
 
 
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+
 @app.get("/redoc", include_in_schema=False)
 async def redoc() -> HTMLResponse:
     return get_redoc_html(
         openapi_url="/openapi.json",
         title="Memintel API Reference",
-        redoc_js_url="https://cdn.jsdelivr.net/npm/redoc/bundles/redoc.standalone.js",
+        redoc_js_url="/static/redoc.standalone.js",
     )
 
 # ── CORS middleware ─────────────────────────────────────────────────────────
