@@ -35,6 +35,9 @@ import os
 from typing import Any
 
 import structlog
+from pydantic import ValidationError as PydanticValidationError
+
+from app.llm.base import LLMClientBase
 
 log = structlog.get_logger(__name__)
 
@@ -130,27 +133,33 @@ def _build_system_prompt(context: dict[str, Any]) -> str:
 
 # ── AnthropicClient ────────────────────────────────────────────────────────────
 
-class AnthropicClient:
+class AnthropicClient(LLMClientBase):
     """
     Real Anthropic LLM client for task authoring.
 
     Parameters
     ----------
+    config:
+        LLMConfig from memintel_config.yaml. When provided, model,
+        api_key, and timeout_seconds are sourced from the config.
+        Falls back to environment variables / defaults when None.
     model:
-        Anthropic model ID, e.g. "claude-sonnet-4-20250514".
+        Anthropic model ID. Ignored when config is provided.
         Defaults to ANTHROPIC_MODEL env var or "claude-sonnet-4-20250514".
     api_key:
-        Anthropic API key. Defaults to ANTHROPIC_API_KEY env var.
+        Anthropic API key. Ignored when config is provided.
+        Defaults to ANTHROPIC_API_KEY env var.
     temperature:
         Sampling temperature. Defaults to 0 for deterministic output.
     max_tokens:
         Maximum tokens in the completion. Defaults to 4096.
     timeout:
-        Request timeout in seconds. Defaults to 60.
+        Request timeout in seconds. Used when config is None. Defaults to 60.
     """
 
     def __init__(
         self,
+        config: Any = None,      # LLMConfig | None — typed as Any to avoid circular import
         model: str | None = None,
         api_key: str | None = None,
         temperature: float = 0,
@@ -166,20 +175,22 @@ class AnthropicClient:
                 "Run: pip install anthropic"
             ) from exc
 
-        resolved_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+        if config is not None:
+            resolved_key = config.api_key or os.environ.get("ANTHROPIC_API_KEY")
+            self._model = config.model or os.environ.get("ANTHROPIC_MODEL") or "claude-sonnet-4-20250514"
+            self._timeout = float(config.timeout_seconds)
+        else:
+            resolved_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+            self._model = model or os.environ.get("ANTHROPIC_MODEL") or "claude-sonnet-4-20250514"
+            self._timeout = timeout
+
         if not resolved_key:
             raise LLMError(
                 "ANTHROPIC_API_KEY environment variable is not set."
             )
 
-        self._model = (
-            model
-            or os.environ.get("ANTHROPIC_MODEL")
-            or "claude-sonnet-4-20250514"
-        )
         self._temperature = temperature
         self._max_tokens = max_tokens
-        self._timeout = timeout
         self._client = self._anthropic.Anthropic(api_key=resolved_key)
 
     # ── Public interface (mirrors LLMFixtureClient) ────────────────────────────
@@ -266,12 +277,16 @@ class AnthropicClient:
                 f"got {type(result).__name__}"
             )
 
-        for key in ("concept", "condition", "action"):
-            if key not in result or not isinstance(result.get(key), dict):
-                raise LLMError(
-                    f"Anthropic response missing required key '{key}' "
-                    f"(must be a JSON object)"
-                )
+        # Validate against LLMTaskOutput — checks concept/condition/action keys exist
+        # and are dicts. Raises LLMError on structural mismatch.
+        from app.models.llm import LLMTaskOutput
+        try:
+            validated = LLMTaskOutput.model_validate(result)
+        except (PydanticValidationError, ValueError) as exc:
+            raise LLMError(
+                f"Anthropic response does not match expected structure: {exc}. "
+                f"Response must contain 'concept', 'condition', 'action' as JSON objects."
+            ) from exc
 
         log.info("anthropic_response_ok", model=self._model)
-        return result
+        return validated.model_dump()

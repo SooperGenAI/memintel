@@ -276,13 +276,23 @@ class LLMTaskOutput(BaseModel):
     """
     The complete structured output of a single LLM generation call.
 
-    Returned by parse_llm_output() after structural validation. Passed to
-    the compiler for semantic validation (strategy params, primitive refs,
-    bounds). On compiler errors, fed back into the refinement loop.
+    Validates that the LLM response contains the three required top-level
+    sections (concept, condition, action), each as a JSON object. The
+    internal structure of each section is validated separately by the
+    compiler (semantic layer) and the sub-models (LLMConceptOutput,
+    LLMConditionOutput, LLMActionOutput) after initial acceptance.
+
+    Both AnthropicClient and OpenAICompatibleClient validate their responses
+    against this model before returning. The compiler then validates the
+    sub-structures against the full schema.
+
+    concept, condition, action are typed as dict[str, Any] to accept any
+    LLM response format without failing on field name variations between
+    providers. The compiler performs deep structural validation.
     """
-    concept: LLMConceptOutput
-    condition: LLMConditionOutput
-    action: LLMActionOutput
+    concept: dict[str, Any]
+    condition: dict[str, Any]
+    action: dict[str, Any]
 
 
 # ── Exception hierarchy ────────────────────────────────────────────────────────

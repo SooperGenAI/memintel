@@ -274,11 +274,16 @@ class ConnectorConfig(BaseModel):
 # ── LLM config ────────────────────────────────────────────────────────────────
 
 #: Valid LLM provider identifiers.
+#: openai_compatible covers Ollama, vLLM, LM Studio, Azure OpenAI, and any
+#: server that exposes the OpenAI chat completions API.
 VALID_LLM_PROVIDERS: frozenset[str] = frozenset({
     "anthropic",
-    "openai",
-    "azure_openai",
-    "ollama",
+    "openai",               # legacy — use openai_compatible for new configs
+    "azure_openai",         # legacy — use openai_compatible for new configs
+    "ollama",               # legacy — use openai_compatible for new configs
+    "openai_compatible",    # primary on-premise deployment path
+    "bedrock",              # reserved for future AWS Bedrock support
+    "vertex",               # reserved for future Vertex AI support
 })
 
 
@@ -289,23 +294,43 @@ class LLMConfig(BaseModel):
     The LLM is NEVER called on any execution path. This config applies
     exclusively to TaskAuthoringService and POST /agents/* endpoints.
 
-    temperature: 0 is strongly recommended — higher values introduce
-      non-determinism in strategy selection and parameter generation that
-      the guardrails system cannot fully compensate for.
+    provider:
+        'anthropic'         — Anthropic API (cloud)
+        'openai_compatible' — any server exposing the OpenAI chat completions
+                              API: Ollama, vLLM, LM Studio, Azure OpenAI, or
+                              any on-premise GPU deployment. This is the
+                              primary on-premise path.
+        'bedrock'           — reserved (raises NotImplementedError)
+        'vertex'            — reserved (raises NotImplementedError)
+
+    api_key:
+        Optional. Must be an ${ENV_VAR} reference when specified in YAML.
+        Omit for internal deployments that need no authentication.
+
+    base_url:
+        Required for openai_compatible. Ignored for anthropic.
+        Examples: http://localhost:11434 (Ollama), http://gpu-server:8000 (vLLM)
+
+    ssl_verify:
+        Set False for on-premise servers with self-signed certificates.
+        Defaults to True (recommended for production).
+
+    timeout_seconds:
+        Request timeout in seconds. On-premise GPU servers may need longer
+        timeouts than cloud APIs. Defaults to 30.
 
     max_retries: how many times the refinement loop retries when the LLM
       produces a definition that fails compiler validation. After max_retries
       exhausted, POST /tasks returns HTTP 422 semantic_error.
-
-    api_key MUST be an ${ENV_VAR} reference — never plaintext.
     """
-    provider: str       # anthropic | openai | azure_openai | ollama
+    provider: str = "anthropic"
     model: str
-    api_key: str        # MUST be ${ENV_VAR}
-    endpoint: str
-    timeout_ms: int = 30000
+    api_key: str | None = None          # MUST be ${ENV_VAR} if specified
+    base_url: str | None = None         # required for openai_compatible
+    region: str | None = None           # reserved for bedrock (future)
+    ssl_verify: bool = True             # set False for self-signed certs
+    timeout_seconds: int = 30           # longer for on-premise GPU servers
     max_retries: int = 3
-    temperature: float = 0
 
     @field_validator("provider")
     @classmethod
@@ -320,7 +345,9 @@ class LLMConfig(BaseModel):
 
     @field_validator("api_key")
     @classmethod
-    def _validate_api_key(cls, v: str, info: ValidationInfo) -> str:
+    def _validate_api_key(cls, v: str | None, info: ValidationInfo) -> str | None:
+        if v is None:
+            return v
         # Skip format check when re-validating after env var resolution
         if info.context and info.context.get("resolved"):
             return v

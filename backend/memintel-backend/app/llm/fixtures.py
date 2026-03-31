@@ -31,6 +31,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from app.llm.base import LLMClientBase
+
 _FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 _FIXTURE_FILES = {
@@ -56,7 +58,7 @@ _ROUTING_RULES: list[tuple[str, list[str]]] = [
 ]
 
 
-class LLMFixtureClient:
+class LLMFixtureClient(LLMClientBase):
     """
     Development stub for the LLM client used by TaskAuthoringService.
 

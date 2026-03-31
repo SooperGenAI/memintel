@@ -50,8 +50,7 @@ from typing import Any
 
 import structlog
 
-from app.llm.client import AnthropicClient
-from app.llm.fixtures import LLMFixtureClient
+from app.llm.client_factory import create_llm_client
 from app.llm.prompts import build_context_prefix
 from app.models.action import ActionDefinition
 from app.models.concept import ConceptDefinition
@@ -127,11 +126,18 @@ class TaskAuthoringService:
 
     @staticmethod
     def _select_llm_client() -> Any:
-        """Select LLM client from USE_LLM_FIXTURES env var."""
-        use_fixtures = os.environ.get("USE_LLM_FIXTURES", "true").lower()
-        if use_fixtures != "false":
-            return LLMFixtureClient()
-        return AnthropicClient()
+        """Select LLM client from USE_LLM_FIXTURES and LLM_PROVIDER env vars."""
+        use_fixtures = os.environ.get("USE_LLM_FIXTURES", "true").lower() != "false"
+        from app.models.config import LLMConfig
+        config = LLMConfig.model_validate({
+            "provider": os.environ.get("LLM_PROVIDER", "anthropic"),
+            "model": os.environ.get("ANTHROPIC_MODEL") or "claude-sonnet-4-20250514",
+            "api_key": os.environ.get("ANTHROPIC_API_KEY"),
+            "base_url": os.environ.get("LLM_BASE_URL"),
+            "ssl_verify": os.environ.get("LLM_SSL_VERIFY", "true").lower() == "true",
+            "timeout_seconds": int(os.environ.get("LLM_TIMEOUT_SECONDS", "30")),
+        }, context={"resolved": True})
+        return create_llm_client(config, use_fixtures)
 
     # ── Public API ──────────────────────────────────────────────────────────────
 
