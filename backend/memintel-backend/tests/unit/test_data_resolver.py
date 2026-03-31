@@ -194,8 +194,9 @@ class TestTransientRetry:
             transient_failures=10,  # more than max_retries=3
         )
         resolver = DataResolver(connector=connector, backoff_base=0.0, max_retries=3)
-        with pytest.raises(TransientConnectorError):
-            resolver.fetch(_PRIM, _ENTITY, _TS)
+        pv = resolver.fetch(_PRIM, _ENTITY, _TS)
+        assert pv.fetch_error is True
+        assert pv.value is None
 
     def test_fetch_call_count_reflects_retries(self):
         connector = MockConnector(
@@ -214,8 +215,9 @@ class TestAuthFailure:
     def test_auth_failure_raises_immediately(self):
         connector = MockConnector(data={}, auth_failure=True)
         resolver = DataResolver(connector=connector, backoff_base=0.0)
-        with pytest.raises(AuthConnectorError):
-            resolver.fetch(_PRIM, _ENTITY, _TS)
+        pv = resolver.fetch(_PRIM, _ENTITY, _TS)
+        assert pv.fetch_error is True
+        assert pv.value is None
 
     def test_auth_failure_only_one_attempt(self):
         connector = MockConnector(data={}, auth_failure=True)
@@ -246,8 +248,9 @@ class TestRateLimitRetry:
             rate_limit_failures=10,
         )
         resolver = DataResolver(connector=connector, backoff_base=0.0, max_retries=3)
-        with pytest.raises(RateLimitConnectorError):
-            resolver.fetch(_PRIM, _ENTITY, _TS)
+        pv = resolver.fetch(_PRIM, _ENTITY, _TS)
+        assert pv.fetch_error is True
+        assert pv.value is None
 
 
 # ── 9. batch: multiple primitives fetched in one connector call ───────────────

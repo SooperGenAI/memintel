@@ -5,9 +5,9 @@ Integration tests for runtime failure scenarios.
 
 Coverage:
   1. Connector unavailable
-       - DataResolver exhausts retries on transient failures → TransientConnectorError
-       - Error propagates through ConceptExecutor (not swallowed)
-       - AuthConnectorError is NOT retried (permanent failure)
+       - DataResolver exhausts retries on transient failures → PrimitiveValue(fetch_error=True)
+       - Executor receives None value; result.value is None (error does not propagate)
+       - AuthConnectorError is NOT retried (permanent failure); captured as fetch_error=True
   2. Cache miss → execution still completes correctly
        - cache=False: result is correct, cache stays empty
        - cache=True + timestamp: second call is a cache hit (connector not called again)
@@ -99,8 +99,8 @@ def _build_graph() -> ExecutionGraph:
 def test_connector_unavailable_raises_typed_error() -> None:
     """
     When a connector raises TransientConnectorError on every call, DataResolver
-    exhausts all retries and re-raises the error as a TransientConnectorError —
-    a typed ConnectorError, NOT a bare Python exception or RuntimeError.
+    exhausts all retries and returns a PrimitiveValue with fetch_error=True.
+    The error is captured in error_msg and does NOT propagate as an exception.
 
     Retry count: 1 initial call + 3 retries = 4 total connector calls.
     """
@@ -111,8 +111,11 @@ def test_connector_unavailable_raises_typed_error() -> None:
         max_retries=3,
     )
 
-    with pytest.raises(TransientConnectorError):
-        resolver.fetch("signal", _ENTITY, _TIMESTAMP)
+    pv = resolver.fetch("signal", _ENTITY, _TIMESTAMP)
+
+    assert pv.fetch_error is True, "Expected fetch_error=True after exhausted retries"
+    assert pv.value is None, "Expected None value on connector failure"
+    assert pv.error_msg is not None, "Expected error_msg to be set"
 
     # Verify exactly 4 calls: 1 initial + 3 retries.
     assert connector.fetch_call_count == 4, (
@@ -122,12 +125,12 @@ def test_connector_unavailable_raises_typed_error() -> None:
 
 def test_connector_unavailable_propagates_through_executor() -> None:
     """
-    ConceptExecutor.execute_graph() propagates TransientConnectorError when the
-    connector is permanently unavailable. It does NOT swallow the exception or
-    return a silent None result.
+    When a connector is permanently unavailable, DataResolver captures the error
+    and returns PrimitiveValue(fetch_error=True, value=None). ConceptExecutor
+    receives None for the primitive and completes execution with a null result.
 
-    The error is a typed ConnectorError subclass — callers can catch it
-    specifically. It is NOT a bare unhandled exception.
+    The executor does NOT raise — the fetch error is surfaced via fetch_error=True
+    on the PrimitiveValue, not via exception propagation.
     """
     connector = MockConnector(transient_failures=10)
     resolver  = DataResolver(connector=connector, backoff_base=0.0, max_retries=3)
@@ -135,25 +138,30 @@ def test_connector_unavailable_propagates_through_executor() -> None:
     executor  = ConceptExecutor(result_cache=cache)
     graph     = _build_graph()
 
-    with pytest.raises(TransientConnectorError):
-        executor.execute_graph(
-            graph=graph,
-            entity=_ENTITY,
-            data_resolver=resolver,
-            timestamp=_TIMESTAMP,
-        )
+    # Executor completes without raising; concept value is None (null primitive)
+    result = executor.execute_graph(
+        graph=graph,
+        entity=_ENTITY,
+        data_resolver=resolver,
+        timestamp=_TIMESTAMP,
+    )
+    assert result is not None, "execute_graph should return a result, not raise"
+    assert result.value is None, "Concept value should be None when primitive fetch failed"
 
 
 def test_auth_failure_is_not_retried() -> None:
     """
     AuthConnectorError is a permanent failure and must NOT be retried.
     Exactly 1 connector call is expected — retry logic must be bypassed.
+    The error is captured in PrimitiveValue(fetch_error=True) rather than raised.
     """
     connector = MockConnector(auth_failure=True)
     resolver  = DataResolver(connector=connector, backoff_base=0.0, max_retries=3)
 
-    with pytest.raises(AuthConnectorError):
-        resolver.fetch("signal", _ENTITY, _TIMESTAMP)
+    pv = resolver.fetch("signal", _ENTITY, _TIMESTAMP)
+
+    assert pv.fetch_error is True, "Expected fetch_error=True for auth failure"
+    assert pv.value is None, "Expected None value on auth failure"
 
     assert connector.fetch_call_count == 1, (
         f"Auth failures must not be retried — expected 1 call, "

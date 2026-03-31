@@ -467,6 +467,7 @@ class ConceptExecutor:
         explain: bool = False,
         cache: bool = True,
         missing_data_policy: MissingDataPolicy | None = None,
+        primitive_collector: dict | None = None,
     ) -> ConceptResult:
         """
         Async variant of execute_graph() — uses DataResolver.afetch() internally.
@@ -503,6 +504,7 @@ class ConceptExecutor:
             timestamp=timestamp,
             explain=explain,
             missing_data_policy=missing_data_policy,
+            primitive_collector=primitive_collector,
         )
         compute_time_ms = int((time.monotonic() - t0) * 1000)
 
@@ -530,6 +532,7 @@ class ConceptExecutor:
         timestamp: str | None,
         explain: bool,
         missing_data_policy: MissingDataPolicy | None,
+        primitive_collector: dict | None = None,
     ) -> ConceptResult:
         """Async graph traversal — awaits primitive fetches via DataResolver.afetch()."""
         node_by_id: dict[str, GraphNode] = {n.node_id: n for n in graph.nodes}
@@ -545,6 +548,7 @@ class ConceptExecutor:
                 timestamp=timestamp,
                 data_resolver=data_resolver,
                 missing_data_policy=missing_data_policy,
+                primitive_collector=primitive_collector,
             )
             node_values[node_id] = value
 
@@ -597,6 +601,7 @@ class ConceptExecutor:
         timestamp: str | None,
         data_resolver: DataResolver,
         missing_data_policy: MissingDataPolicy | None,
+        primitive_collector: dict | None = None,
     ) -> Any:
         """Async node evaluation — awaits DataResolver.afetch() for primitive nodes."""
         if node.op == _PRIMITIVE_FETCH_OP:
@@ -607,6 +612,8 @@ class ConceptExecutor:
                 or (MissingDataPolicy(declared_policy) if declared_policy else MissingDataPolicy.NULL)
             )
             pv = await data_resolver.afetch(source_name, entity, timestamp, policy=policy)
+            if primitive_collector is not None:
+                primitive_collector[source_name] = pv
             return pv.value
 
         # Feature node — same sync dispatch as _execute_node

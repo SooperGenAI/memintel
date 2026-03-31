@@ -37,6 +37,8 @@ import re
 from datetime import datetime, timedelta
 from typing import Any
 
+import asyncio
+
 import asyncpg
 import structlog
 
@@ -51,8 +53,10 @@ from app.models.errors import (
     MemintelError,
     NotFoundError,
 )
+from app.models.decision import DecisionRecord
 from app.models.result import (
     ActionTriggered,
+    ActionTriggeredStatus,
     BatchExecuteItem,
     BatchExecuteResult,
     ConceptOutputType,
@@ -63,6 +67,7 @@ from app.models.result import (
     FullPipelineResult,
     Job,
 )
+from app.stores.decision import DecisionStore
 from app.runtime.action_trigger import ActionTrigger
 from app.runtime.cache import ResultCache
 from app.runtime.data_resolver import DataResolver, MockConnector
@@ -316,23 +321,33 @@ class ExecuteService:
         """
         Persist a concept result for future history retrieval. Best-effort.
 
-        Only numeric results (output_type='float') are stored — z_score,
-        percentile, and change all require numeric concept output. Non-numeric
-        results (boolean, categorical) are silently skipped; they cannot be
-        used as history anyway.
+        All result types are stored:
+          FLOAT       — value stored as float (supports history for numeric strategies)
+          BOOLEAN     — stored as 1.0 (True) or 0.0 (False)
+          CATEGORICAL — value=None; text stored in output_text column
 
         Exceptions are caught and logged rather than propagated — history
         storage must never block or fail the primary evaluation path.
         """
-        if result.type != ConceptOutputType.FLOAT:
-            return
         try:
+            if result.type == ConceptOutputType.FLOAT:
+                store_value = float(result.value) if result.value is not None else None
+                store_text = None
+            elif result.type == ConceptOutputType.BOOLEAN:
+                store_value = 1.0 if result.value else 0.0
+                store_text = None
+            elif result.type == ConceptOutputType.CATEGORICAL:
+                store_value = None
+                store_text = str(result.value) if result.value is not None else None
+            else:
+                return
             await self._result_store.store(
                 concept_id=concept_id,
                 version=result.version,
                 entity=result.entity,
-                value=float(result.value),
+                value=store_value,
                 output_type=result.type.value,
+                output_text=store_text,
             )
         except Exception as exc:
             log.warning(
@@ -806,6 +821,7 @@ class ExecuteService:
         1. ψ: compile and execute concept → ConceptResult.
         2. φ: evaluate condition strategy → DecisionValue.
         3. α: load bound actions from DB, trigger each (best-effort, never blocks).
+        4. δ: record decision to decisions table (fire-and-forget, never fails pipeline).
 
         dry_run=True: ψ and φ execute fully; α returns status='would_trigger'
         without making real deliveries.
@@ -818,10 +834,11 @@ class ExecuteService:
         condition = await self._fetch_condition(req.condition_id, req.condition_version)
         concept = await self._fetch_concept(req.concept_id, req.concept_version)
 
-        # ψ: compile and execute concept.
+        # ψ: compile and execute concept; collect primitive values for audit.
         graph = DAGBuilder().build_dag(concept)
         executor = self._make_executor()
         resolver = self._make_resolver()
+        primitive_collector: dict = {}
 
         concept_result = await executor.aexecute_graph(
             graph=graph,
@@ -830,6 +847,7 @@ class ExecuteService:
             timestamp=req.timestamp,
             explain=getattr(req, "explain", False),
             cache=True,
+            primitive_collector=primitive_collector,
         )
 
         # φ: evaluate condition strategy.
@@ -858,6 +876,65 @@ class ExecuteService:
             reason=decision.reason,
             history_count=decision.history_count,
         )
+
+        # δ: build and persist decision record (fire-and-forget — never fails pipeline).
+        from app.runtime.data_resolver import PrimitiveValue as _PV  # local to avoid circular
+
+        input_primitives: dict[str, Any] = {}
+        signal_errors: dict[str, str] = {}
+        for prim_name, pv in primitive_collector.items():
+            input_primitives[prim_name] = pv.value if hasattr(pv, "value") else pv
+            if hasattr(pv, "fetch_error") and pv.fetch_error:
+                signal_errors[prim_name] = pv.error_msg or ""
+
+        # Determine concept_value for the decision record.
+        if concept_result.value is None:
+            _concept_value: float | None = None
+        elif concept_result.type == ConceptOutputType.FLOAT:
+            _concept_value = float(concept_result.value)
+        elif concept_result.type == ConceptOutputType.BOOLEAN:
+            _concept_value = 1.0 if concept_result.value else 0.0
+        else:
+            _concept_value = None
+
+        action_ids_fired = [
+            t.action_id for t in triggered
+            if t.status == ActionTriggeredStatus.TRIGGERED
+        ]
+
+        ir_hash_val = getattr(condition, "ir_hash", None)
+
+        decision_record = DecisionRecord(
+            concept_id=req.concept_id,
+            concept_version=req.concept_version,
+            condition_id=req.condition_id,
+            condition_version=req.condition_version,
+            entity_id=req.entity,
+            fired=bool(decision.value),
+            concept_value=_concept_value,
+            threshold_applied=condition.strategy.params.model_dump(),
+            ir_hash=ir_hash_val,
+            input_primitives=input_primitives if input_primitives else None,
+            signal_errors=signal_errors if signal_errors else None,
+            reason=decision.reason,
+            action_ids_fired=action_ids_fired,
+            dry_run=getattr(req, "dry_run", False),
+        )
+
+        _decision_store = DecisionStore(self._pool)
+
+        async def _record_decision() -> None:
+            try:
+                await _decision_store.record(decision_record)
+            except Exception as exc:
+                log.warning(
+                    "decision_record_failed",
+                    condition_id=req.condition_id,
+                    entity=req.entity,
+                    error=str(exc),
+                )
+
+        asyncio.create_task(_record_decision())
 
         log.info(
             "service_evaluate_full",

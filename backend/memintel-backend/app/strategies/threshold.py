@@ -52,6 +52,12 @@ class ThresholdStrategy(ConditionStrategy):
         MemintelError(semantic_error) if direction or value params are missing
                                       or direction is not 'above' / 'below'.
         """
+        if result.value is None:
+            return self._boolean_decision(
+                False, result, condition_id, condition_version,
+                reason="null_input",
+                history_count=None,
+            )
         require_numeric(result, _STRATEGY)
 
         direction = require_param(params, "direction", _STRATEGY)

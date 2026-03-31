@@ -125,6 +125,8 @@ class ConditionStrategy(ABC):
         result: ConceptResult,
         condition_id: str,
         condition_version: str,
+        reason: str | None = None,
+        history_count: int | None = None,
     ) -> DecisionValue:
         """Build a decision<boolean> DecisionValue from an evaluation result."""
         return DecisionValue(
@@ -134,6 +136,8 @@ class ConditionStrategy(ABC):
             condition_version=condition_version,
             entity=result.entity,
             timestamp=result.timestamp,
+            reason=reason,
+            history_count=history_count,
         )
 
     @staticmethod

@@ -60,26 +60,32 @@ class ConceptResultStore:
         concept_id: str,
         version: str,
         entity: str,
-        value: float,
+        value: float | None,
         output_type: str,
+        output_text: str | None = None,
     ) -> None:
         """
         Persist one concept execution result.
+
+        value is None for categorical results (text stored in output_text).
+        output_text is the string value for categorical results.
 
         Raises on any DB error — callers (ExecuteService._store_concept_result)
         must catch and log rather than propagate, since history storage is
         best-effort and must not block the primary evaluation path.
         """
+        float_value = float(value) if value is not None else None
         await self._pool.execute(
             f"""
-            INSERT INTO {self._TABLE} (concept_id, version, entity, value, output_type)
-            VALUES ($1, $2, $3, $4, $5)
+            INSERT INTO {self._TABLE} (concept_id, version, entity, value, output_type, output_text)
+            VALUES ($1, $2, $3, $4, $5, $6)
             """,
             concept_id,
             version,
             entity,
-            float(value),
+            float_value,
             output_type,
+            output_text,
         )
 
     # ── fetch_history ─────────────────────────────────────────────────────────

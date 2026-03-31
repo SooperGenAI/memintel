@@ -73,6 +73,12 @@ class ZScoreStrategy(ConditionStrategy):
                                       or direction is not 'above'/'below'/'any',
                                       or threshold is not > 0.
         """
+        if result.value is None:
+            return self._boolean_decision(
+                False, result, condition_id, condition_version,
+                reason="null_input",
+                history_count=None,
+            )
         require_numeric(result, _STRATEGY)
 
         threshold = require_param(params, "threshold", _STRATEGY)

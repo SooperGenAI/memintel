@@ -64,6 +64,12 @@ class ChangeStrategy(ConditionStrategy):
                                       direction is not 'increase'/'decrease'/'any',
                                       or value is not >= 0.
         """
+        if result.value is None:
+            return self._boolean_decision(
+                False, result, condition_id, condition_version,
+                reason="null_input",
+                history_count=None,
+            )
         require_numeric(result, _STRATEGY)
 
         direction = require_param(params, "direction", _STRATEGY)

@@ -72,13 +72,18 @@ class PrimitiveValue:
     """
     The resolved value of a single primitive fetch after policy application.
 
-    value    — the primitive's data value, or None when policy=null was
-               applied on a missing result.
-    nullable — True when the raw data was absent and the policy preserved
-               null.  Downstream operators must handle nullable inputs.
+    value      — the primitive's data value, or None when policy=null was
+                 applied on a missing result.
+    nullable   — True when the raw data was absent and the policy preserved
+                 null.  Downstream operators must handle nullable inputs.
+    fetch_error — True when the connector raised ConnectorError during fetch.
+                  Distinguishes connector failure from legitimate null data.
+    error_msg  — the ConnectorError message when fetch_error=True; None otherwise.
     """
     value: float | int | bool | str | list | None
     nullable: bool = False
+    fetch_error: bool = False
+    error_msg: str | None = None
 
     @property
     def is_missing(self) -> bool:
@@ -362,11 +367,16 @@ class DataResolver:
             return self._cache[cache_key]
 
         conn = self._get_connector(primitive_name)
-        raw = _with_retry(
-            lambda: conn.fetch(primitive_name, entity_id, timestamp),
-            max_retries=self._max_retries,
-            backoff_base=self._backoff_base,
-        )
+        try:
+            raw = _with_retry(
+                lambda: conn.fetch(primitive_name, entity_id, timestamp),
+                max_retries=self._max_retries,
+                backoff_base=self._backoff_base,
+            )
+        except ConnectorError as e:
+            error_pv = PrimitiveValue(value=None, nullable=True, fetch_error=True, error_msg=str(e))
+            self._cache[cache_key] = error_pv
+            return error_pv
 
         resolved = self._apply_policy(raw, primitive_name, entity_id, timestamp, effective_policy)
         self._cache[cache_key] = resolved
@@ -506,23 +516,31 @@ class DataResolver:
         if source is not None:
             async_conn = self._async_connector_registry.get(source.connector)
             if async_conn is not None:
-                pv = await async_conn.fetch(primitive_name, entity_id, timestamp)
-                if pv.value is None:
-                    resolved = await self._aapply_fill_policy(
-                        primitive_name, entity_id, timestamp, effective_policy, async_conn
-                    )
-                else:
-                    resolved = pv
+                try:
+                    pv = await async_conn.fetch(primitive_name, entity_id, timestamp)
+                    if pv.value is None:
+                        resolved = await self._aapply_fill_policy(
+                            primitive_name, entity_id, timestamp, effective_policy, async_conn
+                        )
+                    else:
+                        resolved = pv
+                except ConnectorError as e:
+                    resolved = PrimitiveValue(value=None, nullable=True, fetch_error=True, error_msg=str(e))
                 self._cache[cache_key] = resolved
                 return resolved
 
         # Fall back to sync connector (MockConnector / StaticDataConnector)
         conn = self._get_connector(primitive_name)
-        raw = _with_retry(
-            lambda: conn.fetch(primitive_name, entity_id, timestamp),
-            max_retries=self._max_retries,
-            backoff_base=self._backoff_base,
-        )
+        try:
+            raw = _with_retry(
+                lambda: conn.fetch(primitive_name, entity_id, timestamp),
+                max_retries=self._max_retries,
+                backoff_base=self._backoff_base,
+            )
+        except ConnectorError as e:
+            error_pv = PrimitiveValue(value=None, nullable=True, fetch_error=True, error_msg=str(e))
+            self._cache[cache_key] = error_pv
+            return error_pv
         resolved = self._apply_policy(raw, primitive_name, entity_id, timestamp, effective_policy)
         self._cache[cache_key] = resolved
         return resolved

@@ -57,6 +57,12 @@ class EqualsStrategy(ConditionStrategy):
         MemintelError(type_error)     if params['labels'] is set and result.value
                                       is not in the declared label set.
         """
+        if result.value is None:
+            return self._boolean_decision(
+                False, result, condition_id, condition_version,
+                reason="null_input",
+                history_count=None,
+            )
         require_text(result, _STRATEGY)
 
         target_label = require_param(params, "value", _STRATEGY)

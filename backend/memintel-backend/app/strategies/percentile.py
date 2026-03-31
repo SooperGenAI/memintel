@@ -75,6 +75,12 @@ class PercentileStrategy(ConditionStrategy):
                                       direction is not 'top'/'bottom', or value
                                       is outside [0, 100].
         """
+        if result.value is None:
+            return self._boolean_decision(
+                False, result, condition_id, condition_version,
+                reason="null_input",
+                history_count=None,
+            )
         require_numeric(result, _STRATEGY)
 
         direction = require_param(params, "direction", _STRATEGY)
