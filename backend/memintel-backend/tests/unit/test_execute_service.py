@@ -22,6 +22,11 @@ Coverage:
   16. evaluate_full() — full pipeline → FullPipelineResult structure correct
   17. evaluate_full() — dry_run=True → actions_triggered status='would_trigger'
   18. _parse_iso_duration() — common durations parsed correctly
+  19. composite AND both operands true → DecisionResult.value is True
+  20. composite AND one operand false → DecisionResult.value is False
+  21. composite OR one operand true → DecisionResult.value is True
+  22. composite OR both operands false → DecisionResult.value is False
+  23. composite missing operand → NotFoundError with operand id in message
 
 Test isolation: every test builds its own MockPool. No shared mutable state.
 No real DB or connector calls.
@@ -571,3 +576,165 @@ def test_parse_iso_duration_bad_input_raises():
 
     with pytest.raises(ValueError):
         _parse_iso_duration("T1H")  # missing leading P
+
+
+# ── composite strategy tests ───────────────────────────────────────────────────
+#
+# concept result: normalize(revenue=0, min=0, max=1000) → 0.0
+#   op_true  condition: threshold below 0.5  → True  (0.0 < 0.5)
+#   op_false condition: threshold above 0.5  → False (0.0 <= 0.5)
+
+_OP_TRUE_BODY = {
+    "condition_id": "op_true",
+    "version": "1.0",
+    "namespace": "org",
+    "concept_id": "org.test_score",
+    "concept_version": "1.0",
+    "strategy": {
+        "type": "threshold",
+        "params": {"direction": "below", "value": 0.5},
+    },
+}
+
+_OP_FALSE_BODY = {
+    "condition_id": "op_false",
+    "version": "1.0",
+    "namespace": "org",
+    "concept_id": "org.test_score",
+    "concept_version": "1.0",
+    "strategy": {
+        "type": "threshold",
+        "params": {"direction": "above", "value": 0.5},
+    },
+}
+
+
+def _composite_condition_body(operator: str, operands: list[str]) -> dict:
+    return {
+        "condition_id": f"composite_{operator.lower()}",
+        "version": "1.0",
+        "namespace": "org",
+        "concept_id": "org.test_score",
+        "concept_version": "1.0",
+        "strategy": {
+            "type": "composite",
+            "params": {"operator": operator, "operands": operands},
+        },
+    }
+
+
+def _composite_pool(operator: str, operands: list[str], operand_bodies: dict) -> MockPool:
+    """
+    Build a MockPool for a composite condition test.
+
+    fetchrow_map includes:
+      (composite_id, "1.0") → composite condition row (version-keyed lookup)
+      ("org.test_score", "1.0") → concept row
+      "op_true" / "op_false" → operand condition rows (latest-version lookup)
+    """
+    condition_id = f"composite_{operator.lower()}"
+    return MockPool(
+        fetchrow_map={
+            (condition_id, "1.0"): {"body": json.dumps(
+                _composite_condition_body(operator, operands)
+            )},
+            ("org.test_score", "1.0"): _concept_row(),
+            **{name: {"body": json.dumps(body)} for name, body in operand_bodies.items()},
+        },
+        fetch_rows=[],
+    )
+
+
+def test_composite_and_both_true_returns_true():
+    """AND composite with both operands evaluating True → decision.value is True."""
+    pool = _composite_pool(
+        operator="AND",
+        operands=["op_true", "op_true"],
+        operand_bodies={"op_true": _OP_TRUE_BODY},
+    )
+    service = _make_service(pool)
+    req = _condition_req(
+        condition_id="composite_and",
+        condition_version="1.0",
+        timestamp="2024-01-01T00:00:00Z",
+    )
+    result = _run(service.evaluate_condition(req))
+
+    assert isinstance(result, DecisionResult)
+    assert result.value is True
+
+
+def test_composite_and_one_false_returns_false():
+    """AND composite with one operand evaluating False → decision.value is False."""
+    pool = _composite_pool(
+        operator="AND",
+        operands=["op_true", "op_false"],
+        operand_bodies={"op_true": _OP_TRUE_BODY, "op_false": _OP_FALSE_BODY},
+    )
+    service = _make_service(pool)
+    req = _condition_req(
+        condition_id="composite_and",
+        condition_version="1.0",
+        timestamp="2024-01-01T00:00:00Z",
+    )
+    result = _run(service.evaluate_condition(req))
+
+    assert isinstance(result, DecisionResult)
+    assert result.value is False
+
+
+def test_composite_or_one_true_returns_true():
+    """OR composite with one operand evaluating True → decision.value is True."""
+    pool = _composite_pool(
+        operator="OR",
+        operands=["op_false", "op_true"],
+        operand_bodies={"op_false": _OP_FALSE_BODY, "op_true": _OP_TRUE_BODY},
+    )
+    service = _make_service(pool)
+    req = _condition_req(
+        condition_id="composite_or",
+        condition_version="1.0",
+        timestamp="2024-01-01T00:00:00Z",
+    )
+    result = _run(service.evaluate_condition(req))
+
+    assert isinstance(result, DecisionResult)
+    assert result.value is True
+
+
+def test_composite_or_both_false_returns_false():
+    """OR composite with both operands evaluating False → decision.value is False."""
+    pool = _composite_pool(
+        operator="OR",
+        operands=["op_false", "op_false"],
+        operand_bodies={"op_false": _OP_FALSE_BODY},
+    )
+    service = _make_service(pool)
+    req = _condition_req(
+        condition_id="composite_or",
+        condition_version="1.0",
+        timestamp="2024-01-01T00:00:00Z",
+    )
+    result = _run(service.evaluate_condition(req))
+
+    assert isinstance(result, DecisionResult)
+    assert result.value is False
+
+
+def test_composite_missing_operand_raises_not_found():
+    """Composite referencing an unregistered operand → NotFoundError naming the operand."""
+    pool = _composite_pool(
+        operator="AND",
+        operands=["op_true", "op_missing"],
+        operand_bodies={"op_true": _OP_TRUE_BODY},
+        # op_missing is NOT in operand_bodies → _fetch_condition_latest returns None
+    )
+    service = _make_service(pool)
+    req = _condition_req(
+        condition_id="composite_and",
+        condition_version="1.0",
+        timestamp="2024-01-01T00:00:00Z",
+    )
+    with pytest.raises(NotFoundError) as exc_info:
+        _run(service.evaluate_condition(req))
+    assert "op_missing" in str(exc_info.value)

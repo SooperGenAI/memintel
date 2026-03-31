@@ -25,9 +25,10 @@ layer is built.
 
 Composite conditions
 ────────────────────
-Recursive operand evaluation for composite conditions is not yet implemented.
-Composite strategies receive empty operand_results, which evaluates to the
-strategy's identity element (False for AND, False for OR).
+Composite conditions are evaluated recursively: each operand condition_id is
+resolved to its latest registered version, its concept is executed, and the
+resulting DecisionValue is collected. The CompositeStrategy then applies its
+AND/OR operator across the collected boolean results.
 """
 from __future__ import annotations
 
@@ -205,6 +206,32 @@ class ExecuteService:
             )
         return ConditionDefinition(**_parse_body(row["body"]))
 
+    async def _fetch_condition_latest(self, condition_id: str) -> ConditionDefinition:
+        """
+        Load the most recently registered version of a condition.
+
+        Used by composite operand resolution where operands store only a
+        condition_id (no pinned version). Raises NotFoundError when the
+        condition_id is not registered.
+        """
+        row = await self._pool.fetchrow(
+            """
+            SELECT body FROM definitions
+            WHERE definition_id = $1
+              AND definition_type = 'condition'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            condition_id,
+        )
+        if row is None:
+            raise NotFoundError(
+                f"Composite operand condition '{condition_id}' not found.",
+                location="operands",
+                suggestion="Register the operand condition first via POST /registry/definitions.",
+            )
+        return ConditionDefinition(**_parse_body(row["body"]))
+
     async def _fetch_bound_actions(
         self, condition_id: str, condition_version: str
     ) -> list[ActionDefinition]:
@@ -248,27 +275,54 @@ class ExecuteService:
         """
         return DataResolver(connector=_make_connector(), backoff_base=0.0)
 
-    def _evaluate_strategy(
+    async def _evaluate_strategy(
         self,
         condition: ConditionDefinition,
         concept_result: ConceptResult,
         entity: str,
         timestamp: str | None,
+        executor: ConceptExecutor,
+        resolver: DataResolver,
     ):
         """
         Evaluate the condition strategy against concept_result.
 
-        Returns a DecisionValue.  Composite conditions receive empty
-        operand_results (all operands treated as False) until recursive
-        evaluation is implemented.
+        For composite conditions, recursively evaluates each operand condition
+        (resolved to its latest registered version) and passes the resulting
+        DecisionValue list to CompositeStrategy. All other strategies evaluate
+        directly from concept_result.
+
+        Returns a DecisionValue.
         """
         strategy_type = StrategyType(condition.strategy.type)
         params = condition.strategy.params.model_dump()
 
         if strategy_type == StrategyType.COMPOSITE:
-            # Recursive operand evaluation not yet implemented.
-            # Pass empty operand_results → strategy's identity element.
-            params["operand_results"] = []
+            operand_results = []
+            for operand_id in condition.strategy.params.operands:
+                operand_condition = await self._fetch_condition_latest(operand_id)
+                operand_concept = await self._fetch_concept(
+                    operand_condition.concept_id, operand_condition.concept_version
+                )
+                operand_graph = DAGBuilder().build_dag(operand_concept)
+                operand_concept_result = executor.execute_graph(
+                    graph=operand_graph,
+                    entity=entity,
+                    data_resolver=resolver,
+                    timestamp=timestamp,
+                    explain=False,
+                    cache=True,
+                )
+                operand_decision = await self._evaluate_strategy(
+                    operand_condition,
+                    operand_concept_result,
+                    entity,
+                    timestamp,
+                    executor,
+                    resolver,
+                )
+                operand_results.append(operand_decision)
+            params["operand_results"] = operand_results
 
         strategy = _STRATEGY_REGISTRY[strategy_type]
         return strategy.evaluate(
@@ -538,7 +592,9 @@ class ExecuteService:
             cache=True,
         )
 
-        decision = self._evaluate_strategy(condition, concept_result, req.entity, req.timestamp)
+        decision = await self._evaluate_strategy(
+            condition, concept_result, req.entity, req.timestamp, executor, resolver
+        )
 
         log.info(
             "service_evaluate_condition",
@@ -584,7 +640,9 @@ class ExecuteService:
                 timestamp=req.timestamp,
                 cache=True,
             )
-            decision = self._evaluate_strategy(condition, concept_result, entity, req.timestamp)
+            decision = await self._evaluate_strategy(
+                condition, concept_result, entity, req.timestamp, executor, resolver
+            )
             results.append(DecisionResult(
                 value=decision.value,
                 type=decision.decision_type,
@@ -639,8 +697,8 @@ class ExecuteService:
         )
 
         # φ: evaluate condition strategy.
-        decision = self._evaluate_strategy(
-            condition, concept_result, req.entity, req.timestamp
+        decision = await self._evaluate_strategy(
+            condition, concept_result, req.entity, req.timestamp, executor, resolver
         )
 
         # α: load and trigger bound actions (best-effort).
