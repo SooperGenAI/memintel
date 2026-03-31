@@ -49,6 +49,7 @@ from app.persistence.db import get_db
 from app.registry.definitions import DefinitionRegistry
 from app.runtime.cache import ResultCache
 from app.runtime.condition_evaluator import ConditionEvaluator
+from app.runtime.data_resolver import DataResolver, MockConnector
 from app.runtime.executor import ConceptExecutor
 from app.services.explanation import ExplanationService
 from app.stores.definition import DefinitionStore
@@ -87,11 +88,12 @@ async def get_explanation_service(
     graph_store = GraphStore(pool)
     executor = ConceptExecutor(result_cache=result_cache, graph_store=graph_store)
     evaluator = ConditionEvaluator(executor=executor, result_cache=result_cache)
+    data_resolver = DataResolver(connector=MockConnector(data={}), backoff_base=0.0)
     return ExplanationService(
         definition_registry=definition_registry,
         concept_executor=executor,
         condition_evaluator=evaluator,
-        data_resolver=None,  # must be replaced with a real DataResolver in production
+        data_resolver=data_resolver,
     )
 
 

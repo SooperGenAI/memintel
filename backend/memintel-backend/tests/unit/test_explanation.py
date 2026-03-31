@@ -440,6 +440,35 @@ def test_unnormalised_contributions_are_normalised_to_1():
     )
 
 
+def test_get_explanation_service_injects_non_none_data_resolver():
+    """
+    get_explanation_service() (the FastAPI dependency in decisions.py) must
+    construct ExplanationService with a real DataResolver — not None.
+
+    Calling explain_decision() with data_resolver=None would raise
+    AttributeError the moment the executor calls resolver.fetch(); this test
+    verifies the dependency factory wires a DataResolver instance.
+    """
+    from app.runtime.data_resolver import DataResolver
+    from app.api.routes.decisions import get_explanation_service
+
+    # Simulate a minimal asyncpg pool that satisfies ExplanationService's stores.
+    class _FakePool:
+        async def fetchrow(self, *a, **kw): return None
+        async def fetch(self, *a, **kw): return []
+        async def fetchval(self, *a, **kw): return None
+
+    # get_explanation_service is an async dependency — call it directly.
+    service = asyncio.run(get_explanation_service(pool=_FakePool()))
+
+    assert service._data_resolver is not None, (
+        "ExplanationService.data_resolver must not be None"
+    )
+    assert isinstance(service._data_resolver, DataResolver), (
+        f"Expected DataResolver, got {type(service._data_resolver).__name__}"
+    )
+
+
 def test_drivers_sorted_highest_first():
     """
     Drivers are listed highest contribution first.

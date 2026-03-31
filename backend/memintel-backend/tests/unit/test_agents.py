@@ -254,3 +254,25 @@ def test_compile_workflow_returns_execution_plan():
     assert isinstance(plan.parallelizable_groups, list)
     assert plan.primitive_fetches == ["mrr"]
     assert plan.critical_path_length == 3
+
+
+def test_select_llm_client_returns_anthropic_when_fixtures_disabled(monkeypatch):
+    """
+    AgentService._select_llm_client() must return an AnthropicClient instance
+    when USE_LLM_FIXTURES=false, matching the behaviour of TaskAuthoringService.
+
+    ANTHROPIC_API_KEY is patched to a dummy value so AnthropicClient.__init__
+    does not raise LLMError over a missing key.
+    """
+    from app.llm.client import AnthropicClient
+    from app.services.agents import AgentService
+
+    monkeypatch.setenv("USE_LLM_FIXTURES", "false")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-agents")
+
+    client = AgentService._select_llm_client()
+
+    assert isinstance(client, AnthropicClient), (
+        f"Expected AnthropicClient when USE_LLM_FIXTURES=false, "
+        f"got {type(client).__name__}"
+    )

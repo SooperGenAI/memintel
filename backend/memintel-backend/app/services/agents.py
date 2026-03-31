@@ -40,6 +40,7 @@ from typing import Any
 import asyncpg
 import structlog
 
+from app.llm.client import AnthropicClient
 from app.llm.fixtures import LLMFixtureClient
 from app.models.concept import ExecutionPlan
 from app.models.errors import NotFoundError
@@ -92,12 +93,7 @@ class AgentService:
         use_fixtures = os.environ.get("USE_LLM_FIXTURES", "true").lower()
         if use_fixtures != "false":
             return LLMFixtureClient()
-        log.warning(
-            "llm_client_fallback",
-            reason="USE_LLM_FIXTURES=false but real LLM client not implemented; "
-                   "falling back to LLMFixtureClient.",
-        )
-        return LLMFixtureClient()
+        return AnthropicClient()
 
     # ── query ─────────────────────────────────────────────────────────────────
 
