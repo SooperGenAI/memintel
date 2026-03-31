@@ -42,7 +42,7 @@ import structlog
 
 from app.compiler.dag_builder import DAGBuilder
 from app.models.action import ActionDefinition
-from app.models.condition import ConditionDefinition, DecisionType, StrategyType
+from app.models.condition import ConditionDefinition, DecisionType, DecisionValue, StrategyType
 from app.models.concept import ConceptDefinition
 from app.models.errors import (
     ErrorDetail,
@@ -55,6 +55,7 @@ from app.models.result import (
     ActionTriggered,
     BatchExecuteItem,
     BatchExecuteResult,
+    ConceptOutputType,
     ConceptResult,
     DecisionResult,
     ExecuteGraphRequest,
@@ -66,6 +67,7 @@ from app.runtime.action_trigger import ActionTrigger
 from app.runtime.cache import ResultCache
 from app.runtime.data_resolver import DataResolver, MockConnector
 from app.runtime.executor import ConceptExecutor
+from app.stores.concept_result import ConceptResultStore
 from app.stores.graph import GraphStore
 from app.stores.job import JobStore
 from app.strategies.change import ChangeStrategy
@@ -77,6 +79,22 @@ from app.strategies.z_score import ZScoreStrategy
 
 
 log = structlog.get_logger(__name__)
+
+#: Strategies that require a historical reference frame (prior concept results
+#: for the same entity). These are the only strategies where history matters —
+#: threshold, equals, and composite do not use history at all.
+_HISTORY_STRATEGIES: frozenset[StrategyType] = frozenset({
+    StrategyType.Z_SCORE,
+    StrategyType.PERCENTILE,
+    StrategyType.CHANGE,
+})
+
+#: Minimum number of stored concept results required before a history-based
+#: strategy will evaluate. Below this, returns reason="insufficient_history".
+_HISTORY_MIN_RESULTS: int = 3
+
+#: Maximum number of historical results fetched per evaluation.
+_HISTORY_WINDOW: int = 30
 
 
 # ── Strategy registry ──────────────────────────────────────────────────────────
@@ -161,6 +179,8 @@ class ExecuteService:
         # Shared in-memory result cache — deterministic results survive across
         # execute() calls within the service instance lifetime.
         self._cache = ResultCache()
+        # Store for persisting concept results used as history by stateful strategies.
+        self._result_store = ConceptResultStore(pool)
 
     # ── DB helpers ─────────────────────────────────────────────────────────────
 
@@ -275,6 +295,38 @@ class ExecuteService:
         """
         return DataResolver(connector=_make_connector(), backoff_base=0.0)
 
+    async def _store_concept_result(
+        self, result: ConceptResult, concept_id: str
+    ) -> None:
+        """
+        Persist a concept result for future history retrieval. Best-effort.
+
+        Only numeric results (output_type='float') are stored — z_score,
+        percentile, and change all require numeric concept output. Non-numeric
+        results (boolean, categorical) are silently skipped; they cannot be
+        used as history anyway.
+
+        Exceptions are caught and logged rather than propagated — history
+        storage must never block or fail the primary evaluation path.
+        """
+        if result.type != ConceptOutputType.FLOAT:
+            return
+        try:
+            await self._result_store.store(
+                concept_id=concept_id,
+                version=result.version,
+                entity=result.entity,
+                value=float(result.value),
+                output_type=result.type.value,
+            )
+        except Exception as exc:
+            log.warning(
+                "concept_result_store_failed",
+                concept_id=concept_id,
+                entity=result.entity,
+                error=str(exc),
+            )
+
     async def _evaluate_strategy(
         self,
         condition: ConditionDefinition,
@@ -283,20 +335,83 @@ class ExecuteService:
         timestamp: str | None,
         executor: ConceptExecutor,
         resolver: DataResolver,
-    ):
+    ) -> DecisionValue:
         """
         Evaluate the condition strategy against concept_result.
 
-        For composite conditions, recursively evaluates each operand condition
-        (resolved to its latest registered version) and passes the resulting
-        DecisionValue list to CompositeStrategy. All other strategies evaluate
-        directly from concept_result.
+        History-based strategies (z_score, percentile, change):
+          Fetches up to _HISTORY_WINDOW prior concept results from the
+          concept_results table for this (concept_id, entity) pair.
+          If fewer than _HISTORY_MIN_RESULTS are available, returns
+          DecisionValue(value=False, reason="insufficient_history") without
+          calling the strategy — the evaluation cannot be meaningful yet.
+          If the history query fails, falls back to reason="history_unavailable".
+
+        Composite strategy:
+          Recursively evaluates each operand condition (resolved to its latest
+          registered version) and passes the resulting DecisionValue list to
+          CompositeStrategy.
+
+        All other strategies (threshold, equals):
+          Evaluate directly from concept_result; history is not used.
 
         Returns a DecisionValue.
         """
         strategy_type = StrategyType(condition.strategy.type)
         params = condition.strategy.params.model_dump()
 
+        # ── History fetch for stateful strategies ──────────────────────────────
+        history: list[ConceptResult] = []
+
+        if strategy_type in _HISTORY_STRATEGIES:
+            history_reason: str | None = None
+            try:
+                rows = await self._result_store.fetch_history(
+                    concept_id=condition.concept_id,
+                    entity=entity,
+                    limit=_HISTORY_WINDOW,
+                )
+                # Rows arrive oldest-first from the store (already reversed).
+                history = [
+                    ConceptResult(
+                        value=float(row["value"]),
+                        type=ConceptOutputType.FLOAT,
+                        entity=row["entity"],
+                        version=row["version"],
+                        deterministic=True,
+                        timestamp=(
+                            row["evaluated_at"].isoformat()
+                            if row.get("evaluated_at") is not None
+                            else None
+                        ),
+                    )
+                    for row in rows
+                ]
+            except Exception as exc:
+                log.warning(
+                    "concept_history_fetch_failed",
+                    concept_id=condition.concept_id,
+                    entity=entity,
+                    error=str(exc),
+                )
+                history_reason = "history_unavailable"
+
+            if history_reason is None and len(history) < _HISTORY_MIN_RESULTS:
+                history_reason = "insufficient_history"
+
+            if history_reason is not None:
+                return DecisionValue(
+                    value=False,
+                    decision_type=DecisionType.BOOLEAN,
+                    condition_id=condition.condition_id,
+                    condition_version=condition.version,
+                    entity=entity,
+                    timestamp=timestamp,
+                    reason=history_reason,
+                    history_count=len(history),
+                )
+
+        # ── Composite recursive evaluation ─────────────────────────────────────
         if strategy_type == StrategyType.COMPOSITE:
             operand_results = []
             for operand_id in condition.strategy.params.operands:
@@ -327,7 +442,7 @@ class ExecuteService:
         strategy = _STRATEGY_REGISTRY[strategy_type]
         return strategy.evaluate(
             concept_result,
-            [],  # history — stateful strategies (z_score, change, percentile) use []
+            history,
             params,
             condition_id=condition.condition_id,
             condition_version=condition.version,
@@ -595,6 +710,7 @@ class ExecuteService:
         decision = await self._evaluate_strategy(
             condition, concept_result, req.entity, req.timestamp, executor, resolver
         )
+        await self._store_concept_result(concept_result, condition.concept_id)
 
         log.info(
             "service_evaluate_condition",
@@ -612,6 +728,8 @@ class ExecuteService:
             condition_version=req.condition_version,
             timestamp=req.timestamp,
             actions_triggered=[],
+            reason=decision.reason,
+            history_count=decision.history_count,
         )
 
     async def evaluate_condition_batch(self, req: Any) -> list[DecisionResult]:
@@ -643,6 +761,7 @@ class ExecuteService:
             decision = await self._evaluate_strategy(
                 condition, concept_result, entity, req.timestamp, executor, resolver
             )
+            await self._store_concept_result(concept_result, condition.concept_id)
             results.append(DecisionResult(
                 value=decision.value,
                 type=decision.decision_type,
@@ -651,6 +770,8 @@ class ExecuteService:
                 condition_version=req.condition_version,
                 timestamp=req.timestamp,
                 actions_triggered=[],
+                reason=decision.reason,
+                history_count=decision.history_count,
             ))
 
         log.info(
@@ -700,6 +821,7 @@ class ExecuteService:
         decision = await self._evaluate_strategy(
             condition, concept_result, req.entity, req.timestamp, executor, resolver
         )
+        await self._store_concept_result(concept_result, condition.concept_id)
 
         # α: load and trigger bound actions (best-effort).
         actions = await self._fetch_bound_actions(req.condition_id, req.condition_version)
@@ -718,6 +840,8 @@ class ExecuteService:
             condition_version=req.condition_version,
             timestamp=req.timestamp,
             actions_triggered=triggered,
+            reason=decision.reason,
+            history_count=decision.history_count,
         )
 
         log.info(

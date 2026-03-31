@@ -27,6 +27,13 @@ Coverage:
   21. composite OR one operand true → DecisionResult.value is True
   22. composite OR both operands false → DecisionResult.value is False
   23. composite missing operand → NotFoundError with operand id in message
+  24. z_score with 30 history rows → fires correctly (full z-score math)
+  25. z_score with 2 history rows → reason=insufficient_history
+  26. percentile with 30 history rows → fires correctly (bottom 20%)
+  27. percentile with 0 history rows → reason=insufficient_history
+  28. change with 3 history rows → fires correctly (>50% decrease)
+  29. change with 1 history row → reason=insufficient_history
+  30. time_series operator normalises {timestamp, value} dicts (executor fix)
 
 Test isolation: every test builds its own MockPool. No shared mutable state.
 No real DB or connector calls.
@@ -110,6 +117,8 @@ class MockPool:
     fetch_rows: list[dict]               — returned by fetch() for action queries.
     graph_row: dict|None                 — returned by the GraphStore graph lookup.
     job_row: dict|None                   — returned by the JobStore lookup.
+    concept_result_rows: list[dict]      — returned by fetch() for concept_results
+                                           history queries (z_score/percentile/change).
     """
 
     def __init__(
@@ -118,12 +127,14 @@ class MockPool:
         fetch_rows: list[dict] | None = None,
         graph_row: dict | None = None,
         job_row: dict | None = None,
+        concept_result_rows: list[dict] | None = None,
     ) -> None:
         self._fetchrow_map = fetchrow_map or {}
         self._fetch_rows = fetch_rows or []
         self._graph_row = graph_row
         self._job_row = job_row
         self._insert_row = job_row  # used for INSERT RETURNING
+        self._concept_result_rows = concept_result_rows if concept_result_rows is not None else []
 
     async def fetchrow(self, query: str, *args: Any) -> dict | None:
         # GraphStore.get() queries by graph_id (single string arg)
@@ -145,6 +156,9 @@ class MockPool:
         return None
 
     async def fetch(self, query: str, *args: Any) -> list[dict]:
+        # Concept results history queries (z_score / percentile / change)
+        if "concept_results" in query:
+            return self._concept_result_rows
         return self._fetch_rows
 
     async def execute(self, query: str, *args: Any) -> None:
@@ -738,3 +752,288 @@ def test_composite_missing_operand_raises_not_found():
     with pytest.raises(NotFoundError) as exc_info:
         _run(service.evaluate_condition(req))
     assert "op_missing" in str(exc_info.value)
+
+
+# ── history-based strategy tests ───────────────────────────────────────────────
+#
+# History rows are served via MockPool.concept_result_rows.
+# Concept result: normalize(revenue=0, min=0, max=1000) → 0.0 (missing_data_policy=zero)
+#
+# History row structure:
+#   {"value": float, "output_type": "float", "entity": str,
+#    "version": str, "evaluated_at": datetime}
+#
+# MockPool.fetch() routes "concept_results" queries to concept_result_rows and
+# routes "FROM definitions WHERE definition_type='action'" to fetch_rows=[].
+# These are independent dispatch paths so no collision occurs.
+
+import datetime as _dt
+
+
+def _cr_row(value: float, entity: str = "acct_1") -> dict:
+    """Build a synthetic concept_results row with a unique evaluated_at."""
+    return {
+        "value": value,
+        "output_type": "float",
+        "entity": entity,
+        "version": "1.0",
+        "evaluated_at": _dt.datetime(2024, 1, 1, 0, 0, 0),
+    }
+
+
+def _zscore_condition_body() -> dict:
+    """z_score condition: fires when z < -1.5 (below), threshold=1.5."""
+    return {
+        "condition_id": "zscore_cond",
+        "version": "1.0",
+        "namespace": "org",
+        "concept_id": "org.test_score",
+        "concept_version": "1.0",
+        "strategy": {
+            "type": "z_score",
+            "params": {"threshold": 1.5, "direction": "below"},
+        },
+    }
+
+
+def _percentile_condition_body() -> dict:
+    """percentile condition: fires when value is in the bottom 20% of history."""
+    return {
+        "condition_id": "pct_cond",
+        "version": "1.0",
+        "namespace": "org",
+        "concept_id": "org.test_score",
+        "concept_version": "1.0",
+        "strategy": {
+            "type": "percentile",
+            "params": {"direction": "bottom", "value": 20.0},
+        },
+    }
+
+
+def _change_condition_body() -> dict:
+    """change condition: fires on >50% decrease."""
+    return {
+        "condition_id": "change_cond",
+        "version": "1.0",
+        "namespace": "org",
+        "concept_id": "org.test_score",
+        "concept_version": "1.0",
+        "strategy": {
+            "type": "change",
+            "params": {"direction": "decrease", "value": 0.5},
+        },
+    }
+
+
+def test_z_score_with_30_history_rows_fires():
+    """
+    z_score with 30 history rows evaluates the full z-score formula and fires.
+
+    History: 15 rows at value=0.7, 15 rows at value=0.9 → mean=0.8, std=0.1
+    Current: 0.0  (normalize(0) with zero policy)
+    z = (0.0 - 0.8) / 0.1 = -8.0   direction='below', threshold=1.5
+    -8.0 < -1.5 → fires (True)
+    """
+    # Alternate 0.7 / 0.9 to produce non-zero std.
+    history_rows = [_cr_row(0.7 if i % 2 == 0 else 0.9) for i in range(30)]
+
+    pool = MockPool(
+        fetchrow_map={
+            ("zscore_cond", "1.0"): {"body": json.dumps(_zscore_condition_body())},
+            ("org.test_score", "1.0"): _concept_row(),
+        },
+        fetch_rows=[],
+        concept_result_rows=history_rows,
+    )
+    service = _make_service(pool)
+    req = _condition_req(
+        condition_id="zscore_cond",
+        condition_version="1.0",
+        timestamp="2024-06-01T00:00:00Z",
+    )
+    result = _run(service.evaluate_condition(req))
+
+    assert isinstance(result, DecisionResult)
+    assert result.value is True
+    assert result.reason is None
+    assert result.history_count is None
+
+
+def test_z_score_with_2_history_rows_returns_insufficient_history():
+    """z_score with only 2 stored results → reason='insufficient_history', value=False."""
+    history_rows = [_cr_row(0.8), _cr_row(0.9)]
+
+    pool = MockPool(
+        fetchrow_map={
+            ("zscore_cond", "1.0"): {"body": json.dumps(_zscore_condition_body())},
+            ("org.test_score", "1.0"): _concept_row(),
+        },
+        fetch_rows=[],
+        concept_result_rows=history_rows,
+    )
+    service = _make_service(pool)
+    req = _condition_req(
+        condition_id="zscore_cond",
+        condition_version="1.0",
+        timestamp="2024-06-01T00:00:00Z",
+    )
+    result = _run(service.evaluate_condition(req))
+
+    assert result.value is False
+    assert result.reason == "insufficient_history"
+    assert result.history_count == 2
+
+
+def test_percentile_with_30_history_rows_fires():
+    """
+    percentile with 30 history rows fires when current value is in the bottom 20%.
+
+    History: all 30 rows at value=0.8
+    Current: 0.0  (normalize(0) with zero policy)
+    20th percentile of [0.8, 0.8, ...] = 0.8
+    0.0 < 0.8 → fires (True)
+    """
+    history_rows = [_cr_row(0.8) for _ in range(30)]
+
+    pool = MockPool(
+        fetchrow_map={
+            ("pct_cond", "1.0"): {"body": json.dumps(_percentile_condition_body())},
+            ("org.test_score", "1.0"): _concept_row(),
+        },
+        fetch_rows=[],
+        concept_result_rows=history_rows,
+    )
+    service = _make_service(pool)
+    req = _condition_req(
+        condition_id="pct_cond",
+        condition_version="1.0",
+        timestamp="2024-06-01T00:00:00Z",
+    )
+    result = _run(service.evaluate_condition(req))
+
+    assert isinstance(result, DecisionResult)
+    assert result.value is True
+    assert result.reason is None
+
+
+def test_percentile_with_0_history_rows_returns_insufficient_history():
+    """percentile with 0 stored results → reason='insufficient_history', value=False."""
+    pool = MockPool(
+        fetchrow_map={
+            ("pct_cond", "1.0"): {"body": json.dumps(_percentile_condition_body())},
+            ("org.test_score", "1.0"): _concept_row(),
+        },
+        fetch_rows=[],
+        concept_result_rows=[],
+    )
+    service = _make_service(pool)
+    req = _condition_req(
+        condition_id="pct_cond",
+        condition_version="1.0",
+        timestamp="2024-06-01T00:00:00Z",
+    )
+    result = _run(service.evaluate_condition(req))
+
+    assert result.value is False
+    assert result.reason == "insufficient_history"
+    assert result.history_count == 0
+
+
+def test_change_with_sufficient_history_fires():
+    """
+    change with 3 history rows fires when most-recent prior value gives >50% drop.
+
+    History (oldest→newest): [0.75, 0.78, 0.8]  → history[-1].value = 0.8
+    Current: 0.0  (normalize(0) with zero policy)
+    pct_change = (0.0 - 0.8) / 0.8 = -1.0
+    direction='decrease', value=0.5 → -1.0 < -0.5 → fires (True)
+
+    NOTE: MockPool.fetch() returns concept_result_rows already in oldest-first
+    order (matching ConceptResultStore.fetch_history() which reverses the DESC
+    result). history[-1] is therefore the most recent prior value = 0.8.
+    """
+    # oldest-first, so index -1 (most recent) = 0.8
+    history_rows = [_cr_row(0.75), _cr_row(0.78), _cr_row(0.8)]
+
+    pool = MockPool(
+        fetchrow_map={
+            ("change_cond", "1.0"): {"body": json.dumps(_change_condition_body())},
+            ("org.test_score", "1.0"): _concept_row(),
+        },
+        fetch_rows=[],
+        concept_result_rows=history_rows,
+    )
+    service = _make_service(pool)
+    req = _condition_req(
+        condition_id="change_cond",
+        condition_version="1.0",
+        timestamp="2024-06-01T00:00:00Z",
+    )
+    result = _run(service.evaluate_condition(req))
+
+    assert isinstance(result, DecisionResult)
+    assert result.value is True
+    assert result.reason is None
+
+
+def test_change_with_1_history_row_returns_insufficient_history():
+    """change with only 1 stored result → reason='insufficient_history', value=False."""
+    pool = MockPool(
+        fetchrow_map={
+            ("change_cond", "1.0"): {"body": json.dumps(_change_condition_body())},
+            ("org.test_score", "1.0"): _concept_row(),
+        },
+        fetch_rows=[],
+        concept_result_rows=[_cr_row(0.8)],
+    )
+    service = _make_service(pool)
+    req = _condition_req(
+        condition_id="change_cond",
+        condition_version="1.0",
+        timestamp="2024-06-01T00:00:00Z",
+    )
+    result = _run(service.evaluate_condition(req))
+
+    assert result.value is False
+    assert result.reason == "insufficient_history"
+    assert result.history_count == 1
+
+
+def test_time_series_operator_normalises_timestamp_value_dicts():
+    """
+    Executor operators accept {timestamp, value} dicts as well as plain floats.
+
+    Validates the _extract_ts_value fix in executor.py that resolves the format
+    mismatch documented in app/models/config.py:509-512:
+      time_series values arrive as list[dict[str, Any]] where each entry has
+      'timestamp' (ISO 8601 str) and 'value' keys, not as plain float lists.
+    """
+    from app.runtime.executor import (
+        _op_mean,
+        _op_sum,
+        _op_min,
+        _op_max,
+        _op_pct_change,
+        _op_rate_of_change,
+    )
+
+    ts_vals = [
+        {"timestamp": "2024-01-01T00:00:00Z", "value": 1.0},
+        {"timestamp": "2024-01-02T00:00:00Z", "value": 2.0},
+        {"timestamp": "2024-01-03T00:00:00Z", "value": 3.0},
+    ]
+
+    assert _op_mean({"input": ts_vals}, {}) == 2.0
+    assert _op_sum({"input": ts_vals}, {}) == 6.0
+    assert _op_min({"input": ts_vals}, {}) == 1.0
+    assert _op_max({"input": ts_vals}, {}) == 3.0
+    # pct_change: (3.0 - 2.0) / abs(2.0) = 0.5
+    assert abs(_op_pct_change({"input": ts_vals}, {}) - 0.5) < 1e-9
+    # rate_of_change: 3.0 - 2.0 = 1.0
+    assert abs(_op_rate_of_change({"input": ts_vals}, {}) - 1.0) < 1e-9
+
+    # Backward-compatible: plain float lists still work.
+    plain_vals = [1.0, 2.0, 3.0]
+    assert _op_mean({"input": plain_vals}, {}) == 2.0
+    assert _op_pct_change({"input": plain_vals}, {}) == 0.5

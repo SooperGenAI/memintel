@@ -357,6 +357,17 @@ class DecisionValue(BaseModel):
     DecisionValue is NOT assignable to bool or str without unwrapping.
     Actions receive DecisionValue directly — they do not unwrap it.
     Use unwrap() to extract .value and discard provenance.
+
+    reason is set when the strategy could not be evaluated due to insufficient
+    or unavailable history. Possible values:
+      "insufficient_history" — fewer than the minimum required historical results
+                               are available for this entity + concept pair.
+                               value=False; the decision did not fire.
+      "history_unavailable"  — the history query raised an exception; execution
+                               continued with empty history as fallback.
+                               value=False; the decision did not fire.
+    history_count is the number of historical results that were available at
+    evaluation time. Set when reason is set; None otherwise.
     """
     value: bool | str
     decision_type: DecisionType
@@ -364,6 +375,8 @@ class DecisionValue(BaseModel):
     condition_version: str
     entity: str
     timestamp: str | None = None
+    reason: str | None = None
+    history_count: int | None = None
 
     def unwrap(self) -> bool | str:
         """Extract the raw value, discarding provenance."""

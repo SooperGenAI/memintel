@@ -83,6 +83,26 @@ def _guard_none_list(vals: Any) -> list | None:
     return None if vals is None else vals
 
 
+def _extract_ts_value(v: Any) -> float:
+    """
+    Extract a numeric value from a time_series element.
+
+    Accepts both plain float/int values and the canonical time_series dict
+    format {'timestamp': <ISO 8601 str>, 'value': <number>} that connectors
+    return for time_series<float> and time_series<int> primitives.
+
+    The dict form is documented in app/models/config.py:
+      list[dict[str, Any]] — for time_series types; each entry has
+                             'timestamp' (ISO 8601 str) and 'value' keys.
+
+    Falls back to float(v) for plain scalars to preserve backward compatibility
+    with callers that already pass numeric values (e.g. tests using raw lists).
+    """
+    if isinstance(v, dict) and "value" in v:
+        return float(v["value"])
+    return float(v)
+
+
 def _op_add(inputs: dict, params: dict) -> float | None:
     a = _guard_none(inputs["a"], params)
     b = _guard_none(inputs["b"], params)
@@ -123,28 +143,28 @@ def _op_mean(inputs: dict, params: dict) -> float | None:
         return None
     if not vals:
         return 0.0
-    return sum(float(v) for v in vals) / len(vals)
+    return sum(_extract_ts_value(v) for v in vals) / len(vals)
 
 
 def _op_sum(inputs: dict, params: dict) -> float | None:
     vals = _guard_none_list(inputs["input"])
     if vals is None:
         return None
-    return sum(float(v) for v in vals)
+    return sum(_extract_ts_value(v) for v in vals)
 
 
 def _op_min(inputs: dict, params: dict) -> float | None:
     vals = _guard_none_list(inputs["input"])
     if vals is None:
         return None
-    return min(float(v) for v in vals) if vals else 0.0
+    return min(_extract_ts_value(v) for v in vals) if vals else 0.0
 
 
 def _op_max(inputs: dict, params: dict) -> float | None:
     vals = _guard_none_list(inputs["input"])
     if vals is None:
         return None
-    return max(float(v) for v in vals) if vals else 0.0
+    return max(_extract_ts_value(v) for v in vals) if vals else 0.0
 
 
 def _op_count(inputs: dict, params: dict) -> int:
@@ -157,8 +177,8 @@ def _op_pct_change(inputs: dict, params: dict) -> float | None:
         return None
     if len(vals) < 2:
         return 0.0
-    prev = float(vals[-2])
-    curr = float(vals[-1])
+    prev = _extract_ts_value(vals[-2])
+    curr = _extract_ts_value(vals[-1])
     if prev == 0.0:
         return 0.0
     return (curr - prev) / abs(prev)
@@ -170,7 +190,7 @@ def _op_rate_of_change(inputs: dict, params: dict) -> float | None:
         return None
     if len(vals) < 2:
         return 0.0
-    return float(vals[-1]) - float(vals[-2])
+    return _extract_ts_value(vals[-1]) - _extract_ts_value(vals[-2])
 
 
 def _op_moving_average(inputs: dict, params: dict) -> float | None:
@@ -182,7 +202,7 @@ def _op_moving_average(inputs: dict, params: dict) -> float | None:
     window = int(params.get("window", len(vals)))
     window = max(1, window)
     recent = vals[-window:]
-    return sum(float(v) for v in recent) / len(recent)
+    return sum(_extract_ts_value(v) for v in recent) / len(recent)
 
 
 def _op_z_score_op(inputs: dict, params: dict) -> float | None:

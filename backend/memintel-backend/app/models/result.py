@@ -276,6 +276,13 @@ class DecisionResult(BaseModel):
 
     value is bool for boolean strategies (threshold/percentile/z_score/change/composite).
     value is str (the matched label) for the equals strategy on categorical input.
+
+    reason is populated when z_score, percentile, or change strategies could not
+    evaluate due to insufficient or unavailable history. Auditable and queryable.
+      "insufficient_history" — fewer than the required minimum results available.
+      "history_unavailable"  — history query failed; fallback to False.
+    history_count reflects how many historical results were found (0 if the
+    query failed). Set only when reason is also set.
     """
     value: bool | str
     type: DecisionType
@@ -284,6 +291,8 @@ class DecisionResult(BaseModel):
     condition_version: str
     timestamp: str | None = None
     actions_triggered: list[ActionTriggered] = Field(default_factory=list)
+    reason: str | None = None
+    history_count: int | None = None
 
 
 class FullPipelineResult(BaseModel):
