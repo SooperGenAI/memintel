@@ -85,7 +85,7 @@ class ActionService:
         )
 
         trigger_engine = ActionTrigger()
-        results = trigger_engine.trigger_bound_actions(
+        results = await trigger_engine.trigger_bound_actions(
             decision=decision,
             actions=[action],
             dry_run=req.dry_run,

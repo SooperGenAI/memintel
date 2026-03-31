@@ -18,6 +18,7 @@ ResultCache, and ConceptExecutor. No shared state between tests.
 """
 from __future__ import annotations
 
+import asyncio
 import pytest
 
 from app.models.action import ActionDefinition, FireOn, NotificationActionConfig, TriggerConfig
@@ -289,7 +290,7 @@ class TestDryRun:
     def test_dry_run_all_actions_would_trigger(self):
         trigger = ActionTrigger()
         decision = self._true_decision()
-        results = trigger.trigger_bound_actions(decision, self._make_actions(), dry_run=True)
+        results = asyncio.run(trigger.trigger_bound_actions(decision, self._make_actions(), dry_run=True))
         assert all(r.status == ActionTriggeredStatus.WOULD_TRIGGER for r in results)
 
     def test_dry_run_no_actual_dispatch(self):
@@ -301,7 +302,7 @@ class TestDryRun:
 
         trigger = ActionTrigger(dispatcher=dispatcher)
         decision = self._true_decision()
-        trigger.trigger_bound_actions(decision, self._make_actions(), dry_run=True)
+        asyncio.run(trigger.trigger_bound_actions(decision, self._make_actions(), dry_run=True))
         assert dispatch_called == []  # dispatcher must NOT be invoked in dry_run
 
 
@@ -338,7 +339,7 @@ class TestActionFailureIsolation:
         decision = self._true_decision()
 
         # Must NOT raise — best-effort contract.
-        results = trigger.trigger_bound_actions(decision, [self._make_action()], dry_run=False)
+        results = asyncio.run(trigger.trigger_bound_actions(decision, [self._make_action()], dry_run=False))
         assert results[0].status == ActionTriggeredStatus.FAILED
 
     def test_failed_action_error_is_captured(self):
@@ -347,7 +348,7 @@ class TestActionFailureIsolation:
 
         trigger  = ActionTrigger(dispatcher=failing_dispatcher)
         decision = self._true_decision()
-        results  = trigger.trigger_bound_actions(decision, [self._make_action()])
+        results  = asyncio.run(trigger.trigger_bound_actions(decision, [self._make_action()]))
         assert results[0].error is not None
         assert "Delivery timeout" in results[0].error.error.message
 
@@ -388,7 +389,7 @@ class TestActionFailureIsolation:
             value=True, decision_type=DecisionType.BOOLEAN,
             condition_id="c1", condition_version="1.0", entity=_ENTITY,
         )
-        results = trigger.trigger_bound_actions(decision, actions)
+        results = asyncio.run(trigger.trigger_bound_actions(decision, actions))
 
         assert results[0].status == ActionTriggeredStatus.FAILED
         assert results[1].status == ActionTriggeredStatus.TRIGGERED
@@ -420,7 +421,7 @@ class TestAtMostOnce:
             value=True, decision_type=DecisionType.BOOLEAN,
             condition_id="c1", condition_version="1.0", entity=_ENTITY,
         )
-        trigger.trigger_bound_actions(decision, [action])
+        asyncio.run(trigger.trigger_bound_actions(decision, [action]))
 
         assert len(call_count) == 1  # exactly one attempt, no retry
 
@@ -451,8 +452,8 @@ class TestNoCrossCallDedup:
             condition_id="c1", condition_version="1.0", entity=_ENTITY,
         )
 
-        trigger.trigger_bound_actions(decision, [action])
-        trigger.trigger_bound_actions(decision, [action])
+        asyncio.run(trigger.trigger_bound_actions(decision, [action]))
+        asyncio.run(trigger.trigger_bound_actions(decision, [action]))
 
         # Each call fires once — total 2 (no cross-call deduplication)
         assert len(call_count) == 2
@@ -479,7 +480,7 @@ class TestNoCrossCallDedup:
             value=True, decision_type=DecisionType.BOOLEAN,
             condition_id="c1", condition_version="1.0", entity=_ENTITY,
         )
-        results = trigger.trigger_bound_actions(true_decision, [action])
+        results = asyncio.run(trigger.trigger_bound_actions(true_decision, [action]))
         assert results[0].status == ActionTriggeredStatus.SKIPPED
         assert len(call_count) == 0  # not dispatched
 

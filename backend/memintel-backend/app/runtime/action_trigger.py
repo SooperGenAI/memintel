@@ -15,30 +15,62 @@ fire_on semantics:
   'false' → fires when decision.value is False.
   'any'   → fires on every evaluation regardless of decision value.
 
-Action execution types (current stubs):
-  webhook      → would POST to action.config.endpoint (not implemented here).
-  notification → would send to action.config.channel (not implemented here).
-  workflow     → would trigger action.config.workflow_id (not implemented here).
-  register     → would write back to action.config.primitive_id (not implemented).
+Action execution types:
+  webhook      → async POST to action.config.endpoint via httpx.
+  notification → async POST to CANVAS_NOTIFICATION_ENDPOINT if set; else log.
+  workflow     → async POST to CANVAS_WORKFLOW_ENDPOINT if set; else skip.
+  register     → log + return skipped (write-back not yet implemented).
 
-In this implementation _invoke_action() is a stub that always succeeds
-(returns an empty payload).  Real connectors are wired at a higher layer.
-Override _invoke_action() in a subclass or inject a dispatcher callable to
-connect real delivery backends.
+${ENV_VAR} substitutions are resolved in webhook header values at call time.
+They are NOT resolved in endpoint URLs — endpoints are treated as literals.
 """
 from __future__ import annotations
 
+import os
+import re
 from typing import Any, Callable
 
+import httpx
 import structlog
 
-from app.models.action import ActionDefinition, FireOn
+from app.models.action import ActionDefinition, ActionType, FireOn
 from app.models.condition import DecisionValue
 from app.models.errors import ErrorDetail, ErrorResponse, ErrorType
 from app.models.result import ActionTriggered, ActionTriggeredStatus
 
 
 log = structlog.get_logger(__name__)
+
+# Default message template for notification actions when message_template is absent.
+_DEFAULT_NOTIFICATION_TEMPLATE = (
+    "Condition {condition_id} fired for {entity} — value {value} at {timestamp}"
+)
+
+# Regex for ${ENV_VAR} substitution in webhook header values.
+_ENV_VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def _resolve_env_vars(headers: dict[str, str]) -> dict[str, str]:
+    """
+    Resolve ``${ENV_VAR}`` placeholders in header values.
+
+    Only header VALUES are substituted — keys and endpoint URLs are untouched.
+    Unset variables are left as-is (the placeholder remains in the value).
+    """
+    resolved: dict[str, str] = {}
+    for key, value in headers.items():
+        resolved[key] = _ENV_VAR_RE.sub(
+            lambda m: os.environ.get(m.group(1), m.group(0)),
+            value,
+        )
+    return resolved
+
+
+class _SafeFormat(dict):  # type: ignore[type-arg]
+    """Format-map that leaves unknown placeholders unchanged."""
+
+    def __missing__(self, key: str) -> str:
+        return f"{{{key}}}"
 
 
 class ActionTrigger:
@@ -49,8 +81,7 @@ class ActionTrigger:
     ──────────
     dispatcher — optional callable(action, decision) → dict used to perform
                  the real delivery (HTTP call, notification, etc.).  When None,
-                 trigger_bound_actions() operates in stub mode: 'triggered'
-                 status is returned with an empty payload_sent.
+                 trigger_bound_actions() dispatches to the built-in backends.
     """
 
     def __init__(
@@ -61,7 +92,7 @@ class ActionTrigger:
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
-    def trigger_bound_actions(
+    async def trigger_bound_actions(
         self,
         decision: DecisionValue,
         actions: list[ActionDefinition],
@@ -84,14 +115,14 @@ class ActionTrigger:
         results: list[ActionTriggered] = []
 
         for action in actions:
-            triggered = self._process_action(action, decision, dry_run)
+            triggered = await self._process_action(action, decision, dry_run)
             results.append(triggered)
 
         return results
 
     # ── Internal helpers ───────────────────────────────────────────────────────
 
-    def _process_action(
+    async def _process_action(
         self,
         action: ActionDefinition,
         decision: DecisionValue,
@@ -125,7 +156,7 @@ class ActionTrigger:
 
         # Attempt delivery — best-effort, never block pipeline on failure.
         try:
-            payload = self._invoke_action(action, decision)
+            payload = await self._invoke_action(action, decision)
             log.info(
                 "action_triggered",
                 action_id=action.action_id,
@@ -156,23 +187,187 @@ class ActionTrigger:
                 ),
             )
 
-    def _invoke_action(
+    async def _invoke_action(
         self,
         action: ActionDefinition,
         decision: DecisionValue,
     ) -> dict[str, Any]:
         """
-        Invoke the action delivery backend.
+        Invoke the action delivery backend for the given action type.
 
-        Default implementation: stub that returns an empty payload dict and
-        succeeds immediately.  Override or inject a dispatcher for real delivery.
+        Dispatches to the injected dispatcher if present; otherwise routes
+        to the built-in backend for each ActionType variant.
+
+        All return values are dicts (never None).  Failures raise — the
+        caller (_process_action) catches and records status='failed'.
         """
         if self._dispatcher is not None:
             return self._dispatcher(action, decision)
 
-        # Stub: in production, branch on action.config.type and call the
-        # appropriate delivery backend (HTTP, notification, workflow, register).
+        # Build the canonical decision payload sent to all backends.
+        decision_payload: dict[str, Any] = {
+            "entity": decision.entity,
+            "value": decision.value,
+            "condition_id": decision.condition_id,
+            "condition_version": decision.condition_version,
+            "timestamp": decision.timestamp,
+        }
+
+        config = action.config
+        action_type = config.type
+
+        if action_type == ActionType.NOTIFICATION:
+            return await _invoke_notification(config, decision_payload)  # type: ignore[arg-type]
+
+        if action_type == ActionType.WEBHOOK:
+            return await _invoke_webhook(config, decision_payload)  # type: ignore[arg-type]
+
+        if action_type == ActionType.WORKFLOW:
+            return await _invoke_workflow(config, decision_payload)  # type: ignore[arg-type]
+
+        if action_type == ActionType.REGISTER:
+            return _invoke_register(config)  # type: ignore[arg-type]
+
+        # Unknown type — log and succeed silently so pipeline is never blocked.
+        log.warning("action_type_unknown", action_type=action_type)
         return {}
+
+
+# ── Backend implementations ────────────────────────────────────────────────────
+
+async def _invoke_notification(
+    config: Any,  # NotificationActionConfig
+    decision_payload: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Deliver a notification action.
+
+    If CANVAS_NOTIFICATION_ENDPOINT is set, POST the message payload to it.
+    Otherwise log at INFO level and return {"status": "logged"}.
+    """
+    template = config.message_template or _DEFAULT_NOTIFICATION_TEMPLATE
+    message = template.format_map(_SafeFormat(decision_payload))
+
+    notification_payload: dict[str, Any] = {
+        "channel": config.channel,
+        "message": message,
+        **decision_payload,
+    }
+
+    endpoint = os.environ.get("CANVAS_NOTIFICATION_ENDPOINT")
+    if not endpoint:
+        log.info(
+            "notification_logged",
+            channel=config.channel,
+            message=message,
+            entity=decision_payload.get("entity"),
+        )
+        return {
+            "status": "logged",
+            "channel": config.channel,
+            "message": message,
+        }
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.post(endpoint, json=notification_payload)
+        resp.raise_for_status()
+
+    return {
+        "status": "sent",
+        "channel": config.channel,
+        "http_status": resp.status_code,
+    }
+
+
+async def _invoke_webhook(
+    config: Any,  # WebhookActionConfig
+    decision_payload: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Deliver a webhook action via HTTP POST (or GET).
+
+    Header values with ``${ENV_VAR}`` placeholders are resolved from the
+    environment at call time.  The endpoint URL is used verbatim.
+
+    HTTP 4xx/5xx responses raise httpx.HTTPStatusError — the caller records
+    status='failed'.  Connection/timeout errors also propagate as exceptions.
+    """
+    headers = _resolve_env_vars(config.headers)
+    body = config.payload_template if config.payload_template is not None else decision_payload
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.request(
+            method=config.method,
+            url=config.endpoint,
+            json=body,
+            headers=headers,
+        )
+        resp.raise_for_status()
+
+    return {
+        "status": "sent",
+        "endpoint": config.endpoint,
+        "http_status": resp.status_code,
+    }
+
+
+async def _invoke_workflow(
+    config: Any,  # WorkflowActionConfig
+    decision_payload: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Trigger an external workflow via CANVAS_WORKFLOW_ENDPOINT.
+
+    If the env var is not set, the action is skipped (non-fatal).
+    POSTs ``{"workflow_id", "input", "input_mapping"}`` to the endpoint.
+    """
+    endpoint = os.environ.get("CANVAS_WORKFLOW_ENDPOINT")
+    if not endpoint:
+        log.info(
+            "workflow_skipped_no_endpoint",
+            workflow_id=config.workflow_id,
+        )
+        return {
+            "status": "skipped",
+            "reason": "CANVAS_WORKFLOW_ENDPOINT not configured",
+            "workflow_id": config.workflow_id,
+        }
+
+    workflow_payload: dict[str, Any] = {
+        "workflow_id": config.workflow_id,
+        "input": decision_payload,
+        "input_mapping": config.input_mapping,
+    }
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.post(endpoint, json=workflow_payload)
+        resp.raise_for_status()
+
+    return {
+        "status": "triggered",
+        "workflow_id": config.workflow_id,
+        "http_status": resp.status_code,
+    }
+
+
+def _invoke_register(
+    config: Any,  # RegisterActionConfig
+) -> dict[str, Any]:
+    """
+    Write-back (register) action — not yet implemented.
+
+    TODO: implement primitive write-back via the connector registry.
+    """
+    log.info(
+        "register_action_skipped",
+        primitive_id=config.primitive_id,
+        reason="register write-back not yet implemented",
+    )
+    return {
+        "status": "skipped",
+        "reason": "register write-back not yet implemented",
+        "primitive_id": config.primitive_id,
+    }
 
 
 # ── Fire-on evaluation ────────────────────────────────────────────────────────

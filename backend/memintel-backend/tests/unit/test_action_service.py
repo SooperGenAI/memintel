@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -58,9 +58,22 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+def _make_http_mock(status_code: int = 200) -> Any:
+    """Return a mock for httpx.AsyncClient that succeeds without real HTTP."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = status_code
+    mock_resp.raise_for_status = MagicMock()
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+    mock_client.post = AsyncMock(return_value=mock_resp)
+    mock_client.request = AsyncMock(return_value=mock_resp)
+    return mock_client
+
+
 def _make_action(
     fire_on: FireOn = FireOn.ANY,
-    action_type: str = "webhook",
+    action_type: str = "register",
     action_id: str = "notify_high_score",
     version: str = "1.0",
 ) -> ActionDefinition:
@@ -190,9 +203,12 @@ def test_trigger_never_raises():
 
 
 def test_trigger_webhook_action():
-    """Webhook action type → triggered successfully via stub dispatcher."""
+    """Webhook action type → triggered successfully (httpx mocked)."""
     action = _make_action(fire_on=FireOn.ANY, action_type="webhook")
-    result = _run(_make_service().trigger(action=action, req=_make_req()))
+    mock_client = _make_http_mock()
+
+    with patch("app.runtime.action_trigger.httpx.AsyncClient", return_value=mock_client):
+        result = _run(_make_service().trigger(action=action, req=_make_req()))
 
     assert result.status == ActionTriggeredStatus.TRIGGERED
 

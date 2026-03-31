@@ -826,7 +826,7 @@ class ExecuteService:
         # α: load and trigger bound actions (best-effort).
         actions = await self._fetch_bound_actions(req.condition_id, req.condition_version)
         trigger = ActionTrigger()
-        triggered: list[ActionTriggered] = trigger.trigger_bound_actions(
+        triggered: list[ActionTriggered] = await trigger.trigger_bound_actions(
             decision=decision,
             actions=actions,
             dry_run=getattr(req, "dry_run", False),
