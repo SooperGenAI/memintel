@@ -50,6 +50,7 @@ from typing import Any
 
 import structlog
 
+from app.llm.client import AnthropicClient
 from app.llm.fixtures import LLMFixtureClient
 from app.llm.prompts import build_context_prefix
 from app.models.action import ActionDefinition
@@ -130,12 +131,7 @@ class TaskAuthoringService:
         use_fixtures = os.environ.get("USE_LLM_FIXTURES", "true").lower()
         if use_fixtures != "false":
             return LLMFixtureClient()
-        # Real LLM client — not yet implemented; falls back to fixtures.
-        log.warning(
-            "llm_client_fallback",
-            reason="USE_LLM_FIXTURES=false but real LLM client is not implemented; falling back to LLMFixtureClient.",
-        )
-        return LLMFixtureClient()
+        return AnthropicClient()
 
     # ── Public API ──────────────────────────────────────────────────────────────
 

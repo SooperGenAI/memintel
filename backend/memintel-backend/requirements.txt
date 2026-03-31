@@ -18,6 +18,9 @@ psycopg2-binary>=2.9.0
 aioredis==2.0.1        # thin shim over redis.asyncio; kept for import compatibility
 redis==5.2.1
 
+# LLM
+anthropic>=0.40.0
+
 # HTTP client
 httpx==0.28.1
 

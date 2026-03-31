@@ -1,12 +1,11 @@
 """
 tests/integration/test_llm_task_creation.py
 ──────────────────────────────────────────────────────────────────────────────
-Integration tests for LLM-driven task creation with USE_LLM_FIXTURES=False.
+Integration tests for LLM-driven task creation.
 
 Exercises the TaskAuthoringService pipeline with a ScriptedLLMClient that
-returns controlled outputs instead of calling a real LLM.  The environment
-variable USE_LLM_FIXTURES is set to "false" for the entire module to activate
-the real-client code path in TaskAuthoringService._select_llm_client().
+returns controlled outputs instead of calling a real LLM.  All tests inject
+llm_client=ScriptedLLMClient(...) explicitly so no real LLM is called.
 
 Coverage:
   1. test_llm_schema_conformance_each_strategy   — one create_task() call per
@@ -67,11 +66,8 @@ from app.services.task_authoring import TaskAuthoringService
 
 # ── Module-level env setup ─────────────────────────────────────────────────────
 
-# Activate the real-client code path in TaskAuthoringService._select_llm_client().
-# _select_llm_client() logs a warning and falls back to LLMFixtureClient because
-# the real LLM client is not yet implemented.  Our tests inject a ScriptedLLMClient
-# explicitly so the fallback is never reached.
-os.environ["USE_LLM_FIXTURES"] = "false"
+# All tests in this module inject a ScriptedLLMClient explicitly via llm_client=,
+# so _select_llm_client() is never called.  No module-level env var is needed.
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────────
@@ -536,8 +532,8 @@ def test_llm_schema_conformance_each_strategy() -> None:
             action_id, action_version are all non-empty strings.
          e. task.status == ACTIVE.
 
-    USE_LLM_FIXTURES=false is set at module level; each test injects its
-    own ScriptedLLMClient so the fallback path is never reached.
+    Each test injects its own ScriptedLLMClient via llm_client= so the
+    real AnthropicClient is never instantiated.
     """
     cases = [
         ("threshold",  _THRESHOLD_OUTPUT, {"direction": "above", "value": 0.80}),
