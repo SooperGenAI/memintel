@@ -58,6 +58,7 @@ import structlog
 
 import asyncpg
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel
 
 from app.api.deps import require_elevated_key
 from app.models.action import ActionDefinition, ActionResult, ActionTriggerRequest
@@ -73,6 +74,14 @@ log = structlog.get_logger(__name__)
 router = APIRouter(prefix="/actions", tags=["Actions"])
 
 
+class ActionListResponse(BaseModel):
+    """Response body for GET /actions."""
+    actions: list[ActionDefinition]
+    total: int
+    limit: int
+    offset: int
+
+
 # ── Service dependency ─────────────────────────────────────────────────────────
 
 async def get_action_service(
@@ -86,6 +95,37 @@ async def get_action_service(
     ActionResult rather than raising exceptions — actions are best-effort.
     """
     return ActionService(pool=pool)
+
+
+# ── GET /actions ──────────────────────────────────────────────────────────────
+
+@router.get(
+    "",
+    summary="List action definitions",
+    response_model=ActionListResponse,
+    status_code=200,
+)
+async def list_actions(
+    namespace: str = Query(..., description="Namespace to list actions from"),
+    limit: int = Query(default=100, ge=1, le=100, description="Maximum number of actions to return"),
+    offset: int = Query(default=0, ge=0, description="Number of actions to skip"),
+    store: DefinitionStore = Depends(get_definition_store),
+) -> ActionListResponse:
+    """
+    Return a list of non-deprecated ActionDefinitions for the given namespace.
+
+    Results are ordered newest-first (created_at DESC). Deprecated actions
+    are excluded. Returns an empty list when no actions match — never 404.
+
+    HTTP 422 — namespace query parameter missing.
+    """
+    actions = await store.list_actions(namespace=namespace, limit=limit, offset=offset)
+    return ActionListResponse(
+        actions=actions,
+        total=len(actions),
+        limit=limit,
+        offset=offset,
+    )
 
 
 # ── POST /actions ─────────────────────────────────────────────────────────────

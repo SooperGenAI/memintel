@@ -51,6 +51,7 @@ from typing import Any
 
 import asyncpg
 
+from app.models.action import ActionDefinition
 from app.models.concept import DefinitionResponse, SearchResult, VersionSummary
 from app.models.errors import ConflictError, ErrorType, MemintelError
 from app.models.task import Namespace
@@ -278,6 +279,55 @@ class DefinitionStore:
             next_cursor=next_cursor,
             total_count=total_count or 0,
         )
+
+    # ── list_actions ──────────────────────────────────────────────────────────
+
+    async def list_actions(
+        self,
+        namespace: str,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[ActionDefinition]:
+        """
+        Return up to ``limit`` non-deprecated ActionDefinitions for ``namespace``.
+
+        Uses a single SELECT that fetches the body column to avoid N+1 queries.
+        Rows whose body cannot be parsed into ActionDefinition are logged and
+        skipped — the list never fails due to a single corrupted row.
+
+        Results are ordered newest-first (created_at DESC).
+        """
+        rows = await self._pool.fetch(
+            """
+            SELECT definition_id, definition_type, version,
+                   namespace, body, created_at, deprecated
+            FROM definitions
+            WHERE definition_type = 'action'
+              AND namespace = $1
+              AND deprecated = FALSE
+            ORDER BY created_at DESC
+            LIMIT $2 OFFSET $3
+            """,
+            namespace,
+            limit,
+            offset,
+        )
+
+        results: list[ActionDefinition] = []
+        for row in rows:
+            try:
+                raw = row["body"]
+                body = json.loads(raw) if isinstance(raw, str) else raw
+                results.append(ActionDefinition.model_validate(body))
+            except Exception as exc:
+                log.warning(
+                    "list_actions_skip_invalid_row",
+                    extra={
+                        "definition_id": row["definition_id"],
+                        "error": str(exc),
+                    },
+                )
+        return results
 
     # ── deprecate ─────────────────────────────────────────────────────────────
 
