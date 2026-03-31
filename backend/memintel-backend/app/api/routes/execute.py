@@ -70,7 +70,7 @@ import json
 import structlog
 
 import asyncpg
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from typing import Any
 
@@ -166,6 +166,7 @@ class ExecuteRangeRequest(BaseModel):
 # ── Service dependency ─────────────────────────────────────────────────────────
 
 async def get_execute_service(
+    request: Request,
     pool: asyncpg.Pool = Depends(get_db),
 ) -> ExecuteService:
     """
@@ -173,8 +174,21 @@ async def get_execute_service(
 
     ExecuteService drives the ψ → φ → α pipeline, batch execution, range
     execution, and async job enqueuing. No LLM involvement.
+
+    Injects connector_registry and primitive_sources from app.state when
+    available so real data connectors (Postgres, REST) are used on the
+    execution path.
     """
-    return ExecuteService(pool=pool)
+    connector_registry = getattr(request.app.state, "connector_registry", None)
+    config = getattr(request.app.state, "config", None)
+    primitive_sources = {}
+    if config is not None and config.primitive_sources:
+        primitive_sources = config.primitive_sources
+    return ExecuteService(
+        pool=pool,
+        connector_registry=connector_registry,
+        primitive_sources=primitive_sources,
+    )
 
 
 # ── evaluate_router: POST /evaluate/full ──────────────────────────────────────

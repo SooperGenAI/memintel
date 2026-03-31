@@ -195,12 +195,17 @@ class PrimitiveSourceConfig(BaseModel):
       :as_of     — substituted with the ISO 8601 UTC timestamp (or NOW()
                    in snapshot mode).
 
+    json_path: optional dot-notation path for extracting the value from a REST
+      JSON response. Example: "data.value" extracts response["data"]["value"].
+      Ignored by PostgresConnector.
+
     This is a lighter-weight alternative to the full PrimitiveConfig / SourceConfig
     / AccessConfig structure; it is used by DataResolver to select the correct
     connector and query for each primitive without requiring the full registry.
     """
-    connector: str   # must match a key in ConfigSchema.connectors
-    query: str       # SQL with :entity_id and :as_of placeholders
+    connector: str              # must match a key in ConfigSchema.connectors
+    query: str                  # SQL with :entity_id and :as_of placeholders, or REST path template
+    json_path: str | None = None  # optional: dot-notation for REST response extraction
 
 
 # ── Connector config ───────────────────────────────────────────────────────────

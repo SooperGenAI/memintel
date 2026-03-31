@@ -174,13 +174,20 @@ class ExecuteService:
     execute_graph()            — executes a pre-compiled graph; returns ConceptResult.
     """
 
-    def __init__(self, pool: asyncpg.Pool) -> None:
+    def __init__(
+        self,
+        pool: asyncpg.Pool,
+        connector_registry: Any = None,
+        primitive_sources: dict | None = None,
+    ) -> None:
         self._pool = pool
         # Shared in-memory result cache — deterministic results survive across
         # execute() calls within the service instance lifetime.
         self._cache = ResultCache()
         # Store for persisting concept results used as history by stateful strategies.
         self._result_store = ConceptResultStore(pool)
+        self._connector_registry = connector_registry  # ConnectorRegistry or None
+        self._primitive_sources = primitive_sources or {}
 
     # ── DB helpers ─────────────────────────────────────────────────────────────
 
@@ -293,7 +300,15 @@ class ExecuteService:
         A new instance resets the request-scoped primitive cache so separate
         execute() calls do not share fetched primitive values.
         """
-        return DataResolver(connector=_make_connector(), backoff_base=0.0)
+        async_registry = {}
+        if self._connector_registry is not None:
+            async_registry = self._connector_registry._registry
+        return DataResolver(
+            connector=_make_connector(),
+            backoff_base=0.0,
+            primitive_sources=self._primitive_sources,
+            async_connector_registry=async_registry,
+        )
 
     async def _store_concept_result(
         self, result: ConceptResult, concept_id: str
@@ -420,7 +435,7 @@ class ExecuteService:
                     operand_condition.concept_id, operand_condition.concept_version
                 )
                 operand_graph = DAGBuilder().build_dag(operand_concept)
-                operand_concept_result = executor.execute_graph(
+                operand_concept_result = await executor.aexecute_graph(
                     graph=operand_graph,
                     entity=entity,
                     data_resolver=resolver,
@@ -467,7 +482,7 @@ class ExecuteService:
         executor = self._make_executor()
         resolver = self._make_resolver()
 
-        result = executor.execute_graph(
+        result = await executor.aexecute_graph(
             graph=graph,
             entity=req.entity,
             data_resolver=resolver,
@@ -515,7 +530,7 @@ class ExecuteService:
         executor = self._make_executor()
         resolver = self._make_resolver()
 
-        result = executor.execute_graph(
+        result = await executor.aexecute_graph(
             graph=graph,
             entity=req.entity,
             data_resolver=resolver,
@@ -549,7 +564,7 @@ class ExecuteService:
         for entity in req.entities:
             try:
                 resolver = self._make_resolver()
-                result = executor.execute_graph(
+                result = await executor.aexecute_graph(
                     graph=graph,
                     entity=entity,
                     data_resolver=resolver,
@@ -637,7 +652,7 @@ class ExecuteService:
         while current <= end:
             ts = current.strftime("%Y-%m-%dT%H:%M:%SZ")
             resolver = self._make_resolver()
-            result = executor.execute_graph(
+            result = await executor.aexecute_graph(
                 graph=graph,
                 entity=req.entity,
                 data_resolver=resolver,
@@ -698,7 +713,7 @@ class ExecuteService:
         executor = self._make_executor()
         resolver = self._make_resolver()
 
-        concept_result = executor.execute_graph(
+        concept_result = await executor.aexecute_graph(
             graph=graph,
             entity=req.entity,
             data_resolver=resolver,
@@ -751,7 +766,7 @@ class ExecuteService:
         results: list[DecisionResult] = []
         for entity in req.entities:
             resolver = self._make_resolver()
-            concept_result = executor.execute_graph(
+            concept_result = await executor.aexecute_graph(
                 graph=graph,
                 entity=entity,
                 data_resolver=resolver,
@@ -808,7 +823,7 @@ class ExecuteService:
         executor = self._make_executor()
         resolver = self._make_resolver()
 
-        concept_result = executor.execute_graph(
+        concept_result = await executor.aexecute_graph(
             graph=graph,
             entity=req.entity,
             data_resolver=resolver,

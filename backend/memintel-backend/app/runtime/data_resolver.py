@@ -43,6 +43,9 @@ from typing import Any
 from app.models.config import PrimitiveSourceConfig
 from app.models.result import MissingDataPolicy
 
+# Any is used for async connector type hints (PostgresConnector / RestConnector)
+# to avoid circular imports — those connectors import from this module.
+
 
 # ── Error hierarchy ────────────────────────────────────────────────────────────
 
@@ -308,6 +311,7 @@ class DataResolver:
         backoff_base: float = _BACKOFF_BASE,
         primitive_sources: dict[str, PrimitiveSourceConfig] | None = None,
         connector_registry: dict[str, ConnectorBase] | None = None,
+        async_connector_registry: dict[str, Any] | None = None,   # NEW: async connectors
     ) -> None:
         self._connector = connector
         self._default_policy = missing_policy
@@ -315,6 +319,7 @@ class DataResolver:
         self._backoff_base = backoff_base
         self._primitive_sources: dict[str, PrimitiveSourceConfig] = primitive_sources or {}
         self._connector_registry: dict[str, ConnectorBase] = connector_registry or {}
+        self._async_connector_registry: dict[str, Any] = async_connector_registry or {}
         # Request-scoped cache: dict keyed by (primitive_name, entity_id, timestamp).
         # Discarded when the DataResolver instance goes out of scope.
         self._cache: dict[tuple[str, str, str | None], PrimitiveValue] = {}
@@ -468,3 +473,89 @@ class DataResolver:
             )
 
         return PrimitiveValue(value=None, nullable=True)  # fallback
+
+    # ── Async fetch (for async connectors: PostgresConnector, RestConnector) ───
+
+    async def afetch(
+        self,
+        primitive_name: str,
+        entity_id: str,
+        timestamp: str | None,
+        policy: MissingDataPolicy | None = None,
+    ) -> PrimitiveValue:
+        """
+        Async variant of fetch() that supports async connectors.
+
+        Dispatch order:
+          1. Check request-scoped cache.
+          2. If primitive_name is in primitive_sources AND the referenced connector
+             name is in async_connector_registry → await conn.fetch().
+          3. Otherwise fall back to the sync connector path (MockConnector for tests).
+
+        This preserves backward compatibility: tests that pass no async_connector_registry
+        continue to use MockConnector transparently.
+        """
+        effective_policy = policy if policy is not None else self._default_policy
+        cache_key = (primitive_name, entity_id, timestamp)
+
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        # Try async connector path
+        source = self._primitive_sources.get(primitive_name)
+        if source is not None:
+            async_conn = self._async_connector_registry.get(source.connector)
+            if async_conn is not None:
+                pv = await async_conn.fetch(primitive_name, entity_id, timestamp)
+                if pv.value is None:
+                    resolved = await self._aapply_fill_policy(
+                        primitive_name, entity_id, timestamp, effective_policy, async_conn
+                    )
+                else:
+                    resolved = pv
+                self._cache[cache_key] = resolved
+                return resolved
+
+        # Fall back to sync connector (MockConnector / StaticDataConnector)
+        conn = self._get_connector(primitive_name)
+        raw = _with_retry(
+            lambda: conn.fetch(primitive_name, entity_id, timestamp),
+            max_retries=self._max_retries,
+            backoff_base=self._backoff_base,
+        )
+        resolved = self._apply_policy(raw, primitive_name, entity_id, timestamp, effective_policy)
+        self._cache[cache_key] = resolved
+        return resolved
+
+    async def _aapply_fill_policy(
+        self,
+        primitive_name: str,
+        entity_id: str,
+        timestamp: str | None,
+        policy: MissingDataPolicy,
+        async_conn: Any,
+    ) -> PrimitiveValue:
+        """Apply missing_data_policy using an async connector for fill strategies."""
+        if policy == MissingDataPolicy.NULL:
+            return PrimitiveValue(value=None, nullable=True)
+
+        if policy == MissingDataPolicy.ZERO:
+            return PrimitiveValue(value=0.0, nullable=False)
+
+        if policy == MissingDataPolicy.FORWARD_FILL:
+            filled_pv = await async_conn.fetch_forward_fill(primitive_name, entity_id, timestamp)
+            return (
+                PrimitiveValue(value=filled_pv.value, nullable=False)
+                if filled_pv.value is not None
+                else PrimitiveValue(value=None, nullable=True)
+            )
+
+        if policy == MissingDataPolicy.BACKWARD_FILL:
+            filled_pv = await async_conn.fetch_backward_fill(primitive_name, entity_id, timestamp)
+            return (
+                PrimitiveValue(value=filled_pv.value, nullable=False)
+                if filled_pv.value is not None
+                else PrimitiveValue(value=None, nullable=True)
+            )
+
+        return PrimitiveValue(value=None, nullable=True)

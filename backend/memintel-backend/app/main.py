@@ -122,6 +122,24 @@ async def lifespan(app: FastAPI):
         )
         sys.exit(1)
 
+    # ── Step 5b: Build ConnectorRegistry ────────────────────────────────────────
+    from app.connectors import ConnectorRegistry
+    try:
+        connector_registry = await ConnectorRegistry.from_config(config)
+    except Exception as e:
+        log.error("startup_failed", reason=f"Connector registry build failed: {e}")
+        sys.exit(1)
+
+    # Optional health checks (non-fatal — warns but does not block startup)
+    if not config.environment.skip_connector_health_check:
+        for name, conn in connector_registry._registry.items():
+            try:
+                healthy = await conn.health_check()
+                if not healthy:
+                    log.warning("connector_unhealthy", name=name)
+            except Exception as exc:
+                log.warning("connector_health_check_failed", name=name, error=str(exc))
+
     # ── Step 6: DB pool ────────────────────────────────────────────────────────
     try:
         db_pool = await create_db_pool(os.environ["DATABASE_URL"])
@@ -159,6 +177,7 @@ async def lifespan(app: FastAPI):
     app.state.redis = redis
     app.state.guardrails_store = guardrails_store
     app.state.primitive_registry = primitive_registry
+    app.state.connector_registry = connector_registry
     # Elevated key for internal platform endpoints — read from environment.
     # Absent → all elevated endpoints return HTTP 403.
     app.state.elevated_key = os.environ.get("MEMINTEL_ELEVATED_KEY")
@@ -174,6 +193,7 @@ async def lifespan(app: FastAPI):
     # ── Shutdown ───────────────────────────────────────────────────────────────
     await db_pool.close()
     await redis.close()
+    await connector_registry.close_all()
     log.info("shutdown_complete")
 
 

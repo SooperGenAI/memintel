@@ -456,6 +456,176 @@ class ConceptExecutor:
             missing_data_policy=missing_data_policy,
         )
 
+    # ── Async entry points (for async DataResolver.afetch()) ──────────────────
+
+    async def aexecute_graph(
+        self,
+        graph: ExecutionGraph,
+        entity: str,
+        data_resolver: DataResolver,
+        timestamp: str | None = None,
+        explain: bool = False,
+        cache: bool = True,
+        missing_data_policy: MissingDataPolicy | None = None,
+    ) -> ConceptResult:
+        """
+        Async variant of execute_graph() — uses DataResolver.afetch() internally.
+
+        Supports async connectors (PostgresConnector, RestConnector) via the
+        async fetch path. Falls back to sync MockConnector transparently when
+        no async connectors are configured (backward-compatible with tests).
+
+        Cache semantics are identical to execute_graph().
+        """
+        cache_key: CacheKey = (graph.concept_id, graph.version, entity, timestamp)
+
+        if cache and timestamp is not None:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                log.info(
+                    "concept_executed",
+                    concept_id=graph.concept_id,
+                    version=graph.version,
+                    entity=entity,
+                    timestamp=timestamp,
+                    deterministic=True,
+                    cache_hit=True,
+                    compute_time_ms=0,
+                    result_type=cached.type.value,
+                )
+                return cached
+
+        t0 = time.monotonic()
+        result = await self._arun(
+            graph=graph,
+            entity=entity,
+            data_resolver=data_resolver,
+            timestamp=timestamp,
+            explain=explain,
+            missing_data_policy=missing_data_policy,
+        )
+        compute_time_ms = int((time.monotonic() - t0) * 1000)
+
+        if cache and timestamp is not None:
+            self._cache.set(cache_key, result)
+
+        log.info(
+            "concept_executed",
+            concept_id=graph.concept_id,
+            version=graph.version,
+            entity=entity,
+            timestamp=timestamp,
+            deterministic=result.deterministic,
+            cache_hit=False,
+            compute_time_ms=compute_time_ms,
+            result_type=result.type.value,
+        )
+        return result
+
+    async def _arun(
+        self,
+        graph: ExecutionGraph,
+        entity: str,
+        data_resolver: DataResolver,
+        timestamp: str | None,
+        explain: bool,
+        missing_data_policy: MissingDataPolicy | None,
+    ) -> ConceptResult:
+        """Async graph traversal — awaits primitive fetches via DataResolver.afetch()."""
+        node_by_id: dict[str, GraphNode] = {n.node_id: n for n in graph.nodes}
+        node_values: dict[str, Any] = {}
+        node_traces: list[NodeTrace] = [] if explain else []
+
+        for node_id in graph.topological_order:
+            node = node_by_id[node_id]
+            value = await self._aexecute_node(
+                node=node,
+                node_values=node_values,
+                entity=entity,
+                timestamp=timestamp,
+                data_resolver=data_resolver,
+                missing_data_policy=missing_data_policy,
+            )
+            node_values[node_id] = value
+
+            if explain:
+                resolved_inputs = {
+                    slot: node_values.get(src_id, src_id)
+                    for slot, src_id in node.inputs.items()
+                    if isinstance(src_id, str)
+                }
+                node_traces.append(NodeTrace(
+                    node_id=node_id,
+                    op=node.op,
+                    inputs=resolved_inputs,
+                    params=dict(node.params),
+                    output_value=value,
+                    output_type=node.output_type,
+                ))
+
+        output_value = node_values[graph.output_node_id]
+        deterministic = timestamp is not None
+
+        explanation: ConceptExplanation | None = None
+        if explain:
+            prim_nodes = [n for n in graph.nodes if n.op == _PRIMITIVE_FETCH_OP]
+            contributions = _equal_contributions(
+                [n.params.get("source_name", n.node_id) for n in prim_nodes],
+                output_value,
+            )
+            explanation = ConceptExplanation(
+                output=output_value,
+                contributions=contributions,
+                nodes=node_traces,
+            )
+
+        return ConceptResult(
+            value=output_value,
+            type=_output_type(graph.output_type),
+            entity=entity,
+            version=graph.version,
+            deterministic=deterministic,
+            timestamp=timestamp,
+            explanation=explanation,
+        )
+
+    async def _aexecute_node(
+        self,
+        node: GraphNode,
+        node_values: dict[str, Any],
+        entity: str,
+        timestamp: str | None,
+        data_resolver: DataResolver,
+        missing_data_policy: MissingDataPolicy | None,
+    ) -> Any:
+        """Async node evaluation — awaits DataResolver.afetch() for primitive nodes."""
+        if node.op == _PRIMITIVE_FETCH_OP:
+            source_name = node.params.get("source_name", "")
+            declared_policy = node.params.get("missing_data_policy")
+            policy = (
+                missing_data_policy
+                or (MissingDataPolicy(declared_policy) if declared_policy else MissingDataPolicy.NULL)
+            )
+            pv = await data_resolver.afetch(source_name, entity, timestamp, policy=policy)
+            return pv.value
+
+        # Feature node — same sync dispatch as _execute_node
+        resolved_inputs: dict[str, Any] = {}
+        for slot_name, src in node.inputs.items():
+            if isinstance(src, str):
+                resolved_inputs[slot_name] = node_values.get(src)
+            else:
+                resolved_inputs[slot_name] = src
+
+        op_fn = _OPERATORS.get(node.op)
+        if op_fn is None:
+            raise MemintelError(
+                ErrorType.EXECUTION_ERROR,
+                f"Operator '{node.op}' is not registered in the executor's operator table.",
+                location=node.node_id,
+            )
+        return op_fn(resolved_inputs, dict(node.params))
+
     # ── Internal graph execution ───────────────────────────────────────────────
 
     def _run(
