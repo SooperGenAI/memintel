@@ -34,7 +34,7 @@ recorded_at         recorded_at
 """
 from __future__ import annotations
 
-import logging
+import structlog
 from datetime import datetime
 
 import asyncpg
@@ -42,7 +42,7 @@ import asyncpg
 from app.models.calibration import FeedbackRecord, FeedbackValue
 from app.models.errors import ConflictError
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 
 def _to_datetime(ts: str | None) -> datetime | None:

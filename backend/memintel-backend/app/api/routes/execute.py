@@ -71,7 +71,7 @@ import structlog
 
 import asyncpg
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Any
 
 from app.api.deps import require_elevated_key
@@ -119,34 +119,34 @@ router = APIRouter(tags=["Execution"])             # registered at /execute
 # ── Request body models ───────────────────────────────────────────────────────
 
 class EvaluateFullRequest(BaseModel):
-    concept_id: str
-    concept_version: str
-    condition_id: str
-    condition_version: str
-    entity: str
+    concept_id: str = Field(..., max_length=255)
+    concept_version: str = Field(..., max_length=50)
+    condition_id: str = Field(..., max_length=255)
+    condition_version: str = Field(..., max_length=50)
+    entity: str = Field(..., max_length=512)
     timestamp: str | None = None    # ISO 8601 UTC — when present, deterministic
     explain: bool = False
     dry_run: bool = False
 
 
 class EvaluateConditionRequest(BaseModel):
-    condition_id: str
-    condition_version: str
-    entity: str
+    condition_id: str = Field(..., max_length=255)
+    condition_version: str = Field(..., max_length=50)
+    entity: str = Field(..., max_length=512)
     timestamp: str | None = None    # ISO 8601 UTC — when present, deterministic
     explain: bool = False
 
 
 class EvaluateConditionBatchRequest(BaseModel):
-    condition_id: str
-    condition_version: str
+    condition_id: str = Field(..., max_length=255)
+    condition_version: str = Field(..., max_length=50)
     entities: list[str]
     timestamp: str | None = None    # applied to all entities in the batch
 
 
 class ExecuteBatchRequest(BaseModel):
-    id: str
-    version: str
+    id: str = Field(..., max_length=255)
+    version: str = Field(..., max_length=50)
     entities: list[str]
     timestamp: str | None = None    # ISO 8601 UTC — when present, deterministic
     explain: bool = False
@@ -154,9 +154,9 @@ class ExecuteBatchRequest(BaseModel):
 
 
 class ExecuteRangeRequest(BaseModel):
-    id: str
-    version: str
-    entity: str
+    id: str = Field(..., max_length=255)
+    version: str = Field(..., max_length=50)
+    entity: str = Field(..., max_length=512)
     from_timestamp: str    # ISO 8601 UTC — range start (inclusive)
     to_timestamp: str      # ISO 8601 UTC — range end (inclusive)
     interval: str          # ISO 8601 duration, e.g. 'PT1H', 'P1D'
@@ -421,9 +421,9 @@ async def execute_graph(
 # ── POST /execute/static ───────────────────────────────────────────────────────
 
 class StaticExecuteRequest(BaseModel):
-    condition_id: str
-    condition_version: str
-    entity: str
+    condition_id: str = Field(..., max_length=255)
+    condition_version: str = Field(..., max_length=50)
+    entity: str = Field(..., max_length=512)
     data: dict[str, Any]      # {primitive_name: value}
 
 

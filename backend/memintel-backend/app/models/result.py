@@ -159,9 +159,9 @@ class ExecuteRequest(BaseModel):
     explain=True populates ConceptResult.explanation. The explain_mode controls
     verbosity. 'full' is the default and returns contributions + node trace.
     """
-    id: str
-    version: str
-    entity: str
+    id: str = Field(..., max_length=255)
+    version: str = Field(..., max_length=50)
+    entity: str = Field(..., max_length=512)
     timestamp: str | None = None
     explain: bool = False
     explain_mode: ExplainMode = ExplainMode.FULL
@@ -180,8 +180,8 @@ class ExecuteGraphRequest(BaseModel):
     ir_hash, if provided, is verified against the stored graph before execution.
     Mismatch → HTTP 409 (audit trail mechanism; signals stale graph_id in caller).
     """
-    graph_id: str
-    entity: str
+    graph_id: str = Field(..., max_length=255)
+    entity: str = Field(..., max_length=512)
     ir_hash: str | None = None
     timestamp: str | None = None
     explain: bool = False
@@ -204,7 +204,7 @@ class NodeTrace(BaseModel):
     op: str
     inputs: dict[str, Any]
     params: dict[str, Any]
-    output_value: float | int | bool | str
+    output_value: bool | float | int | str
     output_type: str
 
 
@@ -222,7 +222,7 @@ class ConceptExplanation(BaseModel):
     nodes        — per-node computation records in topological execution order.
     trace        — step-by-step trace with intermediate values (debug mode only).
     """
-    output: float | int | bool | str
+    output: bool | float | int | str
     contributions: dict[str, float] = Field(default_factory=dict)
     nodes: list[NodeTrace] = Field(default_factory=list)
     trace: list[dict[str, Any]] = Field(default_factory=list)

@@ -42,7 +42,7 @@ import structlog
 
 import asyncpg
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.models.condition import DecisionExplanation
 from app.persistence.db import get_db
@@ -64,9 +64,9 @@ router = APIRouter(prefix="/decisions", tags=["Decisions"])
 # Inline schema from developer_api.yaml (not a named component).
 
 class ExplainDecisionRequest(BaseModel):
-    condition_id: str
-    condition_version: str
-    entity: str
+    condition_id: str = Field(..., max_length=255)
+    condition_version: str = Field(..., max_length=50)
+    entity: str = Field(..., max_length=512)
     timestamp: str    # ISO 8601 UTC — required; deterministic for given tuple
 
 

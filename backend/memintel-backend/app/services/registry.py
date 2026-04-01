@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
+import structlog
 from typing import Any
 
 import asyncpg
@@ -45,7 +45,7 @@ from app.models.errors import ConflictError, NotFoundError
 from app.registry.definitions import DefinitionRegistry
 from app.stores.definition import DefinitionStore, _row_to_definition_response
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 
 class RegistryService:

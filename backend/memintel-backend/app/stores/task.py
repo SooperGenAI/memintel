@@ -50,7 +50,7 @@ guardrails_version task.guardrails_version (nullable; set at creation time)
 from __future__ import annotations
 
 import json
-import logging
+import structlog
 from typing import Any
 
 import asyncpg
@@ -58,7 +58,7 @@ import asyncpg
 from app.models.task import IMMUTABLE_TASK_FIELDS, DeliveryConfig, Task, TaskList, TaskStatus
 from app.models.errors import ConflictError, MemintelError, ErrorType
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 #: Maximum number of optimistic-lock retry attempts for update().
 MAX_UPDATE_RETRIES: int = 5

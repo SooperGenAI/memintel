@@ -47,7 +47,7 @@ created_at          created_at       (excluded from API)
 from __future__ import annotations
 
 import json
-import logging
+import structlog
 import secrets
 from datetime import datetime, timedelta, timezone
 
@@ -55,7 +55,7 @@ import asyncpg
 
 from app.models.calibration import CalibrationToken
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 #: Token validity window.
 TOKEN_TTL_HOURS: int = 24

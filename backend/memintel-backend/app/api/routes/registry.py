@@ -61,7 +61,7 @@ from typing import Any, Literal
 
 import asyncpg
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from app.api.deps import require_elevated_key
 from app.models.concept import (
@@ -84,10 +84,10 @@ router = APIRouter(tags=["Registry"])
 # in developer_api.yaml. Inline until a dedicated models file is created.
 
 class RegisterDefinitionRequest(BaseModel):
-    definition_id: str
-    version: str
+    definition_id: str = Field(..., max_length=255)
+    version: str = Field(..., max_length=50)
     definition_type: Literal["concept", "condition", "action", "primitive", "feature"]
-    namespace: str
+    namespace: str = Field(..., max_length=100)
     body: dict[str, Any]          # raw definition body (stored as JSONB)
 
     @field_validator("namespace")
@@ -105,14 +105,14 @@ class PromoteRequest(BaseModel):
 
 
 class FindSimilarRequest(BaseModel):
-    definition_id: str
-    version: str
+    definition_id: str = Field(..., max_length=255)
+    version: str = Field(..., max_length=50)
     limit: int = 10
 
 
 class RegisterFeatureRequest(BaseModel):
-    feature_id: str
-    version: str
+    feature_id: str = Field(..., max_length=255)
+    version: str = Field(..., max_length=50)
     body: dict[str, Any]
 
 

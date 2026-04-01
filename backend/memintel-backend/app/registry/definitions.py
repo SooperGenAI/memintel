@@ -47,7 +47,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
+import structlog
 from typing import Any
 
 from app.compiler.validator import Validator
@@ -67,7 +67,7 @@ from app.models.errors import (
 )
 from app.models.task import Namespace
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 # ── Namespace promotion order ─────────────────────────────────────────────────
 

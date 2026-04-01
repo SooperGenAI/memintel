@@ -15,14 +15,14 @@ never propagate exceptions to the primary evaluation path.
 from __future__ import annotations
 
 import json
-import logging
+import structlog
 from typing import Any
 
 import asyncpg
 
 from app.models.decision import DecisionRecord
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 _TABLE = "decisions"
 

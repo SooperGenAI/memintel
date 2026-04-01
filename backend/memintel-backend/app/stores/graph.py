@@ -40,14 +40,14 @@ created_at  created_at
 from __future__ import annotations
 
 import json
-import logging
+import structlog
 
 import asyncpg
 
 from app.models.concept import ExecutionGraph
 from app.models.errors import CompilerInvariantError
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 
 class GraphStore:

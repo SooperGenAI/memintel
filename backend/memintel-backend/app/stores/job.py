@@ -51,7 +51,7 @@ updated_at       updated_at     (excluded from API)
 from __future__ import annotations
 
 import json
-import logging
+import structlog
 from typing import Any
 
 import asyncpg
@@ -59,7 +59,7 @@ import asyncpg
 from app.models.errors import ConflictError, ErrorType, MemintelError
 from app.models.result import Job, JobStatus, VALID_JOB_TRANSITIONS
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 #: Statuses that set completed_at when entered.
 _COMPLETION_STATUSES: frozenset[JobStatus] = frozenset({

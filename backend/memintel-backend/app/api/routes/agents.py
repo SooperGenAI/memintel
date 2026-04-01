@@ -51,7 +51,7 @@ from typing import Any
 
 import asyncpg
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.api.deps import require_elevated_key
 from app.models.concept import ExecutionPlan
@@ -67,7 +67,7 @@ router = APIRouter(tags=["Agents"])
 # These models correspond to agent endpoints not yet defined in developer_api.yaml.
 
 class AgentQueryRequest(BaseModel):
-    query: str
+    query: str = Field(..., max_length=2000)
     definition_type: str | None = None   # optional filter
     limit: int = 10
 
@@ -79,15 +79,15 @@ class AgentQueryResponse(BaseModel):
 
 
 class AgentDefineRequest(BaseModel):
-    description: str
-    namespace: str = "private"
+    description: str = Field(..., max_length=2000)
+    namespace: str = Field(default="private", max_length=100)
 
 
 class AgentDefineConditionRequest(BaseModel):
-    description: str
-    concept_id: str
-    concept_version: str
-    namespace: str = "private"
+    description: str = Field(..., max_length=2000)
+    concept_id: str = Field(..., max_length=255)
+    concept_version: str = Field(..., max_length=50)
+    namespace: str = Field(default="private", max_length=100)
 
 
 class AgentDefineResponse(BaseModel):
@@ -97,9 +97,9 @@ class AgentDefineResponse(BaseModel):
 
 
 class SemanticRefineRequest(BaseModel):
-    definition_id: str
-    version: str
-    instruction: str    # natural language refinement instruction
+    definition_id: str = Field(..., max_length=255)
+    version: str = Field(..., max_length=50)
+    instruction: str = Field(..., max_length=2000)    # natural language refinement instruction
 
 
 class SemanticRefineResponse(BaseModel):
@@ -110,8 +110,8 @@ class SemanticRefineResponse(BaseModel):
 
 
 class WorkflowCompileRequest(BaseModel):
-    description: str    # natural language workflow description
-    namespace: str = "private"
+    description: str = Field(..., max_length=2000)    # natural language workflow description
+    namespace: str = Field(default="private", max_length=100)
 
 
 # ── Service dependency ─────────────────────────────────────────────────────────

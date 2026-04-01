@@ -34,7 +34,7 @@ Invariants
 """
 from __future__ import annotations
 
-import logging
+import structlog
 from typing import Any
 
 from app.models.condition import (
@@ -47,7 +47,7 @@ from app.models.condition import (
 )
 from app.models.result import ConceptResult
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 
 class ExplanationService:

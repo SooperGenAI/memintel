@@ -37,12 +37,12 @@ always be safely cast to float for strategy math.
 """
 from __future__ import annotations
 
-import logging
+import structlog
 from typing import Any
 
 import asyncpg
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 
 class ConceptResultStore:

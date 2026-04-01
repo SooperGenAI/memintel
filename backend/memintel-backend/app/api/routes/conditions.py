@@ -82,7 +82,7 @@ from app.stores import (
     FeedbackStore,
     TaskStore,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 log = structlog.get_logger(__name__)
 
@@ -93,8 +93,8 @@ router = APIRouter(prefix="/conditions", tags=["Conditions"])
 # Inline schema from developer_api.yaml (not a named component).
 
 class ExplainConditionRequest(BaseModel):
-    condition_id: str
-    condition_version: str
+    condition_id: str = Field(..., max_length=255)
+    condition_version: str = Field(..., max_length=50)
     timestamp: str | None = None    # ISO 8601 UTC — optional, for context only
 
 

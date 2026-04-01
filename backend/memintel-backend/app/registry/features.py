@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
+import structlog
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -37,7 +37,7 @@ from pydantic import BaseModel, Field
 from app.models.errors import ConflictError, MemintelError, ErrorType
 from app.models.task import Namespace
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 
 # ── Feature models ────────────────────────────────────────────────────────────

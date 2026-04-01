@@ -46,7 +46,7 @@ updated_at          updated_at
 from __future__ import annotations
 
 import json
-import logging
+import structlog
 from typing import Any
 
 import asyncpg
@@ -56,7 +56,7 @@ from app.models.concept import DefinitionResponse, SearchResult, VersionSummary
 from app.models.errors import ConflictError, ErrorType, MemintelError
 from app.models.task import Namespace
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 #: Valid definition_type values — matches the DB CHECK constraint.
 #: Migration 0005 added 'feature' to the constraint; keep in sync.
