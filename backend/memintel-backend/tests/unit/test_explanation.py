@@ -135,12 +135,15 @@ class MockConceptExecutor:
 
 
 class MockConditionEvaluator:
-    """Returns a preset DecisionValue on every evaluate() call."""
+    """Returns a preset DecisionValue on every evaluate() / aevaluate() call."""
 
     def __init__(self, decision: DecisionValue):
         self._decision = decision
 
     def evaluate(self, condition, entity, data_resolver, timestamp=None, **kwargs) -> DecisionValue:
+        return self._decision
+
+    async def aevaluate(self, condition, entity, data_resolver, timestamp=None, **kwargs) -> DecisionValue:
         return self._decision
 
 
@@ -470,7 +473,14 @@ def test_get_explanation_service_injects_non_none_data_resolver():
         async def fetchval(self, *a, **kw): return None
 
     # get_explanation_service is an async dependency — call it directly.
-    service = asyncio.run(get_explanation_service(pool=_FakePool()))
+    # Provide a minimal request stub so the service can read app.state.
+    class _FakeRequest:
+        class app:
+            class state:
+                connector_registry = None
+                config = None
+
+    service = asyncio.run(get_explanation_service(request=_FakeRequest(), pool=_FakePool()))
 
     assert service._data_resolver is not None, (
         "ExplanationService.data_resolver must not be None"

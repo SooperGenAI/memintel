@@ -175,6 +175,71 @@ class ConditionEvaluator:
         )
         return decision
 
+    # ── Async public API ───────────────────────────────────────────────────────
+
+    async def aevaluate(
+        self,
+        condition: ConditionDefinition,
+        entity: str,
+        data_resolver: DataResolver,
+        timestamp: str | None = None,
+        dry_run: bool = False,
+        missing_data_policy: MissingDataPolicy | None = None,
+    ) -> DecisionValue:
+        """
+        Async variant of evaluate() — fetches concept result via async executor.
+
+        Use this from async call paths (e.g. ExplanationService.explain_decision)
+        to avoid the cache-miss crash that occurs when the sync evaluate() falls
+        through to ConceptExecutor.execute() on a non-warmed cache.
+
+        Semantics are identical to evaluate() — same strategy dispatch, same
+        history fetch, same dry_run behaviour.
+        """
+        concept_result = await self._aget_concept_result(
+            condition=condition,
+            entity=entity,
+            data_resolver=data_resolver,
+            timestamp=timestamp,
+            missing_data_policy=missing_data_policy,
+        )
+
+        strategy_type = StrategyType(condition.strategy.type)
+        history: list[ConceptResult] = []
+        if strategy_type in (StrategyType.Z_SCORE, StrategyType.CHANGE, StrategyType.PERCENTILE):
+            history = self._history_provider(condition, entity, timestamp)
+
+        params = condition.strategy.params.model_dump()
+        log_params = dict(params)
+
+        if strategy_type == StrategyType.COMPOSITE:
+            params = self._resolve_composite_params(
+                condition, entity, timestamp, params
+            )
+
+        strategy = _STRATEGY_REGISTRY[strategy_type]
+        decision = strategy.evaluate(
+            concept_result,
+            history,
+            params,
+            condition_id=condition.condition_id,
+            condition_version=condition.version,
+        )
+
+        log.info(
+            "condition_evaluated",
+            condition_id=condition.condition_id,
+            condition_version=condition.version,
+            entity=entity,
+            timestamp=timestamp,
+            decision_value=str(decision.value),
+            decision_type=decision.decision_type.value,
+            strategy_type=strategy_type.value,
+            params_applied=log_params,
+            actions_triggered_count=0,
+        )
+        return decision
+
     # ── Internal helpers ───────────────────────────────────────────────────────
 
     def _get_concept_result(
@@ -200,7 +265,39 @@ class ConditionEvaluator:
         # This requires the executor to have a graph_store, OR the graph to be
         # available directly.  For tests without a real graph_store, pre-populate
         # the cache before calling evaluate().
-        return self._executor.execute(
+        #
+        # NOTE: ConceptExecutor.execute() is async. This sync method can only
+        # reach here in test contexts where the cache is guaranteed to be
+        # pre-warmed before evaluate() is called.  Production async call paths
+        # must use aevaluate() / _aget_concept_result() instead.
+        raise RuntimeError(
+            "ConditionEvaluator.evaluate() reached a cache miss. "
+            "Pre-warm the result cache before calling the sync evaluate(), "
+            "or use async aevaluate() from async contexts."
+        )
+
+    async def _aget_concept_result(
+        self,
+        condition: ConditionDefinition,
+        entity: str,
+        data_resolver: DataResolver,
+        timestamp: str | None,
+        missing_data_policy: MissingDataPolicy | None,
+    ) -> ConceptResult:
+        """
+        Async variant of _get_concept_result — awaits ConceptExecutor.execute().
+
+        Returns the cached result when available; otherwise awaits the executor
+        to fetch the graph and produce the result.
+        """
+        from app.models.concept import ExecutionGraph  # avoid circular at module level
+
+        cache_key = (condition.concept_id, condition.concept_version, entity, timestamp)
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        return await self._executor.execute(
             concept_id=condition.concept_id,
             version=condition.concept_version,
             entity=entity,

@@ -162,7 +162,7 @@ class ExplanationService:
         )
 
         # 3. Evaluate condition to get the decision value.
-        decision = self._evaluator.evaluate(
+        decision = await self._evaluator.aevaluate(
             condition=condition,
             entity=entity,
             data_resolver=self._data_resolver,

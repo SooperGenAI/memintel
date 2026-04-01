@@ -114,6 +114,7 @@ class ConceptResultStore:
             SELECT value, output_type, entity, version, evaluated_at
             FROM {self._TABLE}
             WHERE concept_id = $1 AND entity = $2
+              AND value IS NOT NULL
             ORDER BY evaluated_at DESC
             LIMIT $3
             """,

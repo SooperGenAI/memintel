@@ -405,7 +405,7 @@ class ConceptExecutor:
 
     # ── Secondary entry point (fetch graph by concept_id + version) ───────────
 
-    def execute(
+    async def execute(
         self,
         concept_id: str,
         version: str,
@@ -420,6 +420,10 @@ class ConceptExecutor:
         """
         Fetch the graph for (concept_id, version) then delegate to execute_graph().
 
+        async — properly awaits graph_store.get_by_concept() (which is async).
+        Use this from async callers; use aexecute() as the canonical async entry
+        point (both are equivalent — execute() is now async too).
+
         Raises MemintelError(NOT_FOUND)  if the graph does not exist.
         Raises MemintelError(CONFLICT)   if ir_hash is provided and mismatches.
         Raises RuntimeError              if graph_store was not injected.
@@ -430,7 +434,7 @@ class ConceptExecutor:
                 "Either inject one at construction, or call execute_graph() directly."
             )
 
-        graph = self._graph_store.get_by_concept(concept_id, version)
+        graph = await self._graph_store.get_by_concept(concept_id, version)
         if graph is None:
             raise MemintelError(
                 ErrorType.NOT_FOUND,

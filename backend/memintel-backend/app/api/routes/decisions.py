@@ -41,7 +41,7 @@ from __future__ import annotations
 import structlog
 
 import asyncpg
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
 from app.models.condition import DecisionExplanation
@@ -73,6 +73,7 @@ class ExplainDecisionRequest(BaseModel):
 # ── Service dependency ─────────────────────────────────────────────────────────
 
 async def get_explanation_service(
+    request: Request,
     pool: asyncpg.Pool = Depends(get_db),
 ) -> ExplanationService:
     """
@@ -80,7 +81,12 @@ async def get_explanation_service(
 
     ExplanationService.explain_decision() re-executes the concept and condition
     evaluation paths deterministically and ranks driver contributions.
-    No LLM involvement. A real DataResolver must be wired for production use.
+    No LLM involvement.
+
+    Wires the real connector registry and primitive_sources from app.state so
+    that primitive fetches use production data connectors (Postgres, REST) when
+    available, falling back to MockConnector for primitives with no configured
+    source.
     """
     definition_store = DefinitionStore(pool)
     definition_registry = DefinitionRegistry(store=definition_store)
@@ -88,7 +94,22 @@ async def get_explanation_service(
     graph_store = GraphStore(pool)
     executor = ConceptExecutor(result_cache=result_cache, graph_store=graph_store)
     evaluator = ConditionEvaluator(executor=executor, result_cache=result_cache)
-    data_resolver = DataResolver(connector=MockConnector(data={}), backoff_base=0.0)
+
+    connector_registry = getattr(request.app.state, "connector_registry", None)
+    config = getattr(request.app.state, "config", None)
+    primitive_sources = {}
+    if config is not None and config.primitive_sources:
+        primitive_sources = config.primitive_sources
+    async_registry = {}
+    if connector_registry is not None:
+        async_registry = connector_registry._registry
+
+    data_resolver = DataResolver(
+        connector=MockConnector(data={}),
+        backoff_base=0.0,
+        primitive_sources=primitive_sources,
+        async_connector_registry=async_registry,
+    )
     return ExplanationService(
         definition_registry=definition_registry,
         concept_executor=executor,

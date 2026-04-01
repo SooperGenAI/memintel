@@ -500,7 +500,7 @@ async def execute_static(
 
     # 5. Execute concept to get ConceptResult.
     executor = ConceptExecutor(ResultCache())
-    concept_result = executor.execute_graph(graph, req.entity, resolver)
+    concept_result = await executor.aexecute_graph(graph, req.entity, resolver)
 
     # 6. Evaluate condition strategy → DecisionValue.
     strategy_cls = _STRATEGY_IMPLS.get(condition.strategy.type.value)

@@ -59,8 +59,9 @@ from app.models.task import Namespace
 log = logging.getLogger(__name__)
 
 #: Valid definition_type values — matches the DB CHECK constraint.
+#: Migration 0005 added 'feature' to the constraint; keep in sync.
 VALID_DEFINITION_TYPES: frozenset[str] = frozenset({
-    "concept", "condition", "action", "primitive",
+    "concept", "condition", "action", "primitive", "feature",
 })
 
 #: Namespaces that require elevated privileges to promote into.
