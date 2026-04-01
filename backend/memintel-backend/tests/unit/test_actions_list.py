@@ -64,10 +64,12 @@ def _make_action(
     )
 
 
-def _make_store(actions: list[ActionDefinition]) -> Any:
+def _make_store(actions: list[ActionDefinition], total: int | None = None) -> Any:
     """Return a DefinitionStore stub whose list_actions() returns the given list."""
     store = MagicMock()
     store.list_actions = AsyncMock(return_value=actions)
+    # count_actions returns the DB total — defaults to len(actions) for existing tests.
+    store.count_actions = AsyncMock(return_value=total if total is not None else len(actions))
     return store
 
 
@@ -159,3 +161,40 @@ def test_list_actions_missing_namespace_returns_422():
         _app.dependency_overrides.clear()
 
     assert resp.status_code == 422
+
+
+# ── FIX 6: total reflects DB count not page count ─────────────────────────────
+
+def test_list_actions_total_reflects_db_count_not_page_count():
+    """
+    ActionListResponse.total must come from count_actions() (the DB total),
+    NOT from len(actions) (the page count).
+
+    This test gives the store 5 total actions in the DB but configures the
+    route to return only 2 on the current page. Verifies that total=5, not
+    total=2.
+    """
+    page_actions = [
+        _make_action("org.action_1", "1.0"),
+        _make_action("org.action_2", "1.0"),
+    ]
+    # DB has 5 total actions, but only 2 are on this page.
+    stub_store = _make_store(page_actions, total=5)
+
+    _app.dependency_overrides[get_definition_store] = lambda: stub_store
+
+    try:
+        with TestClient(_app) as client:
+            resp = client.get("/actions", params={"namespace": "org", "limit": 2})
+    finally:
+        _app.dependency_overrides.clear()
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 5, (
+        f"total must equal the DB count (5), not the page size (2). Got: {body['total']}"
+    )
+    assert len(body["actions"]) == 2
+
+    # Verify count_actions was called with the correct namespace.
+    stub_store.count_actions.assert_awaited_once_with(namespace="org")

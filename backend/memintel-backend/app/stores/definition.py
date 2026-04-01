@@ -329,6 +329,27 @@ class DefinitionStore:
                 )
         return results
 
+    # ── count_actions ─────────────────────────────────────────────────────────
+
+    async def count_actions(self, namespace: str) -> int:
+        """
+        Return the total number of non-deprecated actions for ``namespace``.
+
+        Used by GET /actions to populate the ActionListResponse.total field
+        with the DB total, independent of the page limit/offset.
+        """
+        count = await self._pool.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM definitions
+            WHERE definition_type = 'action'
+              AND namespace = $1
+              AND deprecated = FALSE
+            """,
+            namespace,
+        )
+        return int(count or 0)
+
     # ── deprecate ─────────────────────────────────────────────────────────────
 
     async def deprecate(

@@ -514,3 +514,88 @@ class TestNoneInputGuard:
         from app.runtime.executor import _op_add
         assert _op_add({"a": None, "b": 5.0}, {}) is None
         assert _op_add({"a": 3.0,  "b": None}, {}) is None
+
+
+# ── FIX 2: ConceptExecutor.aexecute() properly awaits get_by_concept ─────────
+
+class TestAexecute:
+    """
+    aexecute() is the async entry point that properly awaits
+    GraphStore.get_by_concept() — fixing the missing-await bug in execute().
+    """
+
+    def test_aexecute_returns_concept_result_not_coroutine(self):
+        """
+        aexecute() with a mock async graph store returns a real ConceptResult,
+        not a coroutine object. This confirms get_by_concept() is awaited.
+        """
+        import asyncio
+
+        graph = _make_graph()
+        connector = _make_connector()
+        cache = ResultCache()
+
+        class _AsyncGraphStore:
+            """Minimal async graph store stub."""
+            async def get_by_concept(self, concept_id: str, version: str):
+                return graph
+
+        executor = ConceptExecutor(result_cache=cache, graph_store=_AsyncGraphStore())
+        resolver = DataResolver(connector=connector, backoff_base=0.0)
+
+        result = asyncio.run(executor.aexecute(
+            concept_id="org.churn_risk_score",
+            version="1.0",
+            entity=_ENTITY,
+            data_resolver=resolver,
+            timestamp=_TS,
+        ))
+
+        # Must be a real ConceptResult, not a coroutine.
+        from app.models.result import ConceptResult
+        assert isinstance(result, ConceptResult), (
+            f"Expected ConceptResult, got {type(result).__name__}. "
+            "This means get_by_concept() was not awaited."
+        )
+        assert result.entity == _ENTITY
+        assert result.deterministic is True
+
+    def test_aexecute_raises_not_found_when_graph_missing(self):
+        """aexecute() raises MemintelError(NOT_FOUND) when graph_store returns None."""
+        import asyncio
+        from app.models.errors import MemintelError, ErrorType
+
+        cache = ResultCache()
+
+        class _EmptyGraphStore:
+            async def get_by_concept(self, concept_id, version):
+                return None
+
+        executor = ConceptExecutor(result_cache=cache, graph_store=_EmptyGraphStore())
+        resolver = DataResolver(connector=MockConnector(data={}), backoff_base=0.0)
+
+        with pytest.raises(MemintelError) as exc_info:
+            asyncio.run(executor.aexecute(
+                concept_id="missing.concept",
+                version="1.0",
+                entity=_ENTITY,
+                data_resolver=resolver,
+            ))
+
+        assert exc_info.value.error_type == ErrorType.NOT_FOUND
+
+    def test_aexecute_raises_runtime_error_without_graph_store(self):
+        """aexecute() raises RuntimeError if no graph_store was injected."""
+        import asyncio
+
+        cache = ResultCache()
+        executor = ConceptExecutor(result_cache=cache)  # no graph_store
+        resolver = DataResolver(connector=MockConnector(data={}), backoff_base=0.0)
+
+        with pytest.raises(RuntimeError, match="graph_store"):
+            asyncio.run(executor.aexecute(
+                concept_id="org.x",
+                version="1.0",
+                entity=_ENTITY,
+                data_resolver=resolver,
+            ))

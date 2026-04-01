@@ -55,6 +55,7 @@ main.py — routes do not catch them here.
 from __future__ import annotations
 
 import structlog
+from typing import Any
 
 import asyncpg
 from fastapi import APIRouter, Depends, Query
@@ -119,13 +120,32 @@ async def list_actions(
 
     HTTP 422 — namespace query parameter missing.
     """
-    actions = await store.list_actions(namespace=namespace, limit=limit, offset=offset)
+    actions, total = await _list_actions_with_total(
+        store, namespace=namespace, limit=limit, offset=offset
+    )
     return ActionListResponse(
         actions=actions,
-        total=len(actions),
+        total=total,
         limit=limit,
         offset=offset,
     )
+
+
+async def _list_actions_with_total(
+    store: Any,
+    namespace: str,
+    limit: int,
+    offset: int,
+) -> tuple[list, int]:
+    """Fetch page and total count concurrently."""
+    import asyncio
+    page_task = asyncio.ensure_future(
+        store.list_actions(namespace=namespace, limit=limit, offset=offset)
+    )
+    count_task = asyncio.ensure_future(store.count_actions(namespace=namespace))
+    actions = await page_task
+    total = await count_task
+    return actions, total
 
 
 # ── POST /actions ─────────────────────────────────────────────────────────────

@@ -456,6 +456,62 @@ class ConceptExecutor:
             missing_data_policy=missing_data_policy,
         )
 
+    # ── Async secondary entry point (fetch graph by concept_id + version) ───────
+
+    async def aexecute(
+        self,
+        concept_id: str,
+        version: str,
+        entity: str,
+        data_resolver: DataResolver,
+        timestamp: str | None = None,
+        explain: bool = False,
+        cache: bool = True,
+        missing_data_policy: MissingDataPolicy | None = None,
+        ir_hash: str | None = None,
+    ) -> ConceptResult:
+        """
+        Async variant of execute() — properly awaits graph_store.get_by_concept().
+
+        Use this entry point from async callers (e.g. ExplanationService) to
+        avoid calling the async get_by_concept() without await.
+
+        Raises MemintelError(NOT_FOUND)  if the graph does not exist.
+        Raises MemintelError(CONFLICT)   if ir_hash is provided and mismatches.
+        Raises RuntimeError              if graph_store was not injected.
+        """
+        if self._graph_store is None:
+            raise RuntimeError(
+                "ConceptExecutor.aexecute() requires a graph_store. "
+                "Either inject one at construction, or call aexecute_graph() directly."
+            )
+
+        graph = await self._graph_store.get_by_concept(concept_id, version)
+        if graph is None:
+            raise MemintelError(
+                ErrorType.NOT_FOUND,
+                f"No compiled graph found for concept '{concept_id}' version '{version}'.",
+                location=f"{concept_id}:{version}",
+            )
+
+        if ir_hash is not None and graph.ir_hash != ir_hash:
+            raise MemintelError(
+                ErrorType.CONFLICT,
+                f"ir_hash mismatch for '{concept_id}:{version}'. "
+                f"Expected '{ir_hash}', found '{graph.ir_hash}'. Re-compile required.",
+                location=f"{concept_id}:{version}",
+            )
+
+        return await self.aexecute_graph(
+            graph=graph,
+            entity=entity,
+            data_resolver=data_resolver,
+            timestamp=timestamp,
+            explain=explain,
+            cache=cache,
+            missing_data_policy=missing_data_policy,
+        )
+
     # ── Async entry points (for async DataResolver.afetch()) ──────────────────
 
     async def aexecute_graph(

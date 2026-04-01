@@ -45,7 +45,7 @@ from app.models.condition import (
     StrategyDefinition,
     StrategyType,
 )
-from app.models.result import ConceptResult, ExplainMode
+from app.models.result import ConceptResult
 
 log = logging.getLogger(__name__)
 
@@ -62,8 +62,8 @@ class ExplanationService:
     ──────────
     definition_registry — must implement async get(id, version) → dict.
                           Raises NotFoundError if not registered.
-    concept_executor    — must implement execute(concept_id, version, entity,
-                          data_resolver, timestamp, explain, explain_mode)
+    concept_executor    — must implement async aexecute(concept_id, version,
+                          entity, data_resolver, timestamp, explain)
                           → ConceptResult.
     condition_evaluator — must implement evaluate(condition, entity,
                           data_resolver, timestamp) → DecisionValue.
@@ -152,14 +152,13 @@ class ExplanationService:
         condition = ConditionDefinition.model_validate(body)
 
         # 2. Execute concept with explain=True for driver attribution.
-        concept_result: ConceptResult = self._executor.execute(
+        concept_result: ConceptResult = await self._executor.aexecute(
             concept_id=condition.concept_id,
             version=condition.concept_version,
             entity=entity,
             data_resolver=self._data_resolver,
             timestamp=timestamp,
             explain=True,
-            explain_mode=ExplainMode.FULL,
         )
 
         # 3. Evaluate condition to get the decision value.

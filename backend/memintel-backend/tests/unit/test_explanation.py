@@ -104,7 +104,7 @@ def _composite_body() -> dict:
 # ── Mock executor and evaluator ────────────────────────────────────────────────
 
 class MockConceptExecutor:
-    """Returns a preset ConceptResult on every execute() call."""
+    """Returns a preset ConceptResult on every execute() / aexecute() call."""
 
     def __init__(self, concept_result: ConceptResult):
         self._result = concept_result
@@ -117,7 +117,18 @@ class MockConceptExecutor:
         data_resolver,
         timestamp=None,
         explain=False,
-        explain_mode=None,
+        **kwargs,
+    ) -> ConceptResult:
+        return self._result
+
+    async def aexecute(
+        self,
+        concept_id,
+        version,
+        entity,
+        data_resolver,
+        timestamp=None,
+        explain=False,
         **kwargs,
     ) -> ConceptResult:
         return self._result
@@ -699,3 +710,107 @@ def test_explain_condition_service_wiring_from_conditions_route():
     # executor/evaluator are None — explain_condition is definition-only
     assert service._executor is None
     assert service._evaluator is None
+
+
+# ── FIX 1 + FIX 2: explain_decision() uses aexecute() not execute(explain_mode=…)
+
+class _StrictMockExecutor:
+    """
+    Mock executor that raises TypeError if called with explain_mode kwarg
+    (mimicking the real ConceptExecutor.execute() which has no such param),
+    but succeeds on aexecute() calls.
+    """
+
+    def __init__(self, concept_result: ConceptResult):
+        self._result = concept_result
+
+    def execute(self, *args, **kwargs) -> ConceptResult:
+        if "explain_mode" in kwargs:
+            raise TypeError(
+                f"execute() got an unexpected keyword argument 'explain_mode'"
+            )
+        return self._result
+
+    async def aexecute(self, *args, **kwargs) -> ConceptResult:
+        # aexecute() does NOT accept explain_mode — confirm it's not passed.
+        if "explain_mode" in kwargs:
+            raise TypeError(
+                f"aexecute() got an unexpected keyword argument 'explain_mode'"
+            )
+        return self._result
+
+
+def test_explain_decision_does_not_pass_explain_mode_to_executor():
+    """
+    FIX 1: explain_decision() must NOT pass explain_mode=ExplainMode.FULL
+    to the executor. ConceptExecutor.execute() and aexecute() have no such
+    parameter — passing it causes a TypeError on every real call.
+
+    Uses _StrictMockExecutor which raises TypeError if explain_mode is
+    passed to either execute() or aexecute().
+    """
+    body = _threshold_body(value=0.75)
+    concept_result = _make_concept_result()
+    decision = _boolean_decision()
+
+    registry = MockDefinitionRegistry()
+    registry.seed("org.test_threshold", "1.0", body)
+
+    executor = _StrictMockExecutor(concept_result)
+    evaluator = MockConditionEvaluator(decision)
+
+    svc = ExplanationService(
+        definition_registry=registry,
+        concept_executor=executor,
+        condition_evaluator=evaluator,
+        data_resolver=None,
+    )
+
+    # Must not raise TypeError — FIX 1 removed the explain_mode kwarg.
+    result = run(svc.explain_decision(
+        condition_id="org.test_threshold",
+        condition_version="1.0",
+        entity="user_42",
+        timestamp="2024-01-15T09:00:00Z",
+    ))
+
+    assert result.threshold_applied == 0.75
+
+
+def test_explain_decision_calls_aexecute_not_execute():
+    """
+    FIX 2: explain_decision() must call self._executor.aexecute() (async),
+    not self._executor.execute() (sync). Verifies the async path is taken.
+    """
+    call_log: list[str] = []
+
+    class _TrackingExecutor:
+        def execute(self, *args, **kwargs) -> ConceptResult:
+            call_log.append("execute")
+            return _make_concept_result()
+
+        async def aexecute(self, *args, **kwargs) -> ConceptResult:
+            call_log.append("aexecute")
+            return _make_concept_result()
+
+    body = _threshold_body()
+    registry = MockDefinitionRegistry()
+    registry.seed("org.test_threshold", "1.0", body)
+
+    svc = ExplanationService(
+        definition_registry=registry,
+        concept_executor=_TrackingExecutor(),
+        condition_evaluator=MockConditionEvaluator(_boolean_decision()),
+        data_resolver=None,
+    )
+
+    run(svc.explain_decision(
+        condition_id="org.test_threshold",
+        condition_version="1.0",
+        entity="user_42",
+        timestamp="2024-01-15T09:00:00Z",
+    ))
+
+    assert call_log == ["aexecute"], (
+        f"explain_decision() must call aexecute(), not execute(). Got: {call_log}"
+    )

@@ -43,8 +43,8 @@ import structlog
 import asyncpg
 from fastapi import APIRouter, Depends
 
-from app.models.errors import NotFoundError
-from app.models.result import Job, JobResult
+from app.models.errors import ErrorResponse, NotFoundError
+from app.models.result import ConceptResult, FullPipelineResult, Job, JobResult, JobStatus
 from app.persistence.db import get_db
 from app.persistence.stores import get_job_store
 from app.stores import JobStore
@@ -56,12 +56,30 @@ router = APIRouter(tags=["Jobs"])
 
 def _job_to_result(job: Job) -> JobResult:
     """Convert a Job (internal store model) to a JobResult (API response model)."""
+    result = None
+    if job.status == JobStatus.COMPLETED and job.result_body is not None:
+        try:
+            # FullPipelineResult has a 'decision' field; try it first.
+            result = FullPipelineResult.model_validate(job.result_body)
+        except Exception:
+            try:
+                result = ConceptResult.model_validate(job.result_body)
+            except Exception:
+                pass  # leave result=None if the body is malformed
+
+    error = None
+    if job.status == JobStatus.FAILED and job.error_body is not None:
+        try:
+            error = ErrorResponse.model_validate(job.error_body)
+        except Exception:
+            pass  # leave error=None if the body is malformed
+
     return JobResult(
         job_id=job.job_id or "",
         status=job.status,
         poll_interval_seconds=job.poll_interval_seconds,
-        # result and error are populated from excluded DB fields by the service
-        # layer once implemented. Store returns raw Job without deserialized result.
+        result=result,
+        error=error,
     )
 
 
