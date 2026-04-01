@@ -221,6 +221,9 @@ async def semantic_refine(
     breaking=True indicates the change affects the semantic_hash — a new
     version should be created rather than updating in place.
 
+    Requires X-Elevated-Key header.
+
+    HTTP 403 — elevated key missing or invalid.
     HTTP 404 — definition not found.
     """
     log.info(

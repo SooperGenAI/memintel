@@ -135,6 +135,7 @@ async def compile_semantic(
     Does NOT persist anything.
 
     HTTP 400 — validation errors.
+    HTTP 403 — elevated key missing or invalid.
     HTTP 422 — type errors.
     """
     log.info(
@@ -230,6 +231,7 @@ async def compile_concept(
       If the existing graph has a different ir_hash → HTTP 409.
 
     HTTP 400 — validation errors in concept definition.
+    HTTP 403 — elevated key missing or invalid.
     HTTP 404 — referenced primitive or feature not found.
     HTTP 409 — ir_hash mismatch on recompile (CompilerInvariantError).
     HTTP 422 — type errors detected by type checker.

@@ -77,7 +77,7 @@ from typing import Any
 from app.api.deps import require_elevated_key
 from app.compiler.dag_builder import DAGBuilder
 from app.models.concept import ConceptDefinition
-from app.models.condition import ConditionDefinition
+from app.models.condition import ConditionDefinition, DecisionValue
 from app.models.errors import ErrorType, MemintelError
 from app.models.result import (
     BatchExecuteResult,
@@ -430,6 +430,7 @@ class StaticExecuteRequest(BaseModel):
 @router.post(
     "/static",
     summary="Evaluate a condition with inline data (test-only)",
+    response_model=DecisionValue,
     status_code=200,
 )
 async def execute_static(
