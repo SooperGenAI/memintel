@@ -447,31 +447,42 @@ class RegistryService:
 
         Returns a FeatureSearchResult-compatible dict.
         """
-        result = await self._store.list(
-            definition_type="feature",
-            limit=limit,
-            cursor=cursor,
+        rows = await self._pool.fetch(
+            """
+            SELECT definition_id, version, meaning_hash, body, created_at
+            FROM definitions
+            WHERE definition_type = 'feature'
+            ORDER BY created_at DESC
+            LIMIT $1
+            """,
+            limit + 1,
         )
-        items = result.items
+        has_more = len(rows) > limit
+        rows = rows[:limit]
+
         if q:
-            items = [i for i in items if q.lower() in i.definition_id.lower()]
+            rows = [r for r in rows if q.lower() in r["definition_id"].lower()]
 
         feature_items = [
             {
-                "feature_id": item.definition_id,
-                "version": item.version,
-                "semantic_hash": item.meaning_hash or "",
-                "body": {},
-                "created_at": str(item.created_at) if item.created_at else None,
+                "feature_id": row["definition_id"],
+                "version": row["version"],
+                "semantic_hash": row["meaning_hash"] or "",
+                "body": (
+                    json.loads(row["body"])
+                    if isinstance(row["body"], str)
+                    else (row["body"] or {})
+                ),
+                "created_at": str(row["created_at"]) if row["created_at"] else None,
             }
-            for item in items
+            for row in rows
         ]
 
         return {
             "items": feature_items,
-            "has_more": result.has_more,
-            "next_cursor": result.next_cursor,
-            "total_count": result.total_count,
+            "has_more": has_more,
+            "next_cursor": None,
+            "total_count": len(feature_items),
         }
 
 

@@ -39,8 +39,10 @@ from typing import Any
 
 from app.models.condition import (
     ConditionDefinition,
+    ConditionExplanation,
     DecisionExplanation,
     DriverContribution,
+    StrategyDefinition,
     StrategyType,
 )
 from app.models.result import ConceptResult, ExplainMode
@@ -83,6 +85,50 @@ class ExplanationService:
         self._data_resolver = data_resolver
 
     # ── Public API ──────────────────────────────────────────────────────────────
+
+    async def explain_condition(
+        self,
+        condition_id: str,
+        condition_version: str,
+        timestamp: str | None = None,
+    ) -> ConditionExplanation:
+        """
+        Return a human-readable explanation of a condition definition.
+
+        Derives natural_language_summary and parameter_rationale from the
+        condition's strategy type and parameters. Fully deterministic — no
+        concept execution, no LLM, no entity required.
+
+        timestamp is accepted for API symmetry but is not used in the
+        derivation — condition explanations are definition-level, not
+        instance-level.
+
+        Raises NotFoundError if (condition_id, condition_version) is not
+        registered in the definition registry.
+        """
+        body = await self._registry.get(condition_id, condition_version)
+        condition = ConditionDefinition.model_validate(body)
+
+        summary, rationale = _explain_strategy(condition.strategy)
+
+        log.info(
+            "condition_explained",
+            extra={
+                "condition_id": condition_id,
+                "condition_version": condition_version,
+                "strategy_type": condition.strategy.type.value,
+            },
+        )
+
+        return ConditionExplanation(
+            condition_id=condition_id,
+            condition_version=condition_version,
+            strategy=condition.strategy,
+            concept_id=condition.concept_id,
+            concept_version=condition.concept_version,
+            natural_language_summary=summary,
+            parameter_rationale=rationale,
+        )
 
     async def explain_decision(
         self,
@@ -176,6 +222,68 @@ class ExplanationService:
 
 
 # ── Private helpers ───────────────────────────────────────────────────────────
+
+def _explain_strategy(strategy: StrategyDefinition) -> tuple[str, str]:
+    """
+    Derive (natural_language_summary, parameter_rationale) for a strategy.
+
+    Fully deterministic — no LLM, no entity, no execution.
+    Returns a 2-tuple: (summary, rationale).
+    """
+    p = strategy.params
+    st = strategy.type
+
+    if st == StrategyType.THRESHOLD:
+        summary = (
+            f"Fires when the concept value is {p.direction} the fixed threshold {p.value}."
+        )
+        rationale = (
+            f"direction={p.direction!r}, value={p.value} — fixed cutoff; "
+            "adjust value to raise or lower sensitivity."
+        )
+    elif st == StrategyType.PERCENTILE:
+        summary = (
+            f"Fires when the concept value falls in the {p.direction} {p.value}% "
+            "of historical values."
+        )
+        rationale = (
+            f"direction={p.direction!r}, value={p.value} — relative cutoff; "
+            "adjust value to change the fraction of entities that trigger."
+        )
+    elif st == StrategyType.Z_SCORE:
+        summary = (
+            f"Fires when the concept value is more than {p.threshold} standard "
+            f"deviations {p.direction} the historical mean (window: {p.window})."
+        )
+        rationale = (
+            f"threshold={p.threshold}, direction={p.direction!r}, window={p.window!r} — "
+            "higher threshold reduces sensitivity; wider window smooths the baseline."
+        )
+    elif st == StrategyType.CHANGE:
+        summary = (
+            f"Fires when the concept value changes by more than {p.value}% "
+            f"({p.direction}) within the last {p.window}."
+        )
+        rationale = (
+            f"direction={p.direction!r}, value={p.value}, window={p.window!r} — "
+            "adjust value to set the minimum % change; adjust window to control lookback."
+        )
+    elif st == StrategyType.EQUALS:
+        summary = f"Fires when the concept value equals {p.value!r}."
+        rationale = (
+            f"value={p.value!r} — categorical match; no numeric parameter to calibrate."
+        )
+    else:  # COMPOSITE
+        summary = (
+            f"Combines {len(p.operands)} conditions with a logical {p.operator} operator."
+        )
+        rationale = (
+            f"operator={p.operator!r}, operands={p.operands} — "
+            "fires when the logical combination of operands evaluates to True."
+        )
+
+    return summary, rationale
+
 
 def _rank_drivers(concept_result: ConceptResult) -> list[DriverContribution]:
     """

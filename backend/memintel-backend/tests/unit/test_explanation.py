@@ -573,3 +573,129 @@ def test_node_trace_values_used_for_driver_value():
     driver_map = {d.signal: d.value for d in result.drivers}
     assert driver_map["signal_a"] == 0.92
     assert driver_map["signal_b"] == 0.41
+
+
+# ── FIX 1 + FIX 2: explain_condition tests ────────────────────────────────────
+
+def _make_explain_condition_service(body: dict) -> ExplanationService:
+    """Build an ExplanationService wired only with a registry (no executor/evaluator)."""
+    registry = MockDefinitionRegistry()
+    condition_id = body["condition_id"]
+    version = body["version"]
+    registry.seed(condition_id, version, body)
+    return ExplanationService(
+        definition_registry=registry,
+        concept_executor=None,
+        condition_evaluator=None,
+        data_resolver=None,
+    )
+
+
+def test_explain_condition_threshold_returns_condition_explanation():
+    """
+    explain_condition() must return a ConditionExplanation with non-empty
+    natural_language_summary and parameter_rationale for a threshold strategy.
+    Must not raise TypeError or AttributeError — verifies FIX 1 (wiring) and
+    FIX 2 (method existence + _explain_strategy helper).
+    """
+    from app.models.condition import ConditionExplanation, StrategyType
+
+    body = _threshold_body(value=0.75)
+    svc = _make_explain_condition_service(body)
+
+    result = run(svc.explain_condition(
+        condition_id="org.test_threshold",
+        condition_version="1.0",
+    ))
+
+    assert isinstance(result, ConditionExplanation)
+    assert result.condition_id == "org.test_threshold"
+    assert result.condition_version == "1.0"
+    assert result.strategy.type == StrategyType.THRESHOLD
+    assert len(result.natural_language_summary) > 0
+    assert len(result.parameter_rationale) > 0
+    # Verify the threshold value appears in the rationale.
+    assert "0.75" in result.natural_language_summary or "0.75" in result.parameter_rationale
+
+
+def test_explain_condition_z_score_returns_condition_explanation():
+    """explain_condition() works for z_score strategy."""
+    from app.models.condition import ConditionExplanation, StrategyType
+
+    body = _z_score_body(threshold=2.5)
+    svc = _make_explain_condition_service(body)
+
+    result = run(svc.explain_condition(
+        condition_id="org.test_zscore",
+        condition_version="1.0",
+    ))
+
+    assert isinstance(result, ConditionExplanation)
+    assert result.strategy.type == StrategyType.Z_SCORE
+    assert "2.5" in result.natural_language_summary or "2.5" in result.parameter_rationale
+
+
+def test_explain_condition_equals_returns_condition_explanation():
+    """explain_condition() works for equals strategy."""
+    from app.models.condition import ConditionExplanation, StrategyType
+
+    body = _equals_body(value="premium")
+    svc = _make_explain_condition_service(body)
+
+    result = run(svc.explain_condition(
+        condition_id="org.test_equals",
+        condition_version="1.0",
+    ))
+
+    assert isinstance(result, ConditionExplanation)
+    assert result.strategy.type == StrategyType.EQUALS
+    assert "premium" in result.natural_language_summary or "premium" in result.parameter_rationale
+
+
+def test_explain_condition_not_found_raises_not_found_error():
+    """
+    explain_condition() must raise NotFoundError (→ HTTP 404) when the condition
+    is not in the registry. Must never raise TypeError or AttributeError.
+    """
+    from app.models.errors import NotFoundError
+
+    registry = MockDefinitionRegistry()  # empty — nothing seeded
+    svc = ExplanationService(
+        definition_registry=registry,
+        concept_executor=None,
+        condition_evaluator=None,
+        data_resolver=None,
+    )
+
+    import pytest
+    with pytest.raises(NotFoundError):
+        run(svc.explain_condition(
+            condition_id="does_not_exist",
+            condition_version="9.9",
+        ))
+
+
+def test_explain_condition_service_wiring_from_conditions_route():
+    """
+    get_explanation_service() in conditions.py (FIX 1) must construct
+    ExplanationService without TypeError — i.e. must NOT pass pool=pool
+    as a keyword arg to ExplanationService.__init__.
+
+    Calls the factory directly with a minimal fake pool and verifies the
+    returned service has a non-None _registry.
+    """
+    from app.api.routes.conditions import get_explanation_service
+
+    class _FakePool:
+        async def fetchrow(self, *a, **kw): return None
+        async def fetch(self, *a, **kw): return []
+        async def fetchval(self, *a, **kw): return None
+
+    service = run(get_explanation_service(pool=_FakePool()))
+
+    assert service._registry is not None, (
+        "ExplanationService._registry must not be None after FIX 1"
+    )
+    # executor/evaluator are None — explain_condition is definition-only
+    assert service._executor is None
+    assert service._evaluator is None

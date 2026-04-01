@@ -1037,3 +1037,49 @@ def test_time_series_operator_normalises_timestamp_value_dicts():
     plain_vals = [1.0, 2.0, 3.0]
     assert _op_mean({"input": plain_vals}, {}) == 2.0
     assert _op_pct_change({"input": plain_vals}, {}) == 0.5
+
+
+# ── FIX 3: _fetch_bound_actions uses a parameterised JSONB query ──────────────
+
+def test_fetch_bound_actions_uses_parameterized_query():
+    """
+    _fetch_bound_actions must pass condition_id and condition_version as SQL
+    parameters ($1, $2) to a JSONB-path WHERE clause, not fetch all actions
+    and filter in Python.
+
+    Verifies FIX 3: the MockPool.fetch() stub records the query and args so
+    we can assert the correct parameterised form was used.
+    """
+    captured: list[tuple[str, tuple]] = []
+
+    class _RecordingPool(MockPool):
+        """MockPool that records every fetch() call."""
+        async def fetch(self, query: str, *args: Any) -> list[dict]:
+            captured.append((query, args))
+            return []
+
+    pool = _RecordingPool(
+        fetchrow_map={
+            ("org.test_score", "1.0"): _concept_row(),
+            ("high_score", "1.0"): _condition_row(),
+        }
+    )
+    svc = _make_service(pool)
+
+    _run(svc._fetch_bound_actions("high_score", "1.0"))
+
+    assert len(captured) == 1, "fetch() must be called exactly once"
+    query, args = captured[0]
+
+    # Verify the JSONB path filter is present in the SQL.
+    assert "body->'trigger'->>'condition_id'" in query, (
+        "_fetch_bound_actions must filter by JSONB path, not fetch all actions"
+    )
+    assert "body->'trigger'->>'condition_version'" in query
+
+    # Verify parameters are passed as SQL args (not embedded in the string).
+    assert "$1" in query and "$2" in query, "Must use $1/$2 parameterised placeholders"
+    assert args == ("high_score", "1.0"), (
+        f"Expected args ('high_score', '1.0'), got {args}"
+    )
+

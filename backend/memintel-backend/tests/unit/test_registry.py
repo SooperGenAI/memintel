@@ -926,3 +926,74 @@ class TestFeatureRegistryMerge:
         listing = run(store.list(definition_type="feature"))
         assert len(listing.items) == 1
         assert listing.items[0].definition_id == "org.canonical"
+
+
+# ── FIX 4: list_features returns non-empty body ───────────────────────────────
+
+class TestListFeaturesReturnsBody:
+    """
+    RegistryService.list_features() must return non-empty body dicts for
+    registered features — not hardcoded `{}`.
+
+    Uses a minimal fake pool that returns a pre-seeded row for the direct
+    pool query introduced by FIX 4.
+    """
+
+    def _make_pool(self, rows: list[dict]) -> Any:
+        """Return a fake pool whose fetch() returns the given rows."""
+        import datetime
+
+        class _FakePool:
+            async def fetchrow(self, *a, **kw): return None
+            async def fetch(self, query: str, *args: Any) -> list[dict]:
+                return rows
+            async def fetchval(self, *a, **kw): return None
+            async def execute(self, *a, **kw): pass
+
+        return _FakePool()
+
+    def test_list_features_returns_body_from_db(self):
+        """
+        list_features() must include the feature body fetched from the DB.
+        """
+        import asyncio, json, datetime
+        from app.services.registry import RegistryService
+
+        feature_body = {
+            "feature_id": "org.my_feature",
+            "version": "1.0",
+            "description": "A test feature",
+        }
+        fake_row = {
+            "definition_id": "org.my_feature",
+            "version": "1.0",
+            "meaning_hash": "abc123",
+            "body": json.dumps(feature_body),
+            "created_at": datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc),
+        }
+
+        pool = self._make_pool([fake_row])
+        svc = RegistryService(pool=pool)
+
+        result = asyncio.run(svc.list_features())
+
+        assert len(result["items"]) == 1
+        item = result["items"][0]
+        assert item["feature_id"] == "org.my_feature"
+        assert item["body"] != {}, (
+            "list_features() must return the real body, not hardcoded {}"
+        )
+        assert item["body"] == feature_body
+
+    def test_list_features_empty_when_no_features(self):
+        """list_features() returns empty items list when no features exist."""
+        import asyncio
+        from app.services.registry import RegistryService
+
+        pool = self._make_pool([])
+        svc = RegistryService(pool=pool)
+
+        result = asyncio.run(svc.list_features())
+
+        assert result["items"] == []
+        assert result["has_more"] is False

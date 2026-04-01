@@ -109,7 +109,13 @@ async def get_explanation_service(
     ExplanationService generates human-readable condition explanations
     deterministically from strategy type and parameters. No LLM involvement.
     """
-    return ExplanationService(pool=pool)
+    definition_registry = DefinitionRegistry(store=DefinitionStore(pool))
+    return ExplanationService(
+        definition_registry=definition_registry,
+        concept_executor=None,
+        condition_evaluator=None,
+        data_resolver=None,
+    )
 
 
 async def get_calibration_service(

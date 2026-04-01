@@ -276,18 +276,17 @@ class ExecuteService:
             """
             SELECT body FROM definitions
             WHERE definition_type = 'action'
+              AND body->'trigger'->>'condition_id' = $1
+              AND body->'trigger'->>'condition_version' = $2
             """,
+            condition_id,
+            condition_version,
         )
         actions: list[ActionDefinition] = []
         for row in rows:
             try:
                 body = _parse_body(row["body"])
-                action = ActionDefinition(**body)
-                if (
-                    action.trigger.condition_id == condition_id
-                    and action.trigger.condition_version == condition_version
-                ):
-                    actions.append(action)
+                actions.append(ActionDefinition(**body))
             except Exception:
                 pass  # skip malformed records
         return actions
