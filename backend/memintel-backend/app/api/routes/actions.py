@@ -139,10 +139,10 @@ async def _list_actions_with_total(
 ) -> tuple[list, int]:
     """Fetch page and total count concurrently."""
     import asyncio
-    page_task = asyncio.ensure_future(
+    page_task = asyncio.create_task(
         store.list_actions(namespace=namespace, limit=limit, offset=offset)
     )
-    count_task = asyncio.ensure_future(store.count_actions(namespace=namespace))
+    count_task = asyncio.create_task(store.count_actions(namespace=namespace))
     actions = await page_task
     total = await count_task
     return actions, total

@@ -239,7 +239,7 @@ class ConceptResult(BaseModel):
     explanation is None when explain=False (the default). The executor sets it
     only when the caller passes explain=True on the request.
     """
-    value: float | int | bool | str | None
+    value: bool | float | int | str | None
     type: ConceptOutputType
     entity: str
     version: str

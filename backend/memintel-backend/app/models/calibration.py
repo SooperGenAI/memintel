@@ -198,9 +198,7 @@ class CalibrationToken(BaseModel):
     def is_expired(self) -> bool:
         """Return True if this token has passed its expiry time."""
         from datetime import timezone
-        return datetime.now(tz=timezone.utc) >= self.expires_at.replace(
-            tzinfo=self.expires_at.tzinfo or timezone.utc
-        )
+        return datetime.now(tz=timezone.utc) >= self.expires_at.astimezone(timezone.utc)
 
 
 # ── Target configuration ───────────────────────────────────────────────────────

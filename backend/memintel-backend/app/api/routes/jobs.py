@@ -65,14 +65,14 @@ def _job_to_result(job: Job) -> JobResult:
             try:
                 result = ConceptResult.model_validate(job.result_body)
             except Exception:
-                pass  # leave result=None if the body is malformed
+                log.warning("job_result_deserialization_failed", job_id=job.job_id, exc_info=True)
 
     error = None
     if job.status == JobStatus.FAILED and job.error_body is not None:
         try:
             error = ErrorResponse.model_validate(job.error_body)
         except Exception:
-            pass  # leave error=None if the body is malformed
+            log.warning("job_error_deserialization_failed", job_id=job.job_id, exc_info=True)
 
     return JobResult(
         job_id=job.job_id or "",
