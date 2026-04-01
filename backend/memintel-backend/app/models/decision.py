@@ -37,7 +37,7 @@ class DecisionRecord(BaseModel):
     entity_id: str
     evaluated_at: datetime | None = None  # set by DB DEFAULT NOW()
     fired: bool
-    concept_value: float | int | bool | str | None = None
+    concept_value: bool | float | int | str | None = None
     threshold_applied: dict[str, Any] | None = None
     ir_hash: str | None = None
     input_primitives: dict[str, Any] | None = None

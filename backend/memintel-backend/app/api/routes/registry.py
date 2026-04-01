@@ -57,11 +57,11 @@ main.py — routes do not catch them here.
 from __future__ import annotations
 
 import structlog
-from typing import Any
+from typing import Any, Literal
 
 import asyncpg
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from app.api.deps import require_elevated_key
 from app.models.concept import (
@@ -86,9 +86,14 @@ router = APIRouter(tags=["Registry"])
 class RegisterDefinitionRequest(BaseModel):
     definition_id: str
     version: str
-    definition_type: str          # concept | condition | action | primitive
+    definition_type: Literal["concept", "condition", "action", "primitive", "feature"]
     namespace: str
     body: dict[str, Any]          # raw definition body (stored as JSONB)
+
+    @field_validator("namespace")
+    @classmethod
+    def _normalise_namespace(cls, v: str) -> str:
+        return v.strip().lower()
 
 
 class DeprecateRequest(BaseModel):

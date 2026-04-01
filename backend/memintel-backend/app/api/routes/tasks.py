@@ -45,6 +45,7 @@ from app.models.task import (
     CreateTaskRequest,
     Task,
     TaskList,
+    TaskStatus,
     TaskUpdateRequest,
 )
 from app.models.result import DryRunResult
@@ -130,7 +131,7 @@ async def create_task(
     status_code=200,
 )
 async def list_tasks(
-    status: str | None = Query(
+    status: TaskStatus | None = Query(
         default=None,
         description="Filter by task status (active, paused, deleted)",
     ),

@@ -178,7 +178,12 @@ class MemintelError(Exception):
         self.message = message
         self.location = location
         self.suggestion = suggestion
-        _log.warning(
+        _log_fn = (
+            _log.debug
+            if error_type in (ErrorType.NOT_FOUND, ErrorType.CONFLICT)
+            else _log.warning
+        )
+        _log_fn(
             "memintel_error",
             error_type=error_type.value,
             location=location,

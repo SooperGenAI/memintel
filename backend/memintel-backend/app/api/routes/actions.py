@@ -54,11 +54,12 @@ main.py — routes do not catch them here.
 """
 from __future__ import annotations
 
+import asyncio
 import structlog
 from typing import Any
 
 import asyncpg
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app.api.deps import require_elevated_key
@@ -118,8 +119,10 @@ async def list_actions(
     Results are ordered newest-first (created_at DESC). Deprecated actions
     are excluded. Returns an empty list when no actions match — never 404.
 
-    HTTP 422 — namespace query parameter missing.
+    HTTP 422 — namespace query parameter missing or empty.
     """
+    if not namespace or not namespace.strip():
+        raise HTTPException(status_code=422, detail="namespace is required and cannot be empty")
     actions, total = await _list_actions_with_total(
         store, namespace=namespace, limit=limit, offset=offset
     )
@@ -138,7 +141,6 @@ async def _list_actions_with_total(
     offset: int,
 ) -> tuple[list, int]:
     """Fetch page and total count concurrently."""
-    import asyncio
     page_task = asyncio.create_task(
         store.list_actions(namespace=namespace, limit=limit, offset=offset)
     )

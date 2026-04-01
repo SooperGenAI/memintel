@@ -35,10 +35,15 @@ Retry policy
 """
 from __future__ import annotations
 
+import asyncio
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
+
+import structlog
+
+log = structlog.get_logger(__name__)
 
 from app.models.config import PrimitiveSourceConfig
 from app.models.result import MissingDataPolicy
@@ -280,10 +285,39 @@ def _with_retry(fn, max_retries: int = _MAX_RETRIES, backoff_base: float = _BACK
             raise  # permanent — propagate immediately, no retry
         except TransientConnectorError as exc:
             last_exc = exc
+            log.warning("connector_transient_retry", attempt=attempt, error=str(exc))
             if attempt < max_retries:
                 delay = min(backoff_base * (2 ** attempt), _BACKOFF_CAP)
                 if delay > 0:
                     time.sleep(delay)
+        except ConnectorError:
+            raise  # unknown connector error — propagate immediately
+    raise last_exc  # type: ignore[misc]
+
+
+async def _async_with_retry(
+    fn: Any, max_retries: int = _MAX_RETRIES, backoff_base: float = _BACKOFF_BASE
+) -> Any:
+    """
+    Async variant of _with_retry — uses asyncio.sleep() to avoid blocking
+    the event loop during exponential backoff.
+
+    Used by afetch() on the sync-connector fallback path.  All retry/error
+    semantics are identical to _with_retry(); only the sleep is async.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            return fn()
+        except AuthConnectorError:
+            raise  # permanent — propagate immediately, no retry
+        except TransientConnectorError as exc:
+            last_exc = exc
+            log.warning("connector_transient_retry", attempt=attempt, error=str(exc))
+            if attempt < max_retries:
+                delay = min(backoff_base * (2 ** attempt), _BACKOFF_CAP)
+                if delay > 0:
+                    await asyncio.sleep(delay)
         except ConnectorError:
             raise  # unknown connector error — propagate immediately
     raise last_exc  # type: ignore[misc]
@@ -532,7 +566,7 @@ class DataResolver:
         # Fall back to sync connector (MockConnector / StaticDataConnector)
         conn = self._get_connector(primitive_name)
         try:
-            raw = _with_retry(
+            raw = await _async_with_retry(
                 lambda: conn.fetch(primitive_name, entity_id, timestamp),
                 max_retries=self._max_retries,
                 backoff_base=self._backoff_base,

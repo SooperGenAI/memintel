@@ -279,7 +279,8 @@ def test_memintel_error_emits_event():
     e = events[0]
     assert e["error_type"] == ErrorType.NOT_FOUND.value   # "not_found"
     assert e["location"] == "task_id"
-    assert e["log_level"] == "warning"
+    # NOT_FOUND and CONFLICT are expected/normal responses — logged at debug, not warning
+    assert e["log_level"] == "debug"
 
 
 def test_memintel_error_subclass_emits_event():
