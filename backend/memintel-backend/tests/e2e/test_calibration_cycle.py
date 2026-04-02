@@ -24,18 +24,18 @@ Decision records required before feedback
   written asynchronously (fire-and-forget asyncio.create_task) by /evaluate/full.
   Tests poll the DB after each /evaluate/full call (up to 1.5 s) to confirm.
 
-Calibration direction — threshold strategy (no directional awareness)
-  CalibrationService.adjust_params() ignores the threshold direction ("above"
-  vs "below") and adjusts the 'value' parameter directly:
-    false_positive → tighten → value INCREASES by step
-    false_negative → relax   → value DECREASES by step
+Calibration direction — threshold strategy (direction-aware)
+  CalibrationService.adjust_params() accounts for the threshold direction:
+    direction="below" (fires when concept_value < threshold):
+      tighten → DECREASE value (lower the bar; fewer values fall below)
+      relax   → INCREASE value (raise the bar; more values fall below)
+    direction="above" (fires when concept_value > threshold):
+      tighten → INCREASE value (raise the bar; fewer values exceed)
+      relax   → DECREASE value (lower the bar; more values exceed)
   step = max(current_value * 0.10, 0.1)
-  For initial value 0.35:  step = max(0.035, 0.1) = 0.1
-    tighten:  0.35 + 0.1 = 0.45
-    relax:    0.35 − 0.1 = 0.25
-  This means for a "below" threshold condition with false_positives, the service
-  raises the threshold value (which for a "below" condition fires MORE, not fewer),
-  which is semantically unexpected. Tests assert the actual code behaviour.
+  For initial value 0.35 with direction="below":  step = 0.1
+    false_positive → tighten/below:  0.35 - 0.1 = 0.25
+    false_negative → relax/below:    0.35 + 0.1 = 0.45
 
 Token expiry test
   Uses run_db() to directly UPDATE calibration_tokens.expires_at to one hour
@@ -688,16 +688,14 @@ _C2_OK_ACTION_ID  = "cal.c2.ok.action"
 @pytest.mark.e2e
 def test_false_positives_produce_tightening_recommendation(cal_client, api_headers, elevated_headers):
     """
-    5 × false_positive → derive_direction → 'tighten' → value INCREASES.
+    5 × false_positive on a "below" threshold condition → tighten → value DECREASES.
 
-    For threshold strategy (direction-agnostic):
+    For threshold strategy with direction="below":
+      "below" fires when concept_value < threshold.
+      Tightening means making it harder to fire → lower the threshold bar so
+      fewer values fall below it.
       step = max(0.35 * 0.1, 0.1) = 0.1
-      tighten: new_value = 0.35 + 0.1 = 0.45
-
-    Note: for a "below" threshold condition, raising the threshold causes MORE
-    alerts (not fewer), which is semantically counterintuitive. The service does
-    not account for the threshold direction field — it adjusts 'value' directly.
-    Tests assert the actual code behaviour.
+      tighten/below: new_value = 0.35 - 0.1 = 0.25
     """
     client, pool, run_db = cal_client
 
@@ -723,23 +721,26 @@ def test_false_positives_produce_tightening_recommendation(cal_client, api_heade
 
     recommended_value = calib["recommended_params"]["value"]
 
-    assert recommended_value > 0.35, (
-        f"5 false_positives → tighten → threshold value must increase above 0.35. "
-        f"Got {recommended_value}"
+    assert recommended_value < 0.35, (
+        f"5 false_positives on a 'below' condition → tighten → threshold must "
+        f"decrease below 0.35. Got {recommended_value}"
     )
-    assert recommended_value == pytest.approx(0.45, abs=1e-6), (
-        f"Expected 0.45 (0.35 + step 0.1). Got {recommended_value}"
+    assert recommended_value == pytest.approx(0.25, abs=1e-6), (
+        f"Expected 0.25 (0.35 - step 0.1). Got {recommended_value}"
     )
 
 
 @pytest.mark.e2e
 def test_false_negatives_produce_relaxing_recommendation(cal_client, api_headers, elevated_headers):
     """
-    5 × false_negative → derive_direction → 'relax' → value DECREASES.
+    5 × false_negative on a "below" threshold condition → relax → value INCREASES.
 
-    For threshold strategy:
+    For threshold strategy with direction="below":
+      "below" fires when concept_value < threshold.
+      Relaxing means making it easier to fire → raise the threshold bar so
+      more values fall below it.
       step = max(0.35 * 0.1, 0.1) = 0.1
-      relax: new_value = 0.35 − 0.1 = 0.25
+      relax/below: new_value = 0.35 + 0.1 = 0.45
     """
     client, pool, run_db = cal_client
 
@@ -765,12 +766,12 @@ def test_false_negatives_produce_relaxing_recommendation(cal_client, api_headers
 
     recommended_value = calib["recommended_params"]["value"]
 
-    assert recommended_value < 0.35, (
-        f"5 false_negatives → relax → threshold value must decrease below 0.35. "
-        f"Got {recommended_value}"
+    assert recommended_value > 0.35, (
+        f"5 false_negatives on a 'below' condition → relax → threshold must "
+        f"increase above 0.35. Got {recommended_value}"
     )
-    assert recommended_value == pytest.approx(0.25, abs=1e-6), (
-        f"Expected 0.25 (0.35 − step 0.1). Got {recommended_value}"
+    assert recommended_value == pytest.approx(0.45, abs=1e-6), (
+        f"Expected 0.45 (0.35 + step 0.1). Got {recommended_value}"
     )
 
 
@@ -1261,8 +1262,10 @@ def test_two_calibrations_create_sequential_versions(cal_client, api_headers, el
     assert r.status_code == 200
     assert r.json()["strategy"]["params"] == v3_params, "v3 params must be unchanged"
 
-    # Each version must have different params
-    # v1(0.5) → tighten → v2(0.6) → tighten → v3(0.7)
+    # Each version must have different params.
+    # Both rounds are false_positive/tighten on a "below" condition →
+    # each round lowers the threshold by step=0.1:
+    #   v1(0.5) → tighten/below → v2(0.4) → tighten/below → v3(0.3)
     # step = max(current * 0.1, 0.1) = 0.1 for both rounds
     assert v1_params != v2_params, (
         f"v1 and v2 must have different params. v1={v1_params} v2={v2_params}"

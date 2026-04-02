@@ -453,7 +453,13 @@ class CalibrationService:
         violate guardrail bounds and on_bounds_exceeded='reject'.
 
         Bias semantics (from guardrails §2.4.1):
-          threshold:  relax → decrease 'value';  tighten → increase 'value'
+          threshold (direction-aware):
+            above (fires when value > threshold):
+              tighten → increase 'value' (harder to exceed)
+              relax   → decrease 'value' (easier to exceed)
+            below (fires when value < threshold):
+              tighten → decrease 'value' (fewer values fall below a lower bar)
+              relax   → increase 'value' (more values fall below a higher bar)
           percentile: relax → increase 'value';  tighten → decrease 'value'
           change:     relax → decrease 'value';  tighten → increase 'value'
           z_score:    relax → decrease 'threshold'; tighten → increase 'threshold'
@@ -469,12 +475,25 @@ class CalibrationService:
         # Step: 10 % of absolute value, minimum 0.1.
         step = max(abs(current_val) * 0.10, 0.1)
 
-        # Signed delta per bias_semantics.
-        # percentile inverts the sign relative to all others.
+        # Signed delta per bias semantics.
         if strategy == StrategyType.PERCENTILE:
+            # percentile: relax → increase value, tighten → decrease value
             delta = step if direction == "relax" else -step
+        elif strategy == StrategyType.THRESHOLD:
+            # threshold is direction-aware: "below" inverts the adjustment.
+            # "below" fires when concept_value < threshold:
+            #   tighten → lower the threshold so fewer values fall below it
+            #   relax   → raise the threshold so more values fall below it
+            # "above" fires when concept_value > threshold:
+            #   tighten → raise the threshold so fewer values exceed it
+            #   relax   → lower the threshold so more values exceed it
+            threshold_dir = current_params.get("direction", "above")
+            if threshold_dir == "below":
+                delta = step if direction == "relax" else -step
+            else:
+                delta = -step if direction == "relax" else step
         else:
-            # threshold, change, z_score: relax → decrease, tighten → increase
+            # change, z_score: relax → decrease, tighten → increase
             delta = -step if direction == "relax" else step
 
         new_val   = current_val + delta
