@@ -696,3 +696,97 @@ def mock_connector_e2e_client(e2e_setup):
             raise
 
     yield _make
+
+
+# ── MockWebhookServer injection fixtures ───────────────────────────────────────
+#
+# These fixtures patch httpx.AsyncClient in app.runtime.action_trigger so that
+# all outbound webhook HTTP calls are intercepted and recorded by MockWebhookServer
+# without making real network requests.
+#
+# mock_webhook_fixture:
+#   Standalone — just patches httpx and yields the server.  Use alongside
+#   mock_connector_e2e_client when you need both DB/connector + webhook mocking.
+#
+# mock_webhook_connector_e2e_client:
+#   Combined factory fixture — yields (client, pool, run_db, webhook).
+#   Combines MockTableConnector injection with MockWebhookServer patching.
+
+from tests.mocks.mock_webhook_server import MockWebhookServer
+
+
+@pytest.fixture
+def mock_webhook_fixture():
+    """
+    Function-scoped fixture — yields a running MockWebhookServer.
+
+    Patches ``app.runtime.action_trigger.httpx.AsyncClient`` for the duration
+    of the test so all outbound webhook HTTP calls are intercepted and recorded.
+    No real network calls are made.
+
+    Usage::
+
+        def test_foo(mock_connector_e2e_client, mock_webhook_fixture, api_headers):
+            webhook = mock_webhook_fixture
+            data = {"account.rate": {"acct_1": 0.25}}
+            connector = MockTableConnector(data)
+            with mock_connector_e2e_client(connector) as (client, pool, run_db):
+                ...  # register definitions, call /evaluate/full
+                assert webhook.call_count == 1
+    """
+    server = MockWebhookServer()
+    with server:
+        yield server
+
+
+@pytest.fixture
+def mock_webhook_connector_e2e_client(e2e_setup):
+    """
+    Factory fixture — yields a callable producing (client, pool, run_db, webhook).
+
+    Combines MockTableConnector injection into ExecuteService with
+    MockWebhookServer patching of httpx.AsyncClient.  The webhook server is
+    active for the full duration of the ``with`` block.
+
+    Usage::
+
+        def test_foo(mock_webhook_connector_e2e_client, api_headers, elevated_headers):
+            data = {"account.rate": {"acct_1": 0.25}}
+            connector = MockTableConnector(data)
+            with mock_webhook_connector_e2e_client(connector) as (client, pool, run_db, webhook):
+                ...  # register definitions, call /evaluate/full
+                assert webhook.call_count == 1
+
+    Configuring the webhook response (e.g. failure simulation)::
+
+        webhook = MockWebhookServer(status_code=500)
+        with mock_webhook_connector_e2e_client(connector, webhook) as (..., webhook):
+            ...
+    """
+    from contextlib import contextmanager
+
+    pool, run_db = e2e_setup
+
+    @contextmanager
+    def _make(
+        mock_connector: MockTableConnector | None = None,
+        mock_webhook: MockWebhookServer | None = None,
+    ):
+        effective_connector = mock_connector or MockTableConnector()
+        effective_webhook = mock_webhook or MockWebhookServer()
+
+        app = _make_e2e_app()
+        app.dependency_overrides[get_execute_service] = _make_execute_service_override(
+            mock_connector=effective_connector,
+        )
+        with effective_webhook:
+            try:
+                with TestClient(app, raise_server_exceptions=True) as client:
+                    yield client, pool, run_db, effective_webhook
+            except RuntimeError as exc:
+                if "Cannot connect" in str(exc):
+                    pytest.skip(f"Test database unavailable: {exc}")
+                    return
+                raise
+
+    yield _make
