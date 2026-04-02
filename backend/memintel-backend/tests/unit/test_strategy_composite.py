@@ -1,10 +1,11 @@
 """
 tests/unit/test_strategy_composite.py
-Unit tests for CompositeStrategy.
+Unit tests for CompositeStrategy and CompositeParams model validation.
 """
 import pytest
+from pydantic import ValidationError
 
-from app.models.condition import DecisionType, DecisionValue
+from app.models.condition import CompositeOperator, CompositeParams, DecisionType, DecisionValue
 from app.models.errors import ErrorType, MemintelError
 from app.models.result import ConceptOutputType, ConceptResult
 from app.strategies.composite import CompositeStrategy
@@ -242,3 +243,94 @@ class TestCompositeSemanticError:
                 },
             )
         assert exc.value.error_type == ErrorType.SEMANTIC_ERROR
+
+
+# ── Fix 3 (BUG-B4) — NOT operator and CompositeParams validation ──────────────
+
+class TestCompositeNOT:
+    """
+    Fix 3 (BUG-B4) regression — NOT operator was missing from CompositeOperator.
+
+    NOT is now a valid operator. It inverts a single boolean decision.
+    CompositeParams validates per-operator operand counts:
+      NOT — exactly 1 operand
+      AND — at least 2 operands
+      OR  — at least 2 operands
+    """
+
+    def test_not_true_returns_false(self, strategy):
+        """NOT(True) → False."""
+        r = strategy.evaluate(
+            _result(), [],
+            {"operator": "NOT", "operand_results": [_boolean_dv(True)]},
+        )
+        assert r.value is False
+
+    def test_not_false_returns_true(self, strategy):
+        """NOT(False) → True."""
+        r = strategy.evaluate(
+            _result(), [],
+            {"operator": "NOT", "operand_results": [_boolean_dv(False)]},
+        )
+        assert r.value is True
+
+    def test_not_returns_boolean_decision_type(self, strategy):
+        r = strategy.evaluate(
+            _result(), [],
+            {"operator": "NOT", "operand_results": [_boolean_dv(True)]},
+        )
+        assert r.decision_type == DecisionType.BOOLEAN
+
+
+class TestCompositeParamsValidation:
+    """
+    Fix 3 (BUG-B4) — per-operator operand count validation in CompositeParams.
+
+    Validates that the model_validator enforces the correct operand counts for
+    each operator. Previously CompositeParams used Field(min_length=2) uniformly,
+    making NOT unreachable (it needs exactly 1 operand).
+    """
+
+    # ── Valid cases ─────────────────────────────────────────────────────────────
+
+    def test_not_with_one_operand_is_valid(self):
+        p = CompositeParams(operator=CompositeOperator.NOT, operands=["c1"])
+        assert p.operator == CompositeOperator.NOT
+        assert p.operands == ["c1"]
+
+    def test_and_with_two_operands_is_valid(self):
+        p = CompositeParams(operator=CompositeOperator.AND, operands=["c1", "c2"])
+        assert p.operands == ["c1", "c2"]
+
+    def test_or_with_two_operands_is_valid(self):
+        p = CompositeParams(operator=CompositeOperator.OR, operands=["c1", "c2"])
+        assert p.operands == ["c1", "c2"]
+
+    def test_and_with_three_operands_is_valid(self):
+        p = CompositeParams(operator=CompositeOperator.AND, operands=["c1", "c2", "c3"])
+        assert len(p.operands) == 3
+
+    # ── Invalid cases ────────────────────────────────────────────────────────────
+
+    def test_not_with_two_operands_raises(self):
+        """NOT requires exactly 1 operand — 2 is invalid."""
+        with pytest.raises(ValidationError) as exc:
+            CompositeParams(operator=CompositeOperator.NOT, operands=["c1", "c2"])
+        assert "exactly one operand" in str(exc.value).lower() or "1" in str(exc.value)
+
+    def test_and_with_one_operand_raises(self):
+        """AND requires at least 2 operands."""
+        with pytest.raises(ValidationError) as exc:
+            CompositeParams(operator=CompositeOperator.AND, operands=["c1"])
+        assert "at least two" in str(exc.value).lower() or "2" in str(exc.value)
+
+    def test_or_with_one_operand_raises(self):
+        """OR requires at least 2 operands."""
+        with pytest.raises(ValidationError) as exc:
+            CompositeParams(operator=CompositeOperator.OR, operands=["c1"])
+        assert "at least two" in str(exc.value).lower() or "2" in str(exc.value)
+
+    def test_not_enum_member_is_reachable(self):
+        """NOT is in CompositeOperator — was missing before Fix 3."""
+        assert CompositeOperator.NOT == "NOT"
+        assert CompositeOperator.NOT in list(CompositeOperator)

@@ -534,6 +534,7 @@ async def deprecate_definition(
     version: str = Query(..., description="Version to deprecate"),
     req: DeprecateRequest = DeprecateRequest(),
     service: RegistryService = Depends(get_registry_service),
+    _: None = Depends(require_elevated_key),
 ) -> DefinitionResponse:
     """
     Mark a definition version as deprecated.
@@ -571,6 +572,7 @@ async def promote_definition(
     version: str = Query(..., description="Version to promote"),
     req: PromoteRequest = PromoteRequest(target_namespace="org"),
     service: RegistryService = Depends(get_registry_service),
+    _: None = Depends(require_elevated_key),
 ) -> DefinitionResponse:
     """
     Promote a definition version to a higher namespace.

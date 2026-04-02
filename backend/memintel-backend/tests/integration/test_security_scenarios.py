@@ -240,16 +240,14 @@ def test_elevated_key_correct_value_passes() -> None:
 
 def test_promote_endpoint_missing_elevated_key_guard() -> None:
     """
-    SECURITY GAP: POST /registry/definitions/{id}/promote does NOT have
+    Fix 1 (BUG-B2): POST /registry/definitions/{id}/promote now enforces
     require_elevated_key as a dependency.
 
-    Per py-instructions.md: "Promoting to global requires elevated API key
-    permissions." But the promote route in registry.py has no elevated-key
-    dependency declared — a request WITHOUT X-Elevated-Key passes the auth
-    layer and reaches the service.
+    Previously this was a security gap — promote had no elevated-key guard
+    and any caller could promote a definition. The gap has been fixed.
 
-    This test confirms the gap exists: the response is NOT 403 (it reaches
-    the service and returns whatever the service produces).
+    This test confirms the guard is present: a request without X-Elevated-Key
+    must return 403.
     """
     app = _make_app(elevated_key="secret-key")   # key IS configured
 
@@ -273,15 +271,10 @@ def test_promote_endpoint_missing_elevated_key_guard() -> None:
     finally:
         app.dependency_overrides.clear()
 
-    # Gap confirmed: promote endpoint is missing require_elevated_key.
-    # A 403 would indicate the guard is present; any other status reveals the gap.
-    assert resp.status_code != 403, (
-        "If this fails, the gap has been fixed — update this test to assert 403."
-    )
-    # Document the gap explicitly so it is not mistaken for a passing requirement.
-    assert resp.status_code == 200, (
-        f"GAP CONFIRMED: promote returned {resp.status_code} without elevated key. "
-        "Expected 403 per spec, but the guard is missing."
+    # Fix confirmed: promote now requires elevated key → 403 without it.
+    assert resp.status_code == 403, (
+        f"POST /registry/definitions/{{id}}/promote must return 403 without "
+        f"elevated key (Fix 1 BUG-B2), got {resp.status_code}: {resp.text}"
     )
 
 
@@ -385,17 +378,14 @@ def test_list_definitions_namespace_filter_org_excludes_personal() -> None:
 
 def test_namespace_promotion_requires_elevated_key_gap() -> None:
     """
-    SECURITY GAP: namespace promotion (personal → org → global) is the
-    mechanism by which a definition becomes visible to a wider namespace.
+    Fix 1 (BUG-B2): namespace promotion (personal → org → global) now requires
+    an elevated API key.
 
-    The promote endpoint is missing require_elevated_key (confirmed in
-    test_promote_endpoint_missing_elevated_key_guard above). This means:
-      - Any caller can promote a definition to 'global' namespace.
-      - The namespace isolation boundary is only enforced by the LIST filter,
-        not by the promotion gate.
+    Previously this was a security gap — any caller could promote to 'global'
+    without the elevated key. The gap has been closed.
 
-    This test confirms the gap by attempting a 'global' promotion without
-    an elevated key and verifying it succeeds (when it should be rejected).
+    This test confirms enforcement: a promotion attempt without X-Elevated-Key
+    must return 403. The service layer is never reached.
     """
     app = _make_app(elevated_key="secret-key")
 
@@ -414,18 +404,15 @@ def test_namespace_promotion_requires_elevated_key_gap() -> None:
                 "/registry/definitions/personal.concept/promote",
                 json={"target_namespace": "global"},
                 params={"version": "1.0"},
-                # No elevated key — this should be 403 per spec
+                # No elevated key — must now return 403
             )
     finally:
         app.dependency_overrides.clear()
 
-    # Gap: promotion to global succeeds without elevated key.
-    assert resp.status_code == 200, (
-        "If 403, the promote guard has been added — remove this gap test "
-        "and replace with a positive enforcement test."
-    )
-    assert resp.json().get("namespace") == "global", (
-        "Global promotion succeeded without elevated key — confirm gap."
+    # Fix confirmed: 403 without elevated key (guard is now present).
+    assert resp.status_code == 403, (
+        f"Global promotion without elevated key must return 403 (Fix 1 BUG-B2), "
+        f"got {resp.status_code}: {resp.text}"
     )
 
 

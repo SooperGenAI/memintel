@@ -38,6 +38,11 @@ class DecisionStore:
         """
         INSERT a DecisionRecord and return the assigned decision_id (UUID string).
 
+        Idempotency: when decision.evaluated_at is set (derived from the request
+        timestamp in evaluate_full), the unique constraint
+        uq_decisions_condition_entity_timestamp prevents a duplicate row.
+        ON CONFLICT DO NOTHING silently discards the second write and returns "".
+
         Raises on DB error — callers must catch and log.
         """
         row = await self._pool.fetchrow(
@@ -46,6 +51,7 @@ class DecisionStore:
                 concept_id, concept_version,
                 condition_id, condition_version,
                 entity_id,
+                evaluated_at,
                 fired,
                 concept_value,
                 threshold_applied,
@@ -56,11 +62,15 @@ class DecisionStore:
                 action_ids_fired,
                 dry_run
             ) VALUES (
-                $1, $2, $3, $4, $5, $6, $7,
-                $8::jsonb, $9,
-                $10::jsonb, $11::jsonb,
-                $12, $13::text[], $14
+                $1, $2, $3, $4, $5,
+                COALESCE($6, NOW()),
+                $7, $8,
+                $9::jsonb, $10,
+                $11::jsonb, $12::jsonb,
+                $13, $14::text[], $15
             )
+            ON CONFLICT (condition_id, condition_version, entity_id, evaluated_at)
+            DO NOTHING
             RETURNING decision_id::text
             """,
             decision.concept_id,
@@ -68,6 +78,7 @@ class DecisionStore:
             decision.condition_id,
             decision.condition_version,
             decision.entity_id,
+            decision.evaluated_at,
             decision.fired,
             str(decision.concept_value) if decision.concept_value is not None else None,
             json.dumps(decision.threshold_applied) if decision.threshold_applied is not None else None,
@@ -78,6 +89,9 @@ class DecisionStore:
             decision.action_ids_fired or [],
             decision.dry_run,
         )
+        if row is None:
+            # ON CONFLICT DO NOTHING — duplicate row, first write already recorded.
+            return ""
         return str(row["decision_id"])
 
     async def get(self, decision_id: str) -> DecisionRecord | None:

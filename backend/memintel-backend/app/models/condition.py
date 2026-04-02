@@ -103,6 +103,7 @@ class ChangeDirection(str, Enum):
 class CompositeOperator(str, Enum):
     AND = "AND"
     OR  = "OR"
+    NOT = "NOT"
 
 
 # ── Per-strategy parameter models ─────────────────────────────────────────────
@@ -196,18 +197,36 @@ class CompositeParams(BaseModel):
     """
     composite strategy parameters.
 
-    operator: 'AND' | 'OR'
-    operands: list of condition_ids to evaluate (minimum 2)
+    operator: 'AND' | 'OR' | 'NOT'
+    operands: list of condition_ids to evaluate
+
+    Operator-specific operand counts (enforced by model validator):
+      NOT — exactly 1 operand (inversion of a single boolean condition)
+      AND — at least 2 operands
+      OR  — at least 2 operands
 
     Compiler enforcement rules (checked at compile time, not here):
       - all operands must produce decision<boolean> — equals is excluded
       - composite cannot be nested inside another composite's operands
       - all operand condition_ids must exist in the registry
-
-    Minimum 2 operands is enforced here at model construction time.
     """
     operator: CompositeOperator
-    operands: list[str] = Field(min_length=2)
+    operands: list[str] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _validate_operand_count(self) -> "CompositeParams":
+        if self.operator == CompositeOperator.NOT:
+            if len(self.operands) != 1:
+                raise ValueError(
+                    f"NOT operator requires exactly one operand, "
+                    f"got {len(self.operands)}."
+                )
+        elif len(self.operands) < 2:
+            raise ValueError(
+                f"{self.operator.value} operator requires at least two operands, "
+                f"got {len(self.operands)}."
+            )
+        return self
 
 
 # ── Discriminated StrategyDefinition union ────────────────────────────────────

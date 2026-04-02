@@ -941,11 +941,11 @@ def test_deprecation_workflow(e2e_client, elevated_headers, api_headers):
     assert reg["deprecated"] is False, f"Step 1: newly registered def must not be deprecated, got {reg}"
 
     # ── Step 2: Deprecate it ───────────────────────────────────────────────────
-    # BUG-B2: no auth required — no headers passed deliberately to confirm
+    # Fix 1 (BUG-B2): deprecate now requires elevated key
     r = client.post(
         f"/registry/definitions/{DEF_ID}/deprecate",
         params={"version": "v1"},
-        # No auth headers — BUG-B2: succeeds without auth
+        headers=elevated_headers,
     )
     assert r.status_code == 200, f"Step 2 deprecate failed: {r.text}"
     dep = r.json()
@@ -992,14 +992,10 @@ def test_deprecation_workflow(e2e_client, elevated_headers, api_headers):
 @pytest.mark.e2e
 def test_promotion_workflow(e2e_client, elevated_headers, api_headers):
     """
-    Definition promotion: org namespace → org namespace copy.
+    Definition promotion: personal namespace → org namespace.
 
-    BUG-B2 confirmed: POST /registry/definitions/{id}/promote has NO auth
-    dependency in the route handler. No headers required.
-
-    Note: promoting to 'global' namespace may require elevated privileges at
-    the DefinitionStore level (ELEVATED_NAMESPACES = {'global'}), but the route
-    itself has no auth guard. Testing promotion to 'org' as a safer target.
+    Fix 1 (BUG-B2): POST /registry/definitions/{id}/promote now enforces
+    require_elevated_key. Both promote and deprecate require elevated headers.
     """
     client, pool, run_db = e2e_client
 
@@ -1020,11 +1016,12 @@ def test_promotion_workflow(e2e_client, elevated_headers, api_headers):
     assert r.status_code == 200, f"Step 1 register personal: {r.text}"
 
     # ── Step 2: Promote to org ─────────────────────────────────────────────────
-    # BUG-B2: no auth required
+    # Fix 1 (BUG-B2): promote now requires elevated key
     r = client.post(
         f"/registry/definitions/{DEF_ID}/promote",
         params={"version": "v1"},
         json={"target_namespace": "org"},
+        headers=elevated_headers,
     )
     assert r.status_code == 200, f"Step 2 promote to org: {r.text}"
     promoted = r.json()
@@ -1047,6 +1044,7 @@ def test_promotion_workflow(e2e_client, elevated_headers, api_headers):
     r = client.post(
         f"/registry/definitions/{DEF_ID}/deprecate",
         params={"version": "v1"},
+        headers=elevated_headers,
     )
     # The DefinitionStore.deprecate() uses definition_id + version without namespace filter.
     # Actual namespace-independent versioning depends on how the store handles this.

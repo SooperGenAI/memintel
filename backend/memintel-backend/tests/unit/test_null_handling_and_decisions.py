@@ -290,12 +290,13 @@ class TestDecisionPersistence:
         pool = _make_pool()
         self._run_evaluate_full(pool)
         assert len(pool.decision_inserts) == 1
-        # concept_value is the 7th positional arg (index 6) in the INSERT
-        # Args order: concept_id, concept_version, condition_id, condition_version,
-        #             entity_id, fired, concept_value, threshold_applied, ir_hash,
-        #             input_primitives, signal_errors, reason, action_ids_fired, dry_run
+        # Args order (after Fix 2 adding evaluated_at at index 5):
+        # [0] concept_id, [1] concept_version, [2] condition_id, [3] condition_version,
+        # [4] entity_id, [5] evaluated_at, [6] fired, [7] concept_value,
+        # [8] threshold_applied, [9] ir_hash, [10] input_primitives,
+        # [11] signal_errors, [12] reason, [13] action_ids_fired, [14] dry_run
         args = pool.decision_inserts[0]
-        concept_value = args[6]  # 7th arg (0-indexed = 6)
+        concept_value = args[7]  # 8th arg (0-indexed = 7)
         # DecisionStore serializes concept_value to TEXT before INSERT:
         # revenue=0 (missing with zero policy → normalize(0) = 0.0) → "0.0"
         assert concept_value == "0.0"
@@ -305,7 +306,7 @@ class TestDecisionPersistence:
         pool = _make_pool()
         self._run_evaluate_full(pool)
         args = pool.decision_inserts[0]
-        threshold_applied_json = args[7]  # threshold_applied
+        threshold_applied_json = args[8]  # threshold_applied (shifted by evaluated_at)
         threshold_applied = json.loads(threshold_applied_json)
         assert threshold_applied["direction"] == "above"
         assert threshold_applied["value"] == 0.5
@@ -323,7 +324,7 @@ class TestDecisionPersistence:
         pool = _make_pool()
         self._run_evaluate_full(pool)
         args = pool.decision_inserts[0]
-        input_primitives_json = args[9]  # input_primitives
+        input_primitives_json = args[10]  # input_primitives (shifted by evaluated_at)
         if input_primitives_json is not None:
             input_primitives = json.loads(input_primitives_json)
             # The concept uses primitive "revenue" with missing_data_policy=zero → value=0.0

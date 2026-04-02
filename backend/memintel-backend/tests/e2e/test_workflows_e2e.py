@@ -1090,3 +1090,92 @@ def test_guardrails_parameter_bounds_enforced(
     # the fixture specifies (not clamped to 0.4). The clamp_to_bounds logic
     # in CalibrationService IS tested in test_calibration_cycle.py when
     # a real guardrails_store is wired. Tested separately there.
+
+
+# ── Fix 2 (BUG-B3) regression — same-timestamp evaluate_full idempotency ──────
+
+_IDEM_CONCEPT_ID = "e2e.fix2.idem.metric"
+_IDEM_COND_ID    = "e2e.fix2.idem.cond"
+_IDEM_ENTITY     = "entity.fix2.idem"
+_IDEM_TS         = "2026-04-02T10:00:00Z"
+
+
+def _poll_one_decision(pool: Any, run_db: Any, entity_id: str, cond_id: str) -> list:
+    """Poll until at least one decision row appears or 2 s pass."""
+    import asyncio as _asyncio
+
+    async def _fetch() -> list:
+        return await pool.fetch(
+            "SELECT decision_id FROM decisions "
+            "WHERE entity_id = $1 AND condition_id = $2",
+            entity_id, cond_id,
+        )
+
+    deadline = time.time() + 2.0
+    while time.time() < deadline:
+        rows = run_db(_fetch())
+        if rows:
+            return rows
+        time.sleep(0.1)
+    return run_db(_fetch())
+
+
+@pytest.mark.e2e
+def test_same_timestamp_evaluate_full_writes_exactly_one_decision(
+    e2e_client, api_headers, elevated_headers
+):
+    """
+    Fix 2 (BUG-B3) regression — idempotent decision writes.
+
+    When evaluate_full is called twice with the same req.timestamp, exactly
+    one decision row must be written to the decisions table.
+
+    Fix components:
+      - DecisionStore.record() uses ON CONFLICT DO NOTHING on the unique
+        constraint (condition_id, condition_version, entity_id, evaluated_at).
+      - execute.py parses req.timestamp → DecisionRecord.evaluated_at so the
+        constraint key is identical on replay.
+      - Migration 0009 adds the unique constraint.
+    """
+    client, pool, run_db = e2e_client
+
+    # Register concept
+    r = client.post(
+        "/registry/definitions",
+        json=_concept_body(_IDEM_CONCEPT_ID),
+        headers=elevated_headers,
+    )
+    assert r.status_code in (200, 201), f"concept register: {r.text}"
+
+    # Register condition — threshold below 0.5 → fires with MockConnector (0.0)
+    r = client.post(
+        "/registry/definitions",
+        json=_threshold_condition_body(_IDEM_COND_ID, _IDEM_CONCEPT_ID),
+        headers=elevated_headers,
+    )
+    assert r.status_code in (200, 201), f"condition register: {r.text}"
+
+    eval_body = {
+        "concept_id": _IDEM_CONCEPT_ID,
+        "concept_version": "v1",
+        "condition_id": _IDEM_COND_ID,
+        "condition_version": "v1",
+        "entity": _IDEM_ENTITY,
+        "timestamp": _IDEM_TS,
+    }
+
+    # First call
+    r1 = client.post("/evaluate/full", json=eval_body, headers=api_headers)
+    assert r1.status_code == 200, f"first evaluate_full: {r1.text}"
+
+    # Second call — identical request, same timestamp
+    r2 = client.post("/evaluate/full", json=eval_body, headers=api_headers)
+    assert r2.status_code == 200, f"second evaluate_full: {r2.text}"
+
+    # Wait for fire-and-forget asyncio.create_task to settle
+    rows = _poll_one_decision(pool, run_db, _IDEM_ENTITY, _IDEM_COND_ID)
+
+    assert len(rows) == 1, (
+        f"BUG-B3: expected exactly 1 decision row for same-timestamp replay, "
+        f"got {len(rows)}. ON CONFLICT DO NOTHING should suppress the duplicate."
+    )

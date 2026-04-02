@@ -909,12 +909,21 @@ class ExecuteService:
 
         ir_hash_val = getattr(condition, "ir_hash", None)
 
+        _eval_ts: datetime | None = None
+        _ts_str = getattr(req, "timestamp", None)
+        if _ts_str:
+            try:
+                _eval_ts = datetime.fromisoformat(_ts_str.replace("Z", "+00:00"))
+            except (ValueError, AttributeError):
+                pass
+
         decision_record = DecisionRecord(
             concept_id=req.concept_id,
             concept_version=req.concept_version,
             condition_id=req.condition_id,
             condition_version=req.condition_version,
             entity_id=req.entity,
+            evaluated_at=_eval_ts,
             fired=bool(decision.value),
             concept_value=_concept_value,
             threshold_applied=condition.strategy.params.model_dump(),

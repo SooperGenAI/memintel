@@ -181,16 +181,16 @@ def seed_explain_data(_loop, db_pool):
             # ── decisions ─────────────────────────────────────────────────────
             decisions_rows = [
                 (
-                    str(uuid.uuid4()),                    # decision_id
-                    f"concept-{i % 50}",                 # concept_id
-                    f"v{(i % 5) + 1}",                   # concept_version
-                    f"condition-{i % 20}",               # condition_id
-                    f"v{(i % 3) + 1}",                   # condition_version
-                    f"entity-{i % 200}",                 # entity_id
-                    now,                                  # evaluated_at
-                    i % 2 == 0,                          # fired
-                    str(float(i % 100) / 100.0),         # concept_value (TEXT since migration 0006)
-                    False,                               # dry_run
+                    str(uuid.uuid4()),                              # decision_id
+                    f"concept-{i % 50}",                           # concept_id
+                    f"v{(i % 5) + 1}",                             # concept_version
+                    f"condition-{i % 20}",                         # condition_id
+                    f"v{(i % 3) + 1}",                             # condition_version
+                    f"entity-{i % 200}",                           # entity_id
+                    now - timedelta(seconds=i),                    # evaluated_at (unique per row)
+                    i % 2 == 0,                                    # fired
+                    str(float(i % 100) / 100.0),                   # concept_value (TEXT since migration 0006)
+                    False,                                         # dry_run
                 )
                 for i in range(5000)
             ]

@@ -438,6 +438,48 @@ class TestElevatedKeyEnforcement:
             f"Expected 200 or 409 with valid elevated key, got {r.status_code}: {r.text}"
         )
 
+    def test_deprecate_definition_with_version_rejects_api_key_alone(
+        self, app_client, valid_api_key_headers
+    ):
+        """
+        Fix 1 (BUG-B2) regression — deprecate must enforce elevated key.
+
+        Providing the required ?version= query param avoids 422 from missing
+        param validation, ensuring the auth check fires and returns 403.
+        """
+        client, _ = app_client
+        r = client.post(
+            f"/registry/definitions/some-def-{_uid()}/deprecate?version=1.0",
+            json={},
+            headers=valid_api_key_headers,
+        )
+        assert r.status_code == 403, (
+            f"POST /registry/definitions/{{id}}/deprecate must return 403 "
+            f"with API key only (Fix 1 BUG-B2), got {r.status_code}: {r.text}"
+        )
+        assert r.json()["error"]["type"] == "auth_error"
+
+    def test_promote_definition_with_version_rejects_api_key_alone(
+        self, app_client, valid_api_key_headers
+    ):
+        """
+        Fix 1 (BUG-B2) regression — promote must enforce elevated key.
+
+        Providing the required ?version= query param avoids 422 from missing
+        param validation, ensuring the auth check fires and returns 403.
+        """
+        client, _ = app_client
+        r = client.post(
+            f"/registry/definitions/some-def-{_uid()}/promote?version=1.0",
+            json={"target_namespace": "global"},
+            headers=valid_api_key_headers,
+        )
+        assert r.status_code == 403, (
+            f"POST /registry/definitions/{{id}}/promote must return 403 "
+            f"with API key only (Fix 1 BUG-B2), got {r.status_code}: {r.text}"
+        )
+        assert r.json()["error"]["type"] == "auth_error"
+
 
 # ── GROUP 3: Namespace isolation ────────────────────────────────────────────────
 
