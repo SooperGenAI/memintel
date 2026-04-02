@@ -166,9 +166,8 @@ class ConditionStrategy(ABC):
         """
         Build a null decision<categorical> when result.value is None.
 
-        Returns decision_type=CATEGORICAL (consistent with all non-null equals
-        results) with value=None and reason='null_input' so callers can
-        distinguish a null-input result from an empty-string non-match.
+        Returns decision_type=CATEGORICAL with value=None and reason='null_input'.
+        Distinguishable from a non-match (reason='no_match') by the reason field.
         """
         return DecisionValue(
             value=None,
@@ -178,5 +177,31 @@ class ConditionStrategy(ABC):
             entity=result.entity,
             timestamp=result.timestamp,
             reason="null_input",
+            history_count=None,
+        )
+
+    @staticmethod
+    def _categorical_no_match_decision(
+        result: ConceptResult,
+        condition_id: str,
+        condition_version: str,
+    ) -> DecisionValue:
+        """
+        Build a no-match decision<categorical> when the label comparison fails.
+
+        Returns decision_type=CATEGORICAL with value=None and reason='no_match'.
+        This completes the equals contract:
+          match      → CATEGORICAL, value=<label>, reason=None
+          no_match   → CATEGORICAL, value=None,    reason='no_match'
+          null_input → CATEGORICAL, value=None,    reason='null_input'
+        """
+        return DecisionValue(
+            value=None,
+            decision_type=DecisionType.CATEGORICAL,
+            condition_id=condition_id,
+            condition_version=condition_version,
+            entity=result.entity,
+            timestamp=result.timestamp,
+            reason="no_match",
             history_count=None,
         )

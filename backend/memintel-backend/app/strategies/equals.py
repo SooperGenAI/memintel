@@ -88,8 +88,8 @@ class EqualsStrategy(ConditionStrategy):
                     location="result.value",
                 )
 
-        fired_label = str(result.value) if str(result.value) == target_label else ""
-
-        return self._categorical_decision(
-            fired_label, result, condition_id, condition_version
-        )
+        if str(result.value) == target_label:
+            return self._categorical_decision(
+                str(result.value), result, condition_id, condition_version
+            )
+        return self._categorical_no_match_decision(result, condition_id, condition_version)

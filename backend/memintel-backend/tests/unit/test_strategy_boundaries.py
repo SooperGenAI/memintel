@@ -15,8 +15,9 @@ Ambiguous behaviours discovered while reading implementations
    consistent with all non-null equals results (which are also CATEGORICAL).
    value=None signals that input was absent; reason='null_input' is also set.
 
-3. EqualsStrategy non-match returns value="" (empty string) with
-   decision_type=CATEGORICAL, NOT False with decision_type=BOOLEAN.
+3. EqualsStrategy non-match returns CATEGORICAL with value=None and
+   reason='no_match' — consistent with null_input shape (also CATEGORICAL/None),
+   distinguishable from null_input by the reason field.
 
 4. PercentileStrategy cutoff=0, direction='top': the 100th-percentile of the
    history equals the maximum value.  The condition fires only when
@@ -744,18 +745,19 @@ class TestEqualsBoundaries:
         r = self.s.evaluate(_null(), [], {"value": "high"})
         assert r.reason == "null_input"
 
-    def test_non_match_returns_empty_string_not_false(self):
+    def test_non_match_returns_none_with_no_match_reason(self):
         """
         BOUNDARY: When the label does not match, EqualsStrategy returns
-        value="" (empty string) with decision_type=CATEGORICAL — NOT False
-        with decision_type=BOOLEAN.
+        value=None with decision_type=CATEGORICAL and reason='no_match'.
+        This is distinguishable from null_input (also value=None) by reason field.
         """
         r = self.s.evaluate(
             _cat("low"), [],
             {"value": "high"},
         )
-        assert r.value == ""
+        assert r.value is None
         assert r.decision_type == DecisionType.CATEGORICAL
+        assert r.reason == "no_match"
 
     def test_match_returns_the_label_string(self):
         """
@@ -773,13 +775,14 @@ class TestEqualsBoundaries:
     def test_case_sensitive_no_match(self):
         """
         "High" and "high" are different strings — case-sensitive comparison.
-        result.value="High", target="high" → does NOT match → returns "".
+        result.value="High", target="high" → does NOT match → value=None, reason='no_match'.
         """
         r = self.s.evaluate(
             _cat("High"), [],
             {"value": "high"},
         )
-        assert r.value == ""
+        assert r.value is None
+        assert r.reason == "no_match"
 
     def test_case_sensitive_match(self):
         """
@@ -793,25 +796,27 @@ class TestEqualsBoundaries:
 
     def test_whitespace_is_significant(self):
         """
-        " high" (leading space) != "high" → does NOT match.
+        " high" (leading space) != "high" → does NOT match → value=None, reason='no_match'.
         """
         r = self.s.evaluate(
             _cat(" high"), [],
             {"value": "high"},
         )
-        assert r.value == ""
+        assert r.value is None
+        assert r.reason == "no_match"
 
     def test_empty_string_target_matches_empty_result(self):
         """
-        Target value="" and result.value="" → both empty strings → matches.
-        Returns "" which is the matched label (and also the non-match sentinel),
-        but the path is through _categorical_decision with the matched label.
+        Target value="" and result.value="" → both empty strings → MATCH.
+        Returns value="" (the matched label) via _categorical_decision.
+        This is unambiguous now: non-match → value=None, match → value=<label>.
+        Even when the label is "", a match returns "" not None.
         """
         r = self.s.evaluate(
             _cat(""), [],
             {"value": ""},
         )
-        # "" matches "" — fired_label == target == ""
+        # "" matches "" — it is a match, so value="" (the matched label, not no_match sentinel)
         assert r.value == ""
         assert r.decision_type == DecisionType.CATEGORICAL
 
@@ -823,13 +828,13 @@ class TestEqualsBoundaries:
         )
         assert r.reason is None
 
-    def test_reason_is_none_on_non_match(self):
-        """reason must be None on a non-match (empty string result)."""
+    def test_reason_is_no_match_on_non_match(self):
+        """reason must be 'no_match' when the label comparison fails."""
         r = self.s.evaluate(
             _cat("inactive"), [],
             {"value": "active"},
         )
-        assert r.reason is None
+        assert r.reason == "no_match"
 
     def test_labels_set_value_not_in_labels_raises_type_error(self):
         """
@@ -851,6 +856,39 @@ class TestEqualsBoundaries:
             {"value": "high", "labels": ["low", "medium", "high"]},
         )
         assert r.value == "high"
+
+    def test_equals_full_contract(self):
+        """
+        Full equals contract in one place — all three outcome paths:
+
+          match      → CATEGORICAL, value=<label string>, reason=None
+          no_match   → CATEGORICAL, value=None,           reason='no_match'
+          null_input → CATEGORICAL, value=None,           reason='null_input'
+
+        All three paths produce the same decision_type (CATEGORICAL).
+        The reason field is the only way to distinguish no_match from null_input.
+        """
+        # ── Match ──────────────────────────────────────────────────────────────
+        r_match = self.s.evaluate(_cat("premium"), [], {"value": "premium"})
+        assert r_match.decision_type == DecisionType.CATEGORICAL
+        assert r_match.value == "premium"
+        assert isinstance(r_match.value, str)
+        assert r_match.reason is None
+
+        # ── No match ───────────────────────────────────────────────────────────
+        r_no_match = self.s.evaluate(_cat("standard"), [], {"value": "premium"})
+        assert r_no_match.decision_type == DecisionType.CATEGORICAL
+        assert r_no_match.value is None
+        assert r_no_match.reason == "no_match"
+
+        # ── Null input ─────────────────────────────────────────────────────────
+        r_null = self.s.evaluate(_null(), [], {"value": "premium"})
+        assert r_null.decision_type == DecisionType.CATEGORICAL
+        assert r_null.value is None
+        assert r_null.reason == "null_input"
+
+        # ── reason distinguishes no_match from null_input ──────────────────────
+        assert r_no_match.reason != r_null.reason
 
 
 # ── CompositeStrategy boundaries ─────────────────────────────────────────────

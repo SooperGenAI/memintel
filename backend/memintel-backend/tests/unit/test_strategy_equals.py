@@ -39,7 +39,8 @@ class TestEqualsHappyPath:
             _result("low"), [],
             {"value": "high"},
         )
-        assert r.value == ""
+        assert r.value is None
+        assert r.reason == "no_match"
 
     def test_fires_with_labels_set(self, strategy):
         """When labels is provided, result.value must be in labels AND match target."""
@@ -54,7 +55,8 @@ class TestEqualsHappyPath:
             _result("medium"), [],
             {"value": "high", "labels": ["low", "medium", "high"]},
         )
-        assert r.value == ""
+        assert r.value is None
+        assert r.reason == "no_match"
 
 
 class TestEqualsDecisionValue:

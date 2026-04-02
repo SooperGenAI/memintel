@@ -218,7 +218,9 @@ class TestEqualsStrategy:
                     "data":              {"account_tier": "bronze"},
                 })
             assert r.status_code == 200, r.text
-            assert r.json()["value"] == ""
+            body = r.json()
+            assert body["value"] is None
+            assert body["reason"] == "no_match"
         finally:
             _app.dependency_overrides.pop(get_db, None)
 
