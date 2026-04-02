@@ -65,8 +65,6 @@ class TestOpenAPISchema:
         assert r.status_code == 200
         paths = r.json()["paths"]
 
-        # NOTE: context router has prefix="/context" baked in AND main.py adds
-        # prefix="/context", so context paths appear as /context/context in the schema.
         expected_prefixes = [
             "/evaluate/full",
             "/execute",
@@ -74,7 +72,7 @@ class TestOpenAPISchema:
             "/registry/definitions",
             "/actions",
             "/jobs",
-            "/context/context",
+            "/context",
             "/guardrails",
             "/feedback",
             "/conditions",
@@ -195,14 +193,9 @@ class TestResponseShapes:
     # ── Context ───────────────────────────────────────────────────────────────
 
     def test_get_active_context_returns_404_when_none(self, app_client):
-        """Test 10: GET /context with no context created → 404 with error shape.
-
-        NOTE: The context router has prefix="/context" baked in AND main.py
-        adds another prefix="/context", so the actual path is /context/context.
-        This matches the production route registration in main.py.
-        """
+        """Test 10: GET /context with no context created → 404 with error shape."""
         client, _ = app_client
-        r = client.get("/context/context")
+        r = client.get("/context")
         assert r.status_code == 404
         body = r.json()
         # The context service raises NotFoundError (MemintelError subclass)
@@ -212,12 +205,9 @@ class TestResponseShapes:
         assert "message" in body["error"]
 
     def test_post_context_returns_201_and_context_shape(self, app_client):
-        """Test 11: POST /context/context → 201 ApplicationContext shape.
-
-        Path is /context/context due to double-prefix in main.py registration.
-        """
+        """Test 11: POST /context → 201 ApplicationContext shape."""
         client, _ = app_client
-        r = client.post("/context/context", json={
+        r = client.post("/context", json={
             "domain": {
                 "description": "contract-test domain",
                 "entities": [],

@@ -258,7 +258,7 @@ def _make_test_app() -> FastAPI:
     app.include_router(feedback.router,                             tags=["Feedback"])
     app.include_router(actions.router,                              tags=["Actions"])
     app.include_router(jobs.router,             prefix="/jobs",     tags=["Jobs"])
-    app.include_router(context.router,          prefix="/context",  tags=["Context"])
+    app.include_router(context.router,                              tags=["Context"])
     app.include_router(guardrails_api.router,                       tags=["Guardrails"])
 
     return app

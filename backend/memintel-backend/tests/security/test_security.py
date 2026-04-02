@@ -133,7 +133,7 @@ class TestAuthenticationEnforcement:
 
     SECURITY GAP — routes that return non-401/403 with no auth:
       GET  /guardrails               → 404 (no auth, returns 404 when no version)
-      POST /context/context          → 201 (no auth; double-prefix BUG-C3)
+      POST /context                  → 201 (no auth required)
     """
 
     def test_get_tasks_without_api_key_returns_401(self, app_client):

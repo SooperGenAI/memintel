@@ -158,8 +158,6 @@ def test_post_tasks_with_context_no_warning(mock_llm_e2e_client, api_headers, el
     client, pool, run_db, mock_llm = mock_llm_e2e_client
 
     # Step 1: Create an active context.
-    # Note: the context router has prefix="/context" and is mounted with
-    # prefix="/context", resulting in the endpoint being at /context/context.
     context_body = {
         "domain": {
             "description": "SaaS churn detection platform",
@@ -167,8 +165,8 @@ def test_post_tasks_with_context_no_warning(mock_llm_e2e_client, api_headers, el
             "decisions": [],
         }
     }
-    r = client.post("/context/context", json=context_body, headers=elevated_headers)
-    assert r.status_code in (200, 201), f"POST /context/context failed: {r.text}"
+    r = client.post("/context", json=context_body, headers=elevated_headers)
+    assert r.status_code in (200, 201), f"POST /context failed: {r.text}"
 
     # Step 2: Create a task — context is now active
     r = client.post(

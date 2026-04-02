@@ -213,7 +213,7 @@ def _make_wf8_app() -> FastAPI:
     app.include_router(feedback.router,                             tags=["Feedback"])
     app.include_router(actions.router,                              tags=["Actions"])
     app.include_router(jobs.router,             prefix="/jobs",     tags=["Jobs"])
-    app.include_router(context.router,          prefix="/context",  tags=["Context"])
+    app.include_router(context.router,                              tags=["Context"])
     app.include_router(guardrails_api.router,                       tags=["Guardrails"])
 
     return app
@@ -848,10 +848,8 @@ def test_context_affects_compilation(e2e_client, elevated_headers, api_headers):
     # context_warning != None in the response — not testable without LLM.
 
     # ── Step 2: Set domain context ─────────────────────────────────────────────
-    # Note: context router has prefix="/context" AND is included with prefix="/context"
-    # in the test app → full path is /context/context (double prefix stacking).
     r = client.post(
-        "/context/context",
+        "/context",
         json={
             "domain": {
                 "description": "B2B SaaS churn detection",
@@ -862,17 +860,17 @@ def test_context_affects_compilation(e2e_client, elevated_headers, api_headers):
             }
         },
     )
-    assert r.status_code == 201, f"Step 2 POST /context/context failed: {r.text}"
+    assert r.status_code == 201, f"Step 2 POST /context failed: {r.text}"
     ctx = r.json()
     assert ctx["is_active"] is True, f"Step 2: newly created context should be active, got {ctx}"
     context_version = ctx["version"]
     assert context_version is not None, "Step 2: context_version must be set"
 
     # Verify GET /context returns the active context
-    r = client.get("/context/context")
-    assert r.status_code == 200, f"Step 2 GET /context/context failed: {r.text}"
+    r = client.get("/context")
+    assert r.status_code == 200, f"Step 2 GET /context failed: {r.text}"
     active_ctx = r.json()
-    assert active_ctx["version"] == context_version, "Step 2: GET /context/context must return the version just created"
+    assert active_ctx["version"] == context_version, "Step 2: GET /context must return the version just created"
 
     # ── Step 3: Seed task WITH context ─────────────────────────────────────────
     task_with_ctx_id = run_db(seed_task(
