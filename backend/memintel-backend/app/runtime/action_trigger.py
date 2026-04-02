@@ -167,6 +167,23 @@ class ActionTrigger:
         dry_run: bool,
     ) -> ActionTriggered:
         """Process a single action for the given decision."""
+        # GUARD: Never fire actions when the condition evaluation was incomplete.
+        # Any non-None reason (fetch_error, null_input, insufficient_history, etc.)
+        # means the condition could not be properly evaluated — firing an action based
+        # on an unevaluated result is semantically incorrect, regardless of fire_on.
+        if decision.reason is not None:
+            log.info(
+                "action_skipped_reason",
+                action_id=action.action_id,
+                condition_id=decision.condition_id,
+                reason=decision.reason,
+            )
+            return ActionTriggered(
+                action_id=action.action_id,
+                action_version=action.version,
+                status=ActionTriggeredStatus.SKIPPED,
+            )
+
         if not _should_fire(action.trigger.fire_on, decision.value):
             log.info(
                 "action_skipped",

@@ -460,10 +460,14 @@ class DriverContribution(BaseModel):
 
     Used inside DecisionExplanation.drivers to break down how each primitive
     contributed to the concept output that was evaluated by the condition.
+
+    value accepts dict to represent fetch_error markers
+    ({"error": "fetch_error"}) stored in input_primitives when a connector
+    fails.  None is accepted when the primitive had no value at evaluation time.
     """
     signal: str
     contribution: float
-    value: float | int | bool | str
+    value: float | int | bool | str | dict | None
 
 
 class DecisionExplanation(BaseModel):

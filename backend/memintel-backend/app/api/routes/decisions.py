@@ -41,11 +41,14 @@ from __future__ import annotations
 import structlog
 
 import asyncpg
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.api.deps import require_api_key
+from app.compiler.dag_builder import DAGBuilder
+from app.compiler.ir_generator import IRGenerator
 from app.models.condition import DecisionExplanation
+from app.models.concept import ConceptDefinition
 from app.persistence.db import get_db
 from app.registry.definitions import DefinitionRegistry
 from app.runtime.cache import ResultCache
@@ -168,4 +171,99 @@ async def explain_decision(
         condition_version=req.condition_version,
         entity=req.entity,
         timestamp=req.timestamp,
+    )
+
+
+# ── GET /decisions/{decision_id}/verify ────────────────────────────────────────
+
+class VerifyDecisionResponse(BaseModel):
+    """
+    Tamper-evidence response for a stored decision record.
+
+    verified=True  — the ir_hash stored in the decision matches the hash
+                     computed from the current concept definition. The
+                     execution graph has not been altered since the decision
+                     was recorded.
+
+    verified=False — hash mismatch: the concept definition was modified after
+                     the decision was recorded, or the decision record was
+                     tampered with directly.
+
+    stored_hash    — the ir_hash value written to the decisions table at
+                     evaluation time. None if no ir_hash was stored.
+
+    computed_hash  — the ir_hash freshly computed from the concept definition
+                     referenced by the decision record.
+    """
+    decision_id: str
+    verified: bool
+    stored_hash: str | None
+    computed_hash: str
+
+
+async def _get_verify_deps(
+    pool: asyncpg.Pool = Depends(get_db),
+) -> tuple[DecisionStore, DefinitionStore]:
+    return DecisionStore(pool), DefinitionStore(pool)
+
+
+@router.get(
+    "/{decision_id}/verify",
+    summary="Verify tamper evidence for a stored decision",
+    response_model=VerifyDecisionResponse,
+    status_code=200,
+)
+async def verify_decision(
+    decision_id: str,
+    deps: tuple[DecisionStore, DefinitionStore] = Depends(_get_verify_deps),
+    _: None = Depends(require_api_key),
+) -> VerifyDecisionResponse:
+    """
+    Verify that the ir_hash stored in a decision record matches the hash
+    freshly computed from the concept definition it references.
+
+    verified=True  — the concept graph is unchanged since this decision.
+    verified=False — the concept definition was modified after this decision
+                     was recorded (or the record was tampered with).
+
+    HTTP 404 — decision not found.
+    HTTP 422 — concept definition referenced by the decision not found.
+    """
+    decision_store, definition_store = deps
+
+    record = await decision_store.get(decision_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Decision '{decision_id}' not found.")
+
+    concept_body = await definition_store.get(record.concept_id, record.concept_version)
+    if concept_body is None:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Concept '{record.concept_id}' v'{record.concept_version}' "
+                f"referenced by decision '{decision_id}' not found in registry."
+            ),
+        )
+
+    concept = ConceptDefinition.model_validate(concept_body)
+    graph = DAGBuilder().build_dag(concept)
+    computed_hash = IRGenerator().hash_graph(graph)
+
+    verified = record.ir_hash == computed_hash
+
+    log.info(
+        "verify_decision",
+        extra={
+            "decision_id": decision_id,
+            "verified": verified,
+            "stored_hash": record.ir_hash,
+            "computed_hash": computed_hash,
+        },
+    )
+
+    return VerifyDecisionResponse(
+        decision_id=decision_id,
+        verified=verified,
+        stored_hash=record.ir_hash,
+        computed_hash=computed_hash,
     )
