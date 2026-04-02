@@ -40,6 +40,17 @@ Ambiguous behaviours discovered while reading implementations
    execute.py applies the same guard upstream, so in production the strategy
    guard is a safety net.  ZScoreStrategy and ChangeStrategy still rely on the
    service layer guard only — their strategy classes accept any history length.
+
+9. NOT implemented: inverts single boolean operand.
+   NOT on categorical raises TYPE_ERROR.
+   NOT with wrong operand count raises SEMANTIC_ERROR.
+   NOT propagates reason from unevaluated operands (null_input,
+   insufficient_history, zero_variance, threshold_zero) and also from
+   qualified operands (infinite_change) — all reasons block inversion and
+   return False with the reason preserved.  For infinite_change the operand
+   fires True, but RULE 4 treats any reason as 'do not invert'; the outcome
+   (False, reason='infinite_change') is the same as semantic inversion would
+   produce (NOT(True)=False), but reached via reason propagation not inversion.
 """
 from __future__ import annotations
 
@@ -98,6 +109,21 @@ def _bool_decision(fired: bool) -> DecisionValue:
         condition_id="sub",
         condition_version="1.0",
         entity="user:1",
+    )
+
+
+def _bool_decision_reason(
+    fired: bool, reason: str, history_count: int | None = None
+) -> DecisionValue:
+    """Build a boolean DecisionValue with a reason set (for NOT propagation tests)."""
+    return DecisionValue(
+        value=fired,
+        decision_type=DecisionType.BOOLEAN,
+        condition_id="sub",
+        condition_version="1.0",
+        entity="user:1",
+        reason=reason,
+        history_count=history_count,
     )
 
 
@@ -1137,17 +1163,144 @@ class TestCompositeBoundaries:
         r = self.s.evaluate(_null(), [], params)
         assert r.value is True
 
-    def test_not_operator_raises_semantic_error(self):
-        """
-        BOUNDARY: CompositeOperator only has AND and OR — there is no NOT.
-        Passing operator='NOT' must raise MemintelError(SEMANTIC_ERROR).
-        operand_results must still be present so the operator check is reached.
-        """
-        params = self._params("AND", True, False)
-        params["operator"] = "NOT"
+    def test_not_with_zero_operands_raises_semantic_error(self):
+        """NOT requires exactly one operand — zero operands raises SEMANTIC_ERROR."""
+        params = {"operator": "NOT", "operand_results": []}
         with pytest.raises(MemintelError) as exc:
             self.s.evaluate(_null(), [], params)
         assert exc.value.error_type == ErrorType.SEMANTIC_ERROR
+
+    def test_not_with_two_operands_raises_semantic_error(self):
+        """NOT requires exactly one operand — two operands raises SEMANTIC_ERROR."""
+        params = {
+            "operator": "NOT",
+            "operand_results": [_bool_decision(True), _bool_decision(False)],
+        }
+        with pytest.raises(MemintelError) as exc:
+            self.s.evaluate(_null(), [], params)
+        assert exc.value.error_type == ErrorType.SEMANTIC_ERROR
+
+    def test_not_with_categorical_operand_raises_type_error(self):
+        """NOT cannot invert a categorical decision — raises TYPE_ERROR."""
+        categorical = DecisionValue(
+            value="high",
+            decision_type=DecisionType.CATEGORICAL,
+            condition_id="eq",
+            condition_version="1.0",
+            entity="user:1",
+        )
+        params = {"operator": "NOT", "operand_results": [categorical]}
+        with pytest.raises(MemintelError) as exc:
+            self.s.evaluate(_null(), [], params)
+        assert exc.value.error_type == ErrorType.TYPE_ERROR
+
+    def test_not_true_returns_false(self):
+        """NOT(True) → False, reason=None."""
+        params = {"operator": "NOT", "operand_results": [_bool_decision(True)]}
+        r = self.s.evaluate(_null(), [], params)
+        assert r.value is False
+        assert r.reason is None
+
+    def test_not_false_returns_true(self):
+        """NOT(False) → True, reason=None (genuine False, no reason set)."""
+        params = {"operator": "NOT", "operand_results": [_bool_decision(False)]}
+        r = self.s.evaluate(_null(), [], params)
+        assert r.value is True
+        assert r.reason is None
+
+    def test_not_propagates_null_input(self):
+        """Operand False, reason='null_input' → NOT returns False, reason='null_input'."""
+        operand = _bool_decision_reason(False, "null_input")
+        params = {"operator": "NOT", "operand_results": [operand]}
+        r = self.s.evaluate(_null(), [], params)
+        assert r.value is False
+        assert r.reason == "null_input"
+
+    def test_not_propagates_insufficient_history(self):
+        """Operand False, reason='insufficient_history' → NOT returns False, same reason."""
+        operand = _bool_decision_reason(False, "insufficient_history", history_count=1)
+        params = {"operator": "NOT", "operand_results": [operand]}
+        r = self.s.evaluate(_null(), [], params)
+        assert r.value is False
+        assert r.reason == "insufficient_history"
+
+    def test_not_propagates_zero_variance(self):
+        """Operand False, reason='zero_variance' → NOT returns False, same reason."""
+        operand = _bool_decision_reason(False, "zero_variance")
+        params = {"operator": "NOT", "operand_results": [operand]}
+        r = self.s.evaluate(_null(), [], params)
+        assert r.value is False
+        assert r.reason == "zero_variance"
+
+    def test_not_propagates_infinite_change(self):
+        """
+        FINDING — infinite_change is an explanation reason, not a 'could not evaluate'
+        signal.  The ChangeStrategy fires True with reason='infinite_change' when
+        previous=0 and current!=0 (any non-zero movement from zero).
+
+        RULE 4 treats ANY reason as a gate on inversion: propagate reason, return False.
+        For infinite_change (operand=True, reason='infinite_change'):
+          - RULE 4 path: return False, reason='infinite_change'
+          - Semantic inversion path: NOT(True) = False
+        Both paths produce False — the outcomes are identical for this reason.
+
+        DESIGN DECISION: all reasons block inversion for consistency.
+        infinite_change is treated as a qualifier on the boolean result, not a
+        clean True.  Future reasons with value=True should follow the same rule
+        unless explicitly carved out.
+
+        FLAG: this is a new ambiguous behaviour — the caller cannot distinguish
+        'NOT inverted True to False' from 'NOT propagated reason from True operand'.
+        Both produce (False, reason='infinite_change').  If callers need to
+        distinguish these cases, a separate reason field would be required.
+        """
+        operand = _bool_decision_reason(True, "infinite_change")
+        params = {"operator": "NOT", "operand_results": [operand]}
+        r = self.s.evaluate(_null(), [], params)
+        assert r.value is False
+        assert r.reason == "infinite_change"
+
+    def test_nested_not_and(self):
+        """NOT(AND(A, B)) → inverts the AND result."""
+        # NOT(AND(True, True)) → NOT(True) → False
+        and_true = self.s.evaluate(
+            _null(), [],
+            {"operator": "AND", "operand_results": [_bool_decision(True), _bool_decision(True)]},
+        )
+        r1 = self.s.evaluate(
+            _null(), [], {"operator": "NOT", "operand_results": [and_true]}
+        )
+        assert r1.value is False
+        # NOT(AND(True, False)) → NOT(False) → True
+        and_false = self.s.evaluate(
+            _null(), [],
+            {"operator": "AND", "operand_results": [_bool_decision(True), _bool_decision(False)]},
+        )
+        r2 = self.s.evaluate(
+            _null(), [], {"operator": "NOT", "operand_results": [and_false]}
+        )
+        assert r2.value is True
+
+    def test_nested_and_not(self):
+        """AND(NOT(A), B) → AND uses the inverted operand."""
+        # AND(NOT(True), True) → AND(False, True) → False
+        not_true = self.s.evaluate(
+            _null(), [], {"operator": "NOT", "operand_results": [_bool_decision(True)]}
+        )
+        r1 = self.s.evaluate(
+            _null(), [],
+            {"operator": "AND", "operand_results": [not_true, _bool_decision(True)]},
+        )
+        assert r1.value is False
+        # AND(NOT(False), True) → AND(True, True) → True
+        not_false = self.s.evaluate(
+            _null(), [], {"operator": "NOT", "operand_results": [_bool_decision(False)]}
+        )
+        r2 = self.s.evaluate(
+            _null(), [],
+            {"operator": "AND", "operand_results": [not_false, _bool_decision(True)]},
+        )
+        assert r2.value is True
 
     def test_two_operands_minimum_is_accepted(self):
         """

@@ -4,10 +4,10 @@ app/strategies/composite.py
 Composite condition strategy.
 
 Spec (py-instructions.md):
-  params: { operator: 'AND' | 'OR', operands: list[condition_id],
+  params: { operator: 'AND' | 'OR' | 'NOT', operands: list[condition_id],
             operand_results: list[DecisionValue] }
   Logic:  1. Evaluate each operand condition independently (caller's responsibility).
-          2. Apply operator (AND | OR) across the boolean results.
+          2. Apply operator (AND | OR | NOT) across the boolean results.
           3. Return a single decision<boolean>.
   Input:  decision<boolean> ONLY — composite cannot wrap equals conditions.
   Output: decision<boolean>
@@ -23,13 +23,17 @@ Compiler enforcement (checked at compile time by Validator, not here):
   - operands must all produce decision<boolean>
   - equals conditions produce decision<categorical> → type_error if used as operand
   - composite cannot be nested inside another composite's operands → semantic_error
-  - operands list must contain at least 2 condition_ids → semantic_error if fewer
+  - operands list must contain at least 2 condition_ids for AND/OR → semantic_error if fewer
   - all operand condition_ids must exist in the registry → reference_error if not
 
 Runtime enforcement (checked here):
-  - params['operator'] must be 'AND' or 'OR' → semantic_error
+  - params['operator'] must be 'AND', 'OR', or 'NOT' → semantic_error
   - params['operand_results'] must be provided → semantic_error
-  - each operand DecisionValue must have decision_type=BOOLEAN → type_error
+  - NOT requires exactly one operand → semantic_error if count != 1
+  - NOT cannot be applied to decision<categorical> → type_error
+  - NOT propagates reason from operand (null_input, insufficient_history, etc.)
+    without inverting — the operand result is unevaluated or qualified
+  - each operand DecisionValue for AND/OR must have decision_type=BOOLEAN → type_error
     (decision<categorical> from equals strategy is rejected)
 """
 from __future__ import annotations
@@ -44,7 +48,7 @@ from app.strategies.base import (
 )
 
 _STRATEGY = "composite"
-_VALID_OPERATORS = frozenset({"AND", "OR"})
+_VALID_OPERATORS = frozenset({"AND", "OR", "NOT"})
 
 
 class CompositeStrategy(ConditionStrategy):
@@ -89,7 +93,7 @@ class CompositeStrategy(ConditionStrategy):
 
         if operator not in _VALID_OPERATORS:
             raise semantic_error(
-                f"Strategy '{_STRATEGY}': params['operator'] must be 'AND' or 'OR', "
+                f"Strategy '{_STRATEGY}': params['operator'] must be 'AND', 'OR', or 'NOT', "
                 f"got '{operator}'.",
                 location="params.operator",
             )
@@ -101,7 +105,47 @@ class CompositeStrategy(ConditionStrategy):
                 location="params.operand_results",
             )
 
-        # Validate each operand is decision<boolean>
+        if operator == "NOT":
+            # RULE 1: NOT requires exactly one operand
+            if len(operand_results) != 1:
+                raise semantic_error(
+                    f"Strategy '{_STRATEGY}': NOT operator requires exactly one operand, "
+                    f"got {len(operand_results)}.",
+                    location="params.operand_results",
+                )
+            operand = operand_results[0]
+            if not isinstance(operand, DecisionValue):
+                raise semantic_error(
+                    f"Strategy '{_STRATEGY}': operand_results[0] must be a "
+                    f"DecisionValue, got '{type(operand).__name__}'.",
+                    location="params.operand_results[0]",
+                )
+            # RULE 4: any reason (null_input, insufficient_history, zero_variance,
+            # infinite_change, threshold_zero, …) means the operand result is
+            # unevaluated or qualified — propagate the reason and return False without
+            # inverting.  Inversion on an unevaluated result is meaningless.
+            if operand.reason is not None:
+                return self._boolean_decision(
+                    False, result, condition_id, condition_version,
+                    reason=operand.reason,
+                    history_count=operand.history_count,
+                )
+            # RULE 2: categorical result cannot be logically inverted
+            if operand.decision_type == DecisionType.CATEGORICAL:
+                raise type_error(
+                    f"Strategy '{_STRATEGY}': NOT operator cannot be applied to a "
+                    f"categorical result — use equals strategy with a specific target "
+                    f"label instead.",
+                    location="params.operand_results[0].decision_type",
+                )
+            # RULE 3: invert boolean result
+            return self._boolean_decision(
+                not bool(operand.value), result, condition_id, condition_version,
+                reason=None,
+                history_count=operand.history_count,
+            )
+
+        # Validate each operand is decision<boolean> (AND / OR path)
         for i, operand in enumerate(operand_results):
             if not isinstance(operand, DecisionValue):
                 raise semantic_error(
