@@ -363,34 +363,38 @@ class TestGuardrailsStrategyEnforcement:
             constraints=GuardrailConstraints(disallowed_strategies=disallowed),
         )
 
-    def test_z_score_accepted_despite_disallowed_strategy_constraint(self):
+    def test_z_score_rejected_when_in_disallowed_strategies(self):
         """
         Guardrails disallows z_score.  MockLLMClient returns z_score for
-        'error rate' intent.  Service succeeds — constraint not enforced.
+        'error rate' intent.  FIX 1: service now raises MemintelError(SEMANTIC_ERROR).
         """
         guardrails = self._make_guardrails_with_disallowed(
             ["z_score", "percentile", "change", "equals", "composite"]
         )
         _, _, mock_llm, service = _make_service(guardrails=guardrails)
 
-        # No exception should be raised — disallowed_strategies not enforced.
-        result = run(service.create_task(_webhook_request(
-            "Alert me when error rate deviates from baseline"
-        )))
-        assert isinstance(result, Task), (
-            "ACTUAL: z_score accepted despite disallowed_strategies=['z_score', ...]. "
-            "BUG: guardrails_constraints_not_enforced_at_compile_time"
+        with pytest.raises(MemintelError) as exc_info:
+            run(service.create_task(_webhook_request(
+                "Alert me when error rate deviates from baseline"
+            )))
+        assert exc_info.value.error_type == ErrorType.SEMANTIC_ERROR, (
+            f"Expected SEMANTIC_ERROR; got {exc_info.value.error_type}"
         )
-        assert result.condition_id is not None
+        assert "z_score" in str(exc_info.value).lower() or "disallowed" in str(exc_info.value).lower()
 
     def test_guardrails_injected_into_llm_context(self):
         """
         Guardrails are serialized and passed to the LLM via the context dict.
         The real LLM would respect guardrails; MockLLMClient ignores them.
+
+        The LLM is called before post-compilation validation, so mock_llm.last_context
+        is set even when the task fails due to a disallowed strategy.
         """
         guardrails = self._make_guardrails_with_disallowed(["z_score"])
         _, _, mock_llm, service = _make_service(guardrails=guardrails)
-        run(service.create_task(_webhook_request("Alert when error rate spikes")))
+        # FIX 1: z_score is now blocked — task fails, but LLM was called first.
+        with pytest.raises(MemintelError):
+            run(service.create_task(_webhook_request("Alert when error rate spikes")))
         # Guardrails must appear in the context passed to the LLM
         assert "guardrails" in mock_llm.last_context, (
             "guardrails must be injected into LLM context; "
@@ -675,3 +679,319 @@ class TestContextWarning:
         assert not hasattr(result, "context_warning") or getattr(result, "context_warning", "ABSENT") == "ABSENT", (
             "DryRunResult must not have context_warning"
         )
+
+
+# ── FIX 1: Post-compilation strategy validation ────────────────────────────────
+
+class TestFix1StrategyValidation:
+    """
+    Tests for TaskAuthoringService._validate_strategy_allowed().
+
+    FIX 1: After LLM compilation, the service validates that the compiled
+    strategy type is not in guardrails.constraints.disallowed_strategies.
+    Raises MemintelError(SEMANTIC_ERROR) on violation.
+    """
+
+    def _guardrails(self, disallowed: list[str], allowed: list[str] | None = None):
+        from app.models.config import ApplicationContext as GuardrailsAppContext
+        from app.models.guardrails import Guardrails, GuardrailConstraints, StrategyRegistryEntry
+        registry = {
+            "threshold": StrategyRegistryEntry(
+                version="1.0", description="Threshold", input_types=["float"],
+                output_type="decision<boolean>",
+            ),
+            "z_score": StrategyRegistryEntry(
+                version="1.0", description="Z-score", input_types=["float"],
+                output_type="decision<boolean>",
+            ),
+        }
+        if allowed:
+            registry = {k: v for k, v in registry.items() if k in allowed}
+        return Guardrails(
+            application_context=GuardrailsAppContext(
+                name="test", description="Test", instructions=[],
+            ),
+            strategy_registry=registry or {"threshold": StrategyRegistryEntry(
+                version="1.0", description="Threshold", input_types=["float"],
+                output_type="decision<boolean>",
+            )},
+            constraints=GuardrailConstraints(disallowed_strategies=disallowed),
+        )
+
+    def test_disallowed_strategy_raises_semantic_error(self):
+        """z_score disallowed → MemintelError(SEMANTIC_ERROR)."""
+        guardrails = self._guardrails(["z_score", "percentile", "change", "equals", "composite"])
+        _, _, _, service = _make_service(guardrails=guardrails)
+        with pytest.raises(MemintelError) as exc_info:
+            run(service.create_task(_webhook_request(
+                "Alert me when error rate deviates from baseline"
+            )))
+        assert exc_info.value.error_type == ErrorType.SEMANTIC_ERROR
+
+    def test_allowed_strategy_passes_validation(self):
+        """threshold allowed → no exception raised."""
+        guardrails = self._guardrails(["z_score", "percentile", "change", "equals", "composite"])
+        _, _, _, service = _make_service(guardrails=guardrails)
+        result = run(service.create_task(_webhook_request(
+            "Alert me when active user rate drops"  # → threshold strategy
+        )))
+        assert isinstance(result, Task)
+
+    def test_empty_disallowed_list_passes_all_strategies(self):
+        """Empty disallowed_strategies → all strategies allowed."""
+        guardrails = self._guardrails([])
+        _, _, _, service = _make_service(guardrails=guardrails)
+        result = run(service.create_task(_webhook_request(
+            "Alert me when error rate deviates from baseline"  # → z_score
+        )))
+        assert isinstance(result, Task)
+
+    def test_no_guardrails_skips_strategy_validation(self):
+        """No guardrails → validation skipped → any strategy accepted."""
+        _, _, _, service = _make_service(guardrails=None)
+        result = run(service.create_task(_webhook_request(
+            "Alert me when error rate deviates from baseline"
+        )))
+        assert isinstance(result, Task)
+
+
+# ── FIX 2: Deterministic bias rule application ────────────────────────────────
+
+class TestFix2BiasRuleApplication:
+    """
+    Tests for TaskAuthoringService._apply_bias_rules().
+
+    FIX 2: After LLM compilation, if guardrails has parameter_bias_rules and
+    a rule keyword matches the intent, the compiled threshold value is overridden
+    with the primitive-level prior for the resolved severity tier.
+
+    Severity resolution: base = medium (tier 1), severity_shift shifts index,
+    clamped to [0, 2] → maps to ["low", "medium", "high"].
+    """
+
+    def _bias_guardrails(self):
+        from app.models.config import ApplicationContext as GuardrailsAppContext
+        from app.models.guardrails import (
+            BiasEffect,
+            Guardrails,
+            ParameterBiasRule,
+            PrimitiveHint,
+            StrategyRegistryEntry,
+        )
+        return Guardrails(
+            application_context=GuardrailsAppContext(
+                name="bias-test", description="Bias test", instructions=[],
+            ),
+            strategy_registry={
+                "threshold": StrategyRegistryEntry(
+                    version="1.0", description="Threshold", input_types=["float"],
+                    output_type="decision<boolean>",
+                ),
+            },
+            primitives={
+                "account.active_user_rate_30d": PrimitiveHint(
+                    type="float",
+                    description="Active user rate",
+                    threshold_priors={"threshold": {"low": 0.60, "medium": 0.45, "high": 0.30}},
+                ),
+            },
+            parameter_bias_rules=[
+                ParameterBiasRule(
+                    if_instruction_contains="significantly",
+                    effect=BiasEffect(direction="tighten_threshold", severity_shift=0),
+                ),
+                ParameterBiasRule(
+                    if_instruction_contains="urgently",
+                    effect=BiasEffect(direction="tighten_threshold", severity_shift=1),
+                ),
+            ],
+        )
+
+    def test_significantly_overrides_threshold_to_medium_prior(self):
+        """'significantly' → severity_shift=0 → medium → prior 0.45."""
+        guardrails = self._bias_guardrails()
+        task_store, def_store, mock_llm, service = _make_service(guardrails=guardrails)
+
+        result = run(service.create_task(_webhook_request(
+            "Alert me when active user rate drops significantly"
+        )))
+        assert isinstance(result, Task)
+
+        cond_body = run(def_store.get(result.condition_id, result.condition_version))
+        assert cond_body is not None
+        assert cond_body["strategy"]["params"]["value"] == pytest.approx(0.45), (
+            f"Expected medium prior 0.45; got {cond_body['strategy']['params']['value']}"
+        )
+
+    def test_urgently_overrides_threshold_to_high_prior(self):
+        """'urgently' → severity_shift=+1 → high → prior 0.30."""
+        guardrails = self._bias_guardrails()
+        task_store, def_store, mock_llm, service = _make_service(guardrails=guardrails)
+
+        result = run(service.create_task(_webhook_request(
+            "Alert me when active user rate drops urgently"
+        )))
+        assert isinstance(result, Task)
+
+        cond_body = run(def_store.get(result.condition_id, result.condition_version))
+        assert cond_body is not None
+        assert cond_body["strategy"]["params"]["value"] == pytest.approx(0.30), (
+            f"Expected high prior 0.30; got {cond_body['strategy']['params']['value']}"
+        )
+
+    def test_no_matching_rule_leaves_threshold_unchanged(self):
+        """Intent with no matching keyword → threshold unchanged at mock value 0.35."""
+        guardrails = self._bias_guardrails()
+        task_store, def_store, mock_llm, service = _make_service(guardrails=guardrails)
+
+        result = run(service.create_task(_webhook_request(
+            "Alert me when active user rate drops"  # no bias keyword
+        )))
+        assert isinstance(result, Task)
+
+        cond_body = run(def_store.get(result.condition_id, result.condition_version))
+        assert cond_body["strategy"]["params"]["value"] == pytest.approx(0.35), (
+            f"Expected unchanged mock value 0.35; got {cond_body['strategy']['params']['value']}"
+        )
+
+    def test_no_guardrails_leaves_threshold_unchanged(self):
+        """No guardrails → bias rules not applied → mock value unchanged."""
+        task_store, def_store, mock_llm, service = _make_service(guardrails=None)
+
+        result = run(service.create_task(_webhook_request(
+            "Alert me when active user rate drops significantly"
+        )))
+        assert isinstance(result, Task)
+
+        cond_body = run(def_store.get(result.condition_id, result.condition_version))
+        assert cond_body["strategy"]["params"]["value"] == pytest.approx(0.35)
+
+    def test_non_threshold_strategy_not_affected_by_bias_rules(self):
+        """Bias rules only apply to threshold strategy; z_score is unchanged."""
+        from app.models.config import ApplicationContext as GuardrailsAppContext
+        from app.models.guardrails import (
+            BiasEffect,
+            Guardrails,
+            ParameterBiasRule,
+            PrimitiveHint,
+            StrategyRegistryEntry,
+        )
+        guardrails = Guardrails(
+            application_context=GuardrailsAppContext(
+                name="test", description="Test", instructions=[],
+            ),
+            strategy_registry={
+                "z_score": StrategyRegistryEntry(
+                    version="1.0", description="Z-score", input_types=["float"],
+                    output_type="decision<boolean>",
+                ),
+            },
+            primitives={
+                "service.error_rate_5m": PrimitiveHint(
+                    type="float",
+                    description="Error rate",
+                    threshold_priors={"threshold": {"medium": 0.5}},
+                ),
+            },
+            parameter_bias_rules=[
+                ParameterBiasRule(
+                    if_instruction_contains="significantly",
+                    effect=BiasEffect(direction="tighten_threshold", severity_shift=0),
+                ),
+            ],
+        )
+        task_store, def_store, mock_llm, service = _make_service(guardrails=guardrails)
+
+        result = run(service.create_task(_webhook_request(
+            "Alert me when error rate deviates significantly"  # → z_score scenario
+        )))
+        assert isinstance(result, Task)
+        # z_score has no 'value' in params, so bias rule is a no-op (returns condition unchanged)
+        cond_body = run(def_store.get(result.condition_id, result.condition_version))
+        assert cond_body["strategy"]["type"] == "z_score"
+
+
+# ── FIX 3: Primitive existence validation ─────────────────────────────────────
+
+class TestFix3PrimitiveValidation:
+    """
+    Tests for TaskAuthoringService._validate_primitives_registered().
+
+    FIX 3: After LLM compilation, if guardrails.primitives is non-empty,
+    validate that every primitive referenced in the compiled concept is
+    declared in guardrails.primitives.  Raises MemintelError(REFERENCE_ERROR)
+    on violation.  Skipped when guardrails is None or primitives is empty.
+    """
+
+    def _guardrails_with_primitives(self, primitive_ids: list[str]):
+        from app.models.config import ApplicationContext as GuardrailsAppContext
+        from app.models.guardrails import Guardrails, PrimitiveHint, StrategyRegistryEntry
+        return Guardrails(
+            application_context=GuardrailsAppContext(
+                name="test", description="Test", instructions=[],
+            ),
+            strategy_registry={
+                "threshold": StrategyRegistryEntry(
+                    version="1.0", description="Threshold", input_types=["float"],
+                    output_type="decision<boolean>",
+                ),
+            },
+            primitives={
+                prim_id: PrimitiveHint(type="float", description=prim_id)
+                for prim_id in primitive_ids
+            },
+        )
+
+    def test_unregistered_primitive_raises_reference_error(self):
+        """Concept uses account.active_user_rate_30d, not in guardrails.primitives → REFERENCE_ERROR."""
+        # Only service.error_rate_5m is declared; concept references account.active_user_rate_30d
+        guardrails = self._guardrails_with_primitives(["service.error_rate_5m"])
+        _, _, _, service = _make_service(guardrails=guardrails)
+
+        with pytest.raises(MemintelError) as exc_info:
+            run(service.create_task(_webhook_request(
+                "Alert me when active user rate drops"  # → concept uses account.active_user_rate_30d
+            )))
+        assert exc_info.value.error_type == ErrorType.REFERENCE_ERROR
+        assert "account.active_user_rate_30d" in str(exc_info.value)
+
+    def test_registered_primitive_passes_validation(self):
+        """Concept uses account.active_user_rate_30d, declared in guardrails.primitives → OK."""
+        guardrails = self._guardrails_with_primitives(["account.active_user_rate_30d"])
+        _, _, _, service = _make_service(guardrails=guardrails)
+
+        result = run(service.create_task(_webhook_request(
+            "Alert me when active user rate drops"
+        )))
+        assert isinstance(result, Task)
+
+    def test_empty_guardrails_primitives_skips_validation(self):
+        """guardrails.primitives = {} → skip validation → any primitive accepted."""
+        from app.models.config import ApplicationContext as GuardrailsAppContext
+        from app.models.guardrails import Guardrails, StrategyRegistryEntry
+        guardrails = Guardrails(
+            application_context=GuardrailsAppContext(
+                name="test", description="Test", instructions=[],
+            ),
+            strategy_registry={
+                "threshold": StrategyRegistryEntry(
+                    version="1.0", description="Threshold", input_types=["float"],
+                    output_type="decision<boolean>",
+                ),
+            },
+            # primitives defaults to empty dict → skip validation
+        )
+        _, _, _, service = _make_service(guardrails=guardrails)
+
+        result = run(service.create_task(_webhook_request(
+            "Alert me when active user rate drops"
+        )))
+        assert isinstance(result, Task)
+
+    def test_no_guardrails_skips_primitive_validation(self):
+        """No guardrails at all → validation skipped → task succeeds."""
+        _, _, _, service = _make_service(guardrails=None)
+        result = run(service.create_task(_webhook_request(
+            "Alert me when active user rate drops"
+        )))
+        assert isinstance(result, Task)

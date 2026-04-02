@@ -193,15 +193,11 @@ def test_guardrails_block_disallowed_strategy(mock_llm_e2e_client_with_guardrail
     Inject guardrails with disallowed_strategies=["z_score", ...] (only threshold allowed).
     POST /tasks with intent that causes MockLLMClient to return z_score.
 
-    ACTUAL BEHAVIOUR (FINDING 3):
-      HTTP 200 — z_score strategy is accepted.
-      disallowed_strategies in GuardrailConstraints is NOT enforced by the
-      compiler at definition registration time.  The DefinitionRegistry
-      validates concept schema and type compatibility only.  Guardrails
-      constraints are injected into the LLM prompt so a real LLM would
-      respect them, but the compiler does not block non-compliant strategies.
-
-    BUG: guardrails_constraints_not_enforced_at_compile_time
+    EXPECTED BEHAVIOUR (FIX 1 — post-compilation strategy validation):
+      HTTP 400 — z_score strategy is rejected by post-compilation guardrails check.
+      TaskAuthoringService._validate_strategy_allowed() raises
+      MemintelError(SEMANTIC_ERROR) when the compiled strategy type is in
+      guardrails.constraints.disallowed_strategies.
     """
     from app.models.config import ApplicationContext as GuardrailsAppContext
     from app.models.guardrails import (
@@ -209,7 +205,6 @@ def test_guardrails_block_disallowed_strategy(mock_llm_e2e_client_with_guardrail
         GuardrailConstraints,
         StrategyRegistryEntry,
     )
-    from starlette.testclient import TestClient
 
     pool, run_db = e2e_setup
 
@@ -247,39 +242,14 @@ def test_guardrails_block_disallowed_strategy(mock_llm_e2e_client_with_guardrail
         intent = "Alert me when error rate deviates from baseline"
         r = client.post("/tasks", json=_task_body(intent), headers=api_headers)
 
-        # ACTUAL: HTTP 200 — guardrails disallowed_strategies not enforced at compile time.
-        # If this becomes 422 in future, the compiler has been hardened — update this test.
-        assert r.status_code in (200, 422), (
-            f"Expected 200 (disallowed not enforced) or 422 (enforced); got {r.status_code}: {r.text}"
+        # FIX 1: z_score is now blocked by post-compilation strategy validation.
+        assert r.status_code == 400, (
+            f"Expected 400 (z_score blocked by disallowed_strategies); got {r.status_code}: {r.text}"
         )
-
-        if r.status_code == 200:
-            task = r.json()
-            cond_id = task["condition_id"]
-            cond_ver = task["condition_version"]
-            r2 = client.get(
-                f"/conditions/{cond_id}",
-                params={"version": cond_ver},
-                headers=api_headers,
-            )
-            assert r2.status_code == 200
-            cond = r2.json()
-            compiled_strategy = cond["strategy"]["type"]
-
-            # ACTUAL: z_score is returned unblocked — constraint not enforced.
-            # Document the actual behaviour so regression tests catch any change.
-            assert compiled_strategy == "z_score", (
-                f"ACTUAL: MockLLMClient returned z_score and compiler accepted it "
-                f"despite disallowed_strategies=['z_score', ...]. "
-                f"Compiled strategy: {compiled_strategy!r}. "
-                "BUG: guardrails_constraints_not_enforced_at_compile_time"
-            )
-        else:
-            # HTTP 422 — compiler enforced the constraint (good).
-            error = r.json()
-            assert "error" in error or "detail" in error, (
-                f"422 response should contain error details; got: {error}"
-            )
+        error = r.json()
+        assert "error" in error or "detail" in error, (
+            f"400 response must contain error details; got: {error}"
+        )
 
 
 # ── Test 5 — Bias rules apply severity language ────────────────────────────────
@@ -287,27 +257,22 @@ def test_guardrails_block_disallowed_strategy(mock_llm_e2e_client_with_guardrail
 @pytest.mark.e2e
 def test_severity_language_maps_to_threshold_prior(mock_llm_e2e_client_with_guardrails, api_headers, e2e_setup):
     """
-    Inject guardrails with parameter_priors (thresholds) and bias rules.
-    POST /tasks with intents containing "significantly" and "urgently".
+    Inject guardrails with parameter_bias_rules mapping severity keywords to
+    threshold priors.  POST /tasks with intents containing "significantly" and
+    "urgently".
 
-    EXPECTED (with real LLM):
-      "significantly" → medium_severity → value=0.45
-      "urgently"      → high_severity   → value=0.30
+    EXPECTED BEHAVIOUR (FIX 2 — deterministic bias rule application):
+      "significantly" → bias rule matches → severity_shift=0 → medium → value=0.45
+      "urgently"      → bias rule matches → severity_shift=+1 → high  → value=0.30
 
-    ACTUAL BEHAVIOUR (FINDING 4):
-      MockLLMClient ignores the context (guardrails, priors, bias rules).
-      Intent routing is keyword-based only:
-        "active user" → churn scenario → threshold value=0.35 always.
-      Bias rules are an LLM-applied feature — MockLLMClient does not implement them.
-      value=0.35 in both cases (not 0.45 or 0.30).
-
-    To test bias rule application, replace MockLLMClient with a real LLM
-    that processes the context parameter.
+    TaskAuthoringService._apply_bias_rules() overrides the compiled threshold
+    value with the primitive-level prior for the resolved severity tier.
     """
     from app.models.config import ApplicationContext as GuardrailsAppContext
     from app.models.guardrails import (
+        BiasEffect,
         Guardrails,
-        GuardrailConstraints,
+        ParameterBiasRule,
         PrimitiveHint,
         StrategyRegistryEntry,
     )
@@ -338,6 +303,16 @@ def test_severity_language_maps_to_threshold_prior(mock_llm_e2e_client_with_guar
                 },
             ),
         },
+        parameter_bias_rules=[
+            ParameterBiasRule(
+                if_instruction_contains="significantly",
+                effect=BiasEffect(direction="tighten_threshold", severity_shift=0),
+            ),
+            ParameterBiasRule(
+                if_instruction_contains="urgently",
+                effect=BiasEffect(direction="tighten_threshold", severity_shift=1),
+            ),
+        ],
     )
 
     make_client = mock_llm_e2e_client_with_guardrails
@@ -359,13 +334,10 @@ def test_severity_language_maps_to_threshold_prior(mock_llm_e2e_client_with_guar
         assert r1c.status_code == 200
         cond1 = r1c.json()
         assert cond1["strategy"]["type"] == "threshold"
-        # ACTUAL: 0.35 (MockLLMClient ignores guardrails context → uses fixed value)
-        # EXPECTED with real LLM: 0.45 (significant → medium_severity → prior=0.45)
+        # FIX 2: bias rule matched "significantly" → severity_shift=0 → medium → 0.45
         actual_val1 = cond1["strategy"]["params"]["value"]
-        assert actual_val1 == pytest.approx(0.35), (
-            f"ACTUAL: MockLLMClient returns 0.35 (ignores bias rules); "
-            f"EXPECTED with real LLM: 0.45 (significant=medium_severity prior). "
-            f"Got: {actual_val1}"
+        assert actual_val1 == pytest.approx(0.45), (
+            f"Expected 0.45 (significant=medium_severity prior); got: {actual_val1}"
         )
 
         # ── "urgently" intent ─────────────────────────────────────────────────
@@ -384,13 +356,10 @@ def test_severity_language_maps_to_threshold_prior(mock_llm_e2e_client_with_guar
         assert r2c.status_code == 200
         cond2 = r2c.json()
         assert cond2["strategy"]["type"] == "threshold"
-        # ACTUAL: 0.35 (MockLLMClient ignores bias rules)
-        # EXPECTED with real LLM: 0.30 (urgent → high_severity → prior=0.30)
+        # FIX 2: bias rule matched "urgently" → severity_shift=+1 → high → 0.30
         actual_val2 = cond2["strategy"]["params"]["value"]
-        assert actual_val2 == pytest.approx(0.35), (
-            f"ACTUAL: MockLLMClient returns 0.35 (ignores bias rules); "
-            f"EXPECTED with real LLM: 0.30 (urgent=high_severity prior). "
-            f"Got: {actual_val2}"
+        assert actual_val2 == pytest.approx(0.30), (
+            f"Expected 0.30 (urgent=high_severity prior); got: {actual_val2}"
         )
 
 
@@ -442,52 +411,64 @@ def test_post_tasks_dry_run_does_not_create_task(mock_llm_e2e_client, api_header
 # ── Test 7 — Primitive not registered ─────────────────────────────────────────
 
 @pytest.mark.e2e
-def test_post_tasks_fails_for_unregistered_primitive(mock_llm_e2e_client, api_headers):
+def test_post_tasks_fails_for_unregistered_primitive(mock_llm_e2e_client_with_guardrails, api_headers, e2e_setup):
     """
-    POST /tasks with an intent whose concept references a primitive that is
-    NOT registered in PrimitiveRegistry.
+    Inject guardrails with a primitives registry that does NOT include
+    'account.active_user_rate_30d'.  MockLLMClient returns a concept that
+    references that primitive for any "active user" intent.
 
-    ACTUAL BEHAVIOUR (FINDING 6):
-      HTTP 200 — task created successfully.
-      Primitive declarations in a concept body do NOT need to be pre-registered
-      in PrimitiveRegistry for task authoring to succeed.  The DefinitionRegistry
-      validates concept schema (field types, op names) but does NOT validate
-      PrimitiveRegistry membership.  This is by design: PrimitiveRegistry is
-      an execution-path concern (data connector routing), not a definition-
-      authoring concern.
-
-      The task fails at EXECUTION time (not authoring time) when no connector
-      can supply data for the unregistered primitive.
-
-    If future code changes make this return 422, update this test and remove
-    the design note from FINDING 6.
+    EXPECTED BEHAVIOUR (FIX 3 — primitive existence validation):
+      HTTP 400 — TaskAuthoringService._validate_primitives_registered() raises
+      MemintelError(REFERENCE_ERROR) when the concept references a primitive
+      absent from guardrails.primitives.
     """
-    client, pool, run_db, mock_llm = mock_llm_e2e_client
-    # PrimitiveRegistry is empty in the test app (conftest sets it to PrimitiveRegistry())
-    # MockLLMClient will return a concept referencing account.active_user_rate_30d
-    # which is NOT registered in the test app's PrimitiveRegistry
-
-    intent = "Alert me when active user rate drops below threshold"
-    r = client.post("/tasks", json=_task_body(intent), headers=api_headers)
-
-    # ACTUAL: 200 — primitive registry not checked at authoring time.
-    # If this changes to 422, the authoring path has been hardened.
-    assert r.status_code in (200, 422), (
-        f"Expected 200 (primitive registry not checked) or 422 (new enforcement); "
-        f"got {r.status_code}: {r.text}"
+    from app.models.config import ApplicationContext as GuardrailsAppContext
+    from app.models.guardrails import (
+        Guardrails,
+        PrimitiveHint,
+        StrategyRegistryEntry,
     )
 
-    if r.status_code == 200:
-        task = r.json()
-        assert task.get("task_id") is not None, (
-            "ACTUAL: task created despite no PrimitiveRegistry entry. "
-            "Primitive registration is execution-path only, not authoring-path."
+    pool, run_db = e2e_setup
+
+    # Guardrails has primitives defined but NOT account.active_user_rate_30d.
+    # MockLLMClient churn scenario always returns a concept using that primitive.
+    guardrails = Guardrails(
+        application_context=GuardrailsAppContext(
+            name="primitive-test-app",
+            description="Primitive validation test",
+            instructions=["Only declared primitives are allowed."],
+        ),
+        strategy_registry={
+            "threshold": StrategyRegistryEntry(
+                version="1.0",
+                description="Threshold strategy",
+                input_types=["float"],
+                output_type="decision<boolean>",
+            ),
+        },
+        primitives={
+            "service.error_rate_5m": PrimitiveHint(
+                type="float",
+                description="Service error rate (declared; not used by this intent)",
+            ),
+            # account.active_user_rate_30d is intentionally absent
+        },
+    )
+
+    make_client = mock_llm_e2e_client_with_guardrails
+    with make_client(guardrails) as (client, pool_, run_db_, mock_llm):
+        intent = "Alert me when active user rate drops below threshold"
+        r = client.post("/tasks", json=_task_body(intent), headers=api_headers)
+
+        # FIX 3: primitive not in guardrails.primitives → 400.
+        assert r.status_code == 400, (
+            f"Expected 400 (account.active_user_rate_30d not in guardrails.primitives); "
+            f"got {r.status_code}: {r.text}"
         )
-    else:
-        # 422 — authoring path now validates primitive registration.
         error_text = r.text.lower()
-        assert any(term in error_text for term in ("primitive", "unregistered", "not found")), (
-            f"422 error should mention unregistered primitive; got: {r.text}"
+        assert any(term in error_text for term in ("primitive", "not registered", "reference")), (
+            f"400 error should mention the unregistered primitive; got: {r.text}"
         )
 
 

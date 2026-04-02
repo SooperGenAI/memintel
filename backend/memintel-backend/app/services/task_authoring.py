@@ -54,7 +54,12 @@ from app.llm.client_factory import create_llm_client
 from app.llm.prompts import build_context_prefix
 from app.models.action import ActionDefinition
 from app.models.concept import ConceptDefinition
-from app.models.condition import ConditionDefinition
+from app.models.condition import (
+    ConditionDefinition,
+    StrategyType,
+    ThresholdParams,
+    ThresholdStrategy,
+)
 from app.models.context import ApplicationContext
 from app.models.errors import ErrorType, MemintelError, NotFoundError
 from app.models.guardrails import Guardrails
@@ -197,6 +202,17 @@ class TaskAuthoringService:
                     "ConditionDefinition, and ActionDefinition schemas."
                 ),
             ) from exc
+
+        # FIX 1: Validate compiled strategy against guardrails.constraints.disallowed_strategies.
+        if self._guardrails is not None:
+            self._validate_strategy_allowed(condition)
+
+        # FIX 2: Apply deterministic bias rules to override threshold value from priors.
+        condition = self._apply_bias_rules(condition, concept, request.intent)
+
+        # FIX 3: Validate concept primitives exist in guardrails primitive registry.
+        if self._guardrails is not None:
+            self._validate_primitives_registered(concept)
 
         # dry_run — preview only; nothing registered or persisted.
         if request.dry_run:
@@ -410,6 +426,142 @@ class TaskAuthoringService:
                 "strategy.type and strategy.params.",
                 location="condition.strategy.params",
             )
+
+    # ── Post-compilation guardrails enforcement ────────────────────────────────
+
+    def _validate_strategy_allowed(self, condition: ConditionDefinition) -> None:
+        """
+        Raise MemintelError(SEMANTIC_ERROR) if the compiled strategy type is in
+        guardrails.constraints.disallowed_strategies.
+
+        self._guardrails is non-None at the call site.
+        """
+        disallowed = self._guardrails.constraints.disallowed_strategies
+        if not disallowed:
+            return
+        strategy_type: str = condition.strategy.type.value
+        if strategy_type in disallowed:
+            allowed = [s for s in self._guardrails.strategy_registry if s not in disallowed]
+            raise MemintelError(
+                ErrorType.SEMANTIC_ERROR,
+                f"Strategy '{strategy_type}' is not permitted by guardrails constraints "
+                f"(disallowed_strategies includes '{strategy_type}').",
+                location="condition.strategy.type",
+                suggestion=(
+                    f"Use one of the allowed strategies: {allowed}."
+                    if allowed
+                    else "All strategies are currently disallowed — check guardrails configuration."
+                ),
+            )
+
+    def _apply_bias_rules(
+        self,
+        condition: ConditionDefinition,
+        concept: ConceptDefinition,
+        intent: str,
+    ) -> ConditionDefinition:
+        """
+        Apply guardrails parameter_bias_rules to deterministically override the
+        compiled threshold value with a primitive-level prior.
+
+        Only applies when all of the following hold:
+          - guardrails is loaded with a non-empty parameter_bias_rules list
+          - the compiled condition uses the threshold strategy
+          - a bias rule keyword matches the intent (case-insensitive, first-match)
+          - the concept's primitive has a threshold_priors entry for the severity
+
+        Severity resolution:
+          Base tier = medium (index 1 of ["low", "medium", "high"]).
+          The matched rule's severity_shift shifts the tier:
+            +1 → high, 0 → medium, -1 → low.
+          Tier index is clamped to [0, 2].
+
+        Returns the (possibly updated) ConditionDefinition.
+        """
+        if self._guardrails is None:
+            return condition
+        bias_rules = self._guardrails.parameter_bias_rules
+        if not bias_rules:
+            return condition
+
+        # Only threshold strategy exposes an overrideable numeric value.
+        if condition.strategy.type != StrategyType.THRESHOLD:
+            return condition
+
+        # Find the first matching bias rule in the intent.
+        intent_lower = intent.lower()
+        matching_rule = None
+        for rule in bias_rules:
+            if rule.if_instruction_contains.lower() in intent_lower:
+                matching_rule = rule
+                break
+
+        if matching_rule is None:
+            return condition
+
+        # Resolve severity tier: base=medium(1), apply shift, clamp to [0,2].
+        _TIERS = ("low", "medium", "high")
+        tier_idx = max(0, min(2, 1 + matching_rule.effect.severity_shift))
+        severity = _TIERS[tier_idx]
+
+        # Look up threshold prior for the concept's primitive at this severity.
+        primitives = self._guardrails.primitives
+        if not primitives:
+            return condition
+
+        prior_value: float | None = None
+        for prim_id, prim_hint in primitives.items():
+            if prim_id in concept.primitives and prim_hint.threshold_priors:
+                strategy_priors = prim_hint.threshold_priors.get("threshold")
+                if strategy_priors is not None:
+                    prior_value = strategy_priors.get(severity)
+                    if prior_value is not None:
+                        break
+
+        if prior_value is None:
+            return condition
+
+        # Build a new condition with the overridden threshold value.
+        new_params = ThresholdParams(
+            direction=condition.strategy.params.direction,  # type: ignore[union-attr]
+            value=prior_value,
+        )
+        new_strategy = ThresholdStrategy(type=StrategyType.THRESHOLD, params=new_params)
+        log.debug(
+            "bias_rule_applied",
+            intent_keyword=matching_rule.if_instruction_contains,
+            severity=severity,
+            prior_value=prior_value,
+        )
+        return condition.model_copy(update={"strategy": new_strategy})
+
+    def _validate_primitives_registered(self, concept: ConceptDefinition) -> None:
+        """
+        Raise MemintelError(REFERENCE_ERROR) if a primitive referenced in the
+        compiled concept is not declared in guardrails.primitives.
+
+        Validation is skipped when guardrails.primitives is empty — an empty
+        dict means no primitive registry is configured for this guardrails version,
+        so no constraint is enforced.
+
+        self._guardrails is non-None at the call site.
+        """
+        guardrails_primitives = self._guardrails.primitives
+        if not guardrails_primitives:
+            return
+
+        for prim_id in concept.primitives:
+            if prim_id not in guardrails_primitives:
+                raise MemintelError(
+                    ErrorType.REFERENCE_ERROR,
+                    f"Primitive '{prim_id}' referenced in the compiled concept is not "
+                    f"registered in the guardrails primitive registry.",
+                    location=f"concept.primitives.{prim_id}",
+                    suggestion=(
+                        "Register the primitive in the guardrails configuration, or "
+                        "check that the LLM used a declared primitive name."
+                    ),
+                )
 
     # ── Action binding resolution ───────────────────────────────────────────────
 
