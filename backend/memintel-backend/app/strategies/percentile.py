@@ -145,4 +145,7 @@ class PercentileStrategy(ConditionStrategy):
             threshold_pct = _percentile(sorted_history, cutoff)
             fired = current < threshold_pct
 
-        return self._boolean_decision(fired, result, condition_id, condition_version)
+        return self._boolean_decision(
+            fired, result, condition_id, condition_version,
+            history_count=len(history),
+        )

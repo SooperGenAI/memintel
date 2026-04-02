@@ -857,7 +857,7 @@ def test_z_score_with_30_history_rows_fires():
     assert isinstance(result, DecisionResult)
     assert result.value is True
     assert result.reason is None
-    assert result.history_count is None
+    assert result.history_count == 30
 
 
 def test_z_score_with_2_history_rows_returns_insufficient_history():

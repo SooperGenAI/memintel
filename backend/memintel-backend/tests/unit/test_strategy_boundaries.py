@@ -1470,3 +1470,133 @@ class TestCrossStrategyInvariants:
         assert len(set(values)) == 1, (
             f"{strategy_cls.__name__}: non-deterministic output across calls: {values}"
         )
+
+
+# ── history_count on normal evaluation paths ──────────────────────────────────
+
+class TestHistoryCountOnNormalPath:
+    """
+    All three history-based strategies (z_score, percentile, change) must
+    populate history_count=len(history) on the normal evaluation path —
+    both when the condition fires and when it does not fire.
+
+    Prior to the fix these strategies only set history_count on early-exit
+    paths (insufficient_history, zero_variance, infinite_change, threshold_zero)
+    but not on the normal path, leaving callers unable to determine how many
+    history points were used in a successful evaluation.
+    """
+
+    def test_zscore_normal_evaluation_has_history_count(self):
+        """
+        z_score normal path (fires): history_count == len(history).
+
+        history = [0.3, 0.4, 0.5, 0.6, 0.7]  mean=0.5, std≈0.141
+        current = 2.5 standard deviations above mean: 0.5 + 2.5*0.141 ≈ 0.853
+        direction='above', threshold=2.0 → fires.
+        history_count must be 5.
+        """
+        import math
+        vals = [0.3, 0.4, 0.5, 0.6, 0.7]
+        mean = sum(vals) / len(vals)
+        std = math.sqrt(sum((v - mean) ** 2 for v in vals) / len(vals))
+        current_val = mean + 2.5 * std   # 2.5 sigma above mean → fires
+
+        s = ZScoreStrategy()
+        r = s.evaluate(
+            _r(current_val),
+            _hist(*vals),
+            {"direction": "above", "threshold": 2.0},
+        )
+        assert r.value is True, f"Expected to fire, got value={r.value}"
+        assert r.history_count == 5, (
+            f"Normal fire path must set history_count=5, got {r.history_count}"
+        )
+
+    def test_zscore_normal_no_fire_has_history_count(self):
+        """
+        z_score normal path (does NOT fire): history_count is also set.
+
+        Same history as above; current = mean (z=0) → does not exceed threshold.
+        history_count must still be 5.
+        """
+        vals = [0.3, 0.4, 0.5, 0.6, 0.7]
+        mean = sum(vals) / len(vals)
+
+        s = ZScoreStrategy()
+        r = s.evaluate(
+            _r(mean),
+            _hist(*vals),
+            {"direction": "above", "threshold": 2.0},
+        )
+        assert r.value is False
+        assert r.history_count == 5, (
+            f"Normal no-fire path must set history_count=5, got {r.history_count}"
+        )
+
+    def test_percentile_normal_evaluation_has_history_count(self):
+        """
+        percentile normal path (fires): history_count == len(history).
+
+        history = [0.1, 0.2, 0.3, 0.4, 0.5]
+        current = 0.8 → top 30% threshold = percentile(70) = 0.42; 0.8 > 0.42 → fires.
+        history_count must be 5.
+        """
+        s = PercentileStrategy()
+        r = s.evaluate(
+            _r(0.8),
+            _hist(0.1, 0.2, 0.3, 0.4, 0.5),
+            {"direction": "top", "value": 30},
+        )
+        assert r.value is True, f"Expected to fire, got value={r.value}"
+        assert r.history_count == 5, (
+            f"Normal fire path must set history_count=5, got {r.history_count}"
+        )
+
+    def test_change_normal_evaluation_has_history_count(self):
+        """
+        change normal path (fires): history_count == len(history).
+
+        history = [0.3, 0.4, 0.5, 0.6, 0.7]  previous = history[-1] = 0.7
+        current = 0.9  pct_change = (0.9 - 0.7) / 0.7 ≈ 0.286 > 0.1 (increase) → fires.
+        history_count must be 5.
+        """
+        s = ChangeStrategy()
+        r = s.evaluate(
+            _r(0.9),
+            _hist(0.3, 0.4, 0.5, 0.6, 0.7),
+            {"direction": "increase", "value": 0.1},
+        )
+        assert r.value is True, f"Expected to fire, got value={r.value}"
+        assert r.history_count == 5, (
+            f"Normal fire path must set history_count=5, got {r.history_count}"
+        )
+
+    def test_history_count_none_for_threshold_strategy(self):
+        """
+        ThresholdStrategy does not use history — history_count is always None.
+        """
+        s = ThresholdStrategy()
+        r = s.evaluate(
+            _r(20.0),
+            [],
+            {"direction": "above", "value": 10.0},
+        )
+        assert r.value is True
+        assert r.history_count is None, (
+            f"ThresholdStrategy must never set history_count, got {r.history_count}"
+        )
+
+    def test_history_count_none_for_equals_strategy(self):
+        """
+        EqualsStrategy does not use history — history_count is always None.
+        """
+        s = EqualsStrategy()
+        r = s.evaluate(
+            _r("enterprise", "categorical"),
+            [],
+            {"value": "enterprise", "labels": ["free", "enterprise"]},
+        )
+        assert r.value == "enterprise"
+        assert r.history_count is None, (
+            f"EqualsStrategy must never set history_count, got {r.history_count}"
+        )

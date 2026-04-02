@@ -130,4 +130,7 @@ class ChangeStrategy(ConditionStrategy):
         else:  # any
             fired = abs(pct_change) > threshold
 
-        return self._boolean_decision(fired, result, condition_id, condition_version)
+        return self._boolean_decision(
+            fired, result, condition_id, condition_version,
+            history_count=len(history),
+        )

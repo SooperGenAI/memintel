@@ -131,4 +131,7 @@ class ZScoreStrategy(ConditionStrategy):
         else:  # any
             fired = abs(z) > threshold
 
-        return self._boolean_decision(fired, result, condition_id, condition_version)
+        return self._boolean_decision(
+            fired, result, condition_id, condition_version,
+            history_count=len(history),
+        )

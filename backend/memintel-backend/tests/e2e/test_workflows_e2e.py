@@ -397,9 +397,10 @@ def test_history_accumulation_enables_stateful_strategies(
         "If False: history ordering is wrong — oldest value (0.0) was used as 'previous' "
         "instead of most recent (0.9)."
     )
-    # Note: ChangeStrategy._boolean_decision() for normal evaluation path does NOT
-    # include history_count in the return. history_count is None in the response.
-    # This is expected — only the 'insufficient_history' early-return path sets it.
+    # ChangeStrategy normal evaluation path sets history_count=len(history).
+    assert body.get("history_count") is not None, (
+        "ChangeStrategy normal path must set history_count"
+    )
 
 
 # ── Workflow 2 ─────────────────────────────────────────────────────────────────

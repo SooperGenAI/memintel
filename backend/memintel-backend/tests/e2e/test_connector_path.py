@@ -736,8 +736,7 @@ def test_history_accumulates_via_connector(mock_connector_e2e_client):
             last_body = r.json()
 
     # 4th execution: history minimum is met — reason must not be "insufficient_history"
-    # Note: the z_score strategy does NOT populate history_count on the normal evaluation
-    # path (only on "insufficient_history" and "zero_variance" early exits).
+    # z_score normal evaluation path now sets history_count=len(history).
     assert last_body is not None
     reason = last_body["decision"].get("reason")
     assert reason != "insufficient_history", (
@@ -747,6 +746,11 @@ def test_history_accumulates_via_connector(mock_connector_e2e_client):
     # Confirm a real evaluation occurred (not blocked by a history gate)
     assert reason is None or reason in ("zero_variance",), (
         f"Unexpected reason after history accumulated: {reason!r}"
+    )
+    # history_count is now populated on the normal evaluation path
+    history_count = last_body["decision"].get("history_count")
+    assert history_count is not None and history_count >= 3, (
+        f"Expected history_count >= 3 on 4th execution, got {history_count}"
     )
 
 
