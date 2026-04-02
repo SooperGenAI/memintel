@@ -410,3 +410,157 @@ async def seed_task(
             context_version, guardrails_version,
         )
         return row["task_id"]
+
+
+# ── MockLLMClient injection fixtures ───────────────────────────────────────────
+#
+# These fixtures extend the standard e2e_client by overriding the
+# get_task_authoring_service FastAPI dependency so that the TaskAuthoringService
+# receives a MockLLMClient instead of the real LLM client.
+#
+# Injection approach: FastAPI app.dependency_overrides replaces the dependency
+# at the app level without modifying any production code.  The override
+# function rebuilds TaskAuthoringService with the same stores and guardrails
+# that the original dependency would have used, but substitutes the mock LLM.
+#
+# The optional ``guardrails`` parameter lets individual tests inject specific
+# guardrails configurations directly (bypassing the guardrails_store lookup)
+# to test guardrails-dependent behaviour without requiring a live
+# GuardrailsStore or POST /guardrails HTTP calls.
+
+from app.api.routes.tasks import get_task_authoring_service
+from app.persistence.db import get_db
+from app.registry.definitions import DefinitionRegistry
+from app.services.task_authoring import TaskAuthoringService
+from app.stores import ContextStore, DefinitionStore, TaskStore
+from tests.mocks.mock_llm_client import MockLLMClient
+
+
+def _make_mock_override(
+    mock_llm: MockLLMClient,
+    guardrails=None,
+):
+    """
+    Return a FastAPI dependency override that wires MockLLMClient into
+    TaskAuthoringService.
+
+    Parameters
+    ──────────
+    mock_llm:   The MockLLMClient instance to inject.
+    guardrails: Optional Guardrails object to inject directly (bypasses the
+                guardrails_store lookup).  When None, reads from app.state
+                as the normal dependency would.
+    """
+    import asyncpg
+    from fastapi import Depends, Request
+
+    async def _override(
+        request: Request,
+        pool: asyncpg.Pool = Depends(get_db),
+    ) -> TaskAuthoringService:
+        task_store = TaskStore(pool)
+        definition_registry = DefinitionRegistry(store=DefinitionStore(pool))
+        guardrails_store = getattr(request.app.state, "guardrails_store", None)
+
+        # Use caller-supplied guardrails when provided; otherwise fall back to
+        # the store (which may be None in the test app → no guardrails).
+        if guardrails is not None:
+            effective_guardrails = guardrails
+        else:
+            effective_guardrails = (
+                guardrails_store.get_guardrails()
+                if guardrails_store is not None and guardrails_store.is_loaded()
+                else None
+            )
+
+        return TaskAuthoringService(
+            task_store=task_store,
+            definition_registry=definition_registry,
+            guardrails=effective_guardrails,
+            context_store=ContextStore(pool),
+            guardrails_store=guardrails_store,
+            llm_client=mock_llm,
+        )
+
+    return _override
+
+
+@pytest.fixture
+def mock_llm_e2e_client(e2e_setup):
+    """
+    Function-scoped fixture — yields (client, pool, run_db, mock_llm).
+
+    Identical to ``e2e_client`` but injects MockLLMClient into
+    TaskAuthoringService so that POST /tasks is exercisable without a live LLM.
+
+    client   — Starlette TestClient with full HTTP stack
+    pool     — asyncpg pool for direct DB access (seeding/querying)
+    run_db   — helper: run_db(coro) executes async SQL in the fixture loop
+    mock_llm — the MockLLMClient instance (exposes call_count, last_intent, …)
+    """
+    pool, run_db = e2e_setup
+    mock_llm = MockLLMClient()
+    app = _make_e2e_app()
+    app.dependency_overrides[get_task_authoring_service] = _make_mock_override(mock_llm)
+
+    try:
+        with TestClient(app, raise_server_exceptions=True) as client:
+            yield client, pool, run_db, mock_llm
+    except RuntimeError as exc:
+        if "Cannot connect" in str(exc):
+            pytest.skip(f"Test database unavailable: {exc}")
+            return
+        raise
+
+
+def make_mock_llm_app(guardrails=None) -> tuple[Any, MockLLMClient]:
+    """
+    Build a FastAPI test app with MockLLMClient injected, plus optional
+    direct guardrails injection.
+
+    Returns (app, mock_llm).  Callers wrap this in a TestClient.
+    Used by tests that need custom guardrails (Tests 4, 5).
+    """
+    mock_llm = MockLLMClient()
+    app = _make_e2e_app()
+    app.dependency_overrides[get_task_authoring_service] = _make_mock_override(
+        mock_llm, guardrails=guardrails
+    )
+    return app, mock_llm
+
+
+@pytest.fixture
+def mock_llm_e2e_client_with_guardrails(e2e_setup):
+    """
+    Factory fixture — yields a callable that produces (client, pool, run_db, mock_llm)
+    with caller-supplied Guardrails injected into TaskAuthoringService.
+
+    Usage in test::
+
+        def test_foo(mock_llm_e2e_client_with_guardrails, api_headers):
+            make_client = mock_llm_e2e_client_with_guardrails
+            guardrails = Guardrails(...)
+            with make_client(guardrails) as (client, pool, run_db, mock_llm):
+                r = client.post("/tasks", json={...}, headers=api_headers)
+    """
+    from contextlib import contextmanager
+
+    pool, run_db = e2e_setup
+
+    @contextmanager
+    def _make(guardrails=None):
+        mock_llm = MockLLMClient()
+        app = _make_e2e_app()
+        app.dependency_overrides[get_task_authoring_service] = _make_mock_override(
+            mock_llm, guardrails=guardrails
+        )
+        try:
+            with TestClient(app, raise_server_exceptions=True) as client:
+                yield client, pool, run_db, mock_llm
+        except RuntimeError as exc:
+            if "Cannot connect" in str(exc):
+                pytest.skip(f"Test database unavailable: {exc}")
+                return
+            raise
+
+    yield _make
