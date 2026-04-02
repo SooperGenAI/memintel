@@ -192,7 +192,7 @@ async def get_task(
     HTTP 404 — task not found.
     """
     task = await store.get(task_id)
-    if task is None:
+    if task is None or task.status == TaskStatus.DELETED:
         raise NotFoundError(f"Task '{task_id}' not found.", location="task_id")
     return task
 

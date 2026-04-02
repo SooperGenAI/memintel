@@ -849,11 +849,17 @@ class ExecuteService:
             primitive_collector=primitive_collector,
         )
 
+        # Task status (paused, deleted) is not checked here. evaluate_full takes
+        # concept_id/condition_id directly and evaluates regardless of task status.
+        # The scheduler layer (Canvas) is responsible for not dispatching evaluations
+        # for paused or deleted tasks.
+
         # φ: evaluate condition strategy.
         decision = await self._evaluate_strategy(
             condition, concept_result, req.entity, req.timestamp, executor, resolver
         )
-        await self._store_concept_result(concept_result, condition.concept_id)
+        if not getattr(req, "dry_run", False):
+            await self._store_concept_result(concept_result, condition.concept_id)
 
         # α: load and trigger bound actions (best-effort).
         actions = await self._fetch_bound_actions(req.condition_id, req.condition_version)
@@ -933,7 +939,8 @@ class ExecuteService:
                     error=str(exc),
                 )
 
-        asyncio.create_task(_record_decision())
+        if not getattr(req, "dry_run", False):
+            asyncio.create_task(_record_decision())
 
         log.info(
             "service_evaluate_full",

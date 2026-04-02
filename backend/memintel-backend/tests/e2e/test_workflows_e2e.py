@@ -27,15 +27,14 @@ WF-N3  evaluate_full does NOT check task status.
     Paused and deleted tasks can still be evaluated via evaluate_full by
     passing their concept/condition IDs. Task status (paused, deleted) is
     a task management concept only — it is NOT enforced on the execution path.
-    This is documented as actual behaviour in the lifecycle test.
+    The scheduler (Canvas) is responsible for not dispatching evaluations for
+    paused or deleted tasks. This is by design and documented in evaluate_full().
 
-WF-N4  dry_run=True DOES write a decision record.
-    asyncio.create_task(_record_decision()) is called unconditionally in
-    evaluate_full, regardless of dry_run flag. The record is written with
-    dry_run=True in the decisions table. concept_results are also written
-    on dry_run (no early exit before _store_concept_result). Only actions
-    receive 'would_trigger' status instead of 'triggered'.
-    Bug/Gap: the spec implies dry_run prevents audit trail writes — it does not.
+WF-N4  dry_run=True is a pure simulation — no audit trail writes (BUG-WF-1/2 fixed).
+    asyncio.create_task(_record_decision()) is guarded by `if not dry_run`.
+    _store_concept_result() is guarded by `if not dry_run`.
+    Only actions receive 'would_trigger' status instead of 'triggered'.
+    dry_run executions produce zero side effects — no decisions, no history.
 
 WF-N5  Guardrails strategy constraints require guardrails_store to be loaded.
     In the test environment, app.state.guardrails_store = None. The
@@ -423,10 +422,12 @@ def test_task_lifecycle_state_transitions(
     - Paused task (Step 4): evaluate_full STILL returns HTTP 200 with evaluated
       decision. Actions fire normally because the pipeline is unaware of task status.
       The 'paused' status is a task management intent, not an execution gate.
+      The scheduler (Canvas) is responsible for not dispatching evaluations for
+      paused tasks — this design is intentional.
     - Deleted task (Step 8): same as paused — evaluate_full returns HTTP 200.
-    - GET /tasks/{id} for a deleted task: returns HTTP 200 with status='deleted'
-      (TaskStore.get() returns all tasks including deleted; route raises 404 only
-      when the row is absent entirely).
+      The scheduler (Canvas) is responsible for not dispatching for deleted tasks.
+    - GET /tasks/{id} for a deleted task: returns HTTP 404.
+      Route checks task.status == 'deleted' and raises NotFoundError (FIX 2).
 
     Steps
     -----
@@ -434,12 +435,12 @@ def test_task_lifecycle_state_transitions(
     2  POST /evaluate/full for active task → HTTP 200, decision evaluated
     3  PATCH /tasks/{id} status='paused' → HTTP 200
     4  POST /evaluate/full for paused task's conditions → HTTP 200, decision fires
-       (ACTUAL: pipeline does not check task.status)
+       (by design: pipeline does not check task.status; Canvas handles scheduling)
     5  PATCH /tasks/{id} status='active' → HTTP 200
     6  POST /evaluate/full again → HTTP 200, same evaluation
-    7  DELETE /tasks/{id} → HTTP 200, GET → HTTP 200 status='deleted'
+    7  DELETE /tasks/{id} → HTTP 200, GET → HTTP 404 (deleted tasks are not found)
     8  POST /evaluate/full for deleted task's conditions → HTTP 200 (pipeline
-       does not check task.status for deleted tasks either)
+       does not check task.status; Canvas handles scheduling)
     """
     client, pool, run_db = e2e_client
 
@@ -581,20 +582,19 @@ def test_task_lifecycle_state_transitions(
     deleted_task = r.json()
     assert deleted_task["status"] == "deleted"
 
-    # GET after delete: TaskStore.get() returns deleted rows; route raises 404
-    # only when the row is absent entirely. Deleted tasks return HTTP 200 with
-    # status='deleted'.
+    # GET after delete → HTTP 404. The route checks task.status == 'deleted'
+    # and raises NotFoundError. Deleted tasks are not accessible via GET /tasks/{id}.
     r = client.get(f"/tasks/{task_id}", headers=api_headers)
-    assert r.status_code == 200, (
-        "Step 7 GET after delete: expected HTTP 200 with status='deleted'. "
+    assert r.status_code == 404, (
+        "Step 7 GET after delete: expected HTTP 404 for deleted task. "
         f"Got {r.status_code}: {r.text}"
     )
-    assert r.json()["status"] == "deleted"
 
     # ── Step 8: Evaluate deleted task's conditions ─────────────────────────────
-    # ACTUAL BEHAVIOUR: evaluate_full still returns HTTP 200. The pipeline does
-    # not check whether any task referencing these condition IDs is deleted.
-    # A 'deleted' task's conditions can still be evaluated via evaluate_full.
+    # BY DESIGN: evaluate_full returns HTTP 200. evaluate_full takes
+    # concept_id/condition_id directly — it does not check task status.
+    # The scheduler (Canvas) is responsible for not dispatching evaluations
+    # for deleted tasks. Manual evaluate_full calls still work.
     r = client.post(
         "/evaluate/full",
         json={
@@ -607,12 +607,12 @@ def test_task_lifecycle_state_transitions(
         headers=api_headers,
     )
     assert r.status_code == 200, (
-        "Step 8: evaluate_full for deleted task's conditions returns HTTP 200. "
+        "Step 8: evaluate_full for deleted task's conditions returns HTTP 200 "
+        "(by design — Canvas is responsible for not dispatching deleted tasks). "
         f"Got {r.status_code}: {r.text}"
     )
-    # Actions still fire because the pipeline is unaware of task deletion
     assert r.json()["decision"]["value"] is True, (
-        "Step 8: decision still evaluates normally for deleted task conditions"
+        "Step 8: pipeline evaluates normally; task.status is not checked here"
     )
 
     # ── Verify PATCH on deleted task → HTTP 409 ────────────────────────────────
@@ -639,33 +639,28 @@ def test_dry_run_does_not_fire_actions_or_write_records(
     e2e_client, api_headers, elevated_headers
 ):
     """
-    Workflow 3: dry_run=True behaviour investigation.
+    Workflow 3: dry_run=True is a pure simulation — no audit trail writes.
 
     SPECIFICATION INTENT: dry_run should not fire actions and should not write
     audit records (decisions, concept_results).
 
-    ACTUAL BEHAVIOUR (see WF-N4 at module top):
-    ─────────────────────────────────────────────
-    Actions:        dry_run=True → all actions get status='would_trigger'. ✓ Correct.
-    Decisions:      asyncio.create_task(_record_decision()) is called unconditionally.
-                    A decision record IS written with dry_run=True in the column.
-                    BUG/GAP: dry_run does NOT prevent the audit trail write.
-    concept_results: _store_concept_result() is called unconditionally after
-                    _evaluate_strategy(). concept_results ARE written on dry_run.
-                    BUG/GAP: dry_run does NOT prevent history accumulation.
-
-    The test documents these deviations. The assertions reflect what actually
-    happens — not what the spec intends — with clear documentation.
+    ACTUAL BEHAVIOUR (BUG-WF-1 / BUG-WF-2 fixed):
+    ─────────────────────────────────────────────────
+    Actions:         dry_run=True → all actions get status='would_trigger'. ✓ Correct.
+    Decisions:       asyncio.create_task(_record_decision()) is guarded by dry_run.
+                     No decision record is written when dry_run=True. ✓ Fixed.
+    concept_results: _store_concept_result() is guarded by dry_run.
+                     No concept_result is written when dry_run=True. ✓ Fixed.
 
     Determinism (Step 6): same timestamp → identical result is verified.
 
     Steps
     -----
     1  POST /evaluate/full dry_run=True → decision evaluated, all actions 'would_trigger'
-    2  Wait for async task; count decisions → expect +1 with dry_run=True (not 0)
-    3  Count concept_results → expect +1 (not 0)
+    2  Wait briefly; count decisions → expect 0 (no record written on dry_run)
+    3  Count concept_results → expect 0 (no history accumulated on dry_run)
     4  POST /evaluate/full without dry_run → actions 'triggered'
-    5  Count decisions → expect another +1 with dry_run=False
+    5  Count decisions → expect +1 with dry_run=False
     6  Same timestamp as Step 4 → identical result (determinism guarantee)
     """
     client, pool, run_db = e2e_client
@@ -739,48 +734,27 @@ def test_dry_run_does_not_fire_actions_or_write_records(
             f"Step 1: dry_run=True: expected status='would_trigger', got {action['status']!r}"
         )
 
-    # ── Step 2: Verify decision record written (with dry_run=True) ────────────
-    # asyncio.create_task schedules the DB write; wait briefly for it to execute.
+    # ── Step 2: Verify NO decision record written on dry_run ──────────────────
+    # asyncio.create_task is guarded by dry_run; wait briefly to confirm nothing fires.
     time.sleep(0.5)
 
     decisions_after_dry = run_db(_count_decisions())
 
-    # ACTUAL BEHAVIOUR: dry_run DOES write a decision record.
-    # The record has dry_run=True in the decisions table.
-    # BUG: The implementation always records, regardless of dry_run flag.
-    assert decisions_after_dry == decisions_before + 1, (
-        f"BUG CONFIRMED: dry_run=True wrote a decision record. "
-        f"Count: {decisions_before} → {decisions_after_dry} (expected {decisions_before + 1}). "
-        "Decision records are written unconditionally via asyncio.create_task."
+    # FIX BUG-WF-1: dry_run=True must NOT write a decision record.
+    assert decisions_after_dry == decisions_before, (
+        f"dry_run=True must not write a decision record. "
+        f"Count: {decisions_before} → {decisions_after_dry} (expected {decisions_before}). "
+        "asyncio.create_task(_record_decision()) is now guarded by `if not dry_run`."
     )
 
-    # Verify the written record has dry_run=True
-    async def _latest_decision_dry_run():
-        return await pool.fetchval(
-            """
-            SELECT dry_run FROM decisions
-            WHERE condition_id = $1 AND entity_id = $2
-            ORDER BY evaluated_at DESC
-            LIMIT 1
-            """,
-            _W3_COND_ID, ENTITY,
-        )
-
-    dry_run_flag = run_db(_latest_decision_dry_run())
-    assert dry_run_flag is True, (
-        f"Expected dry_run=True in the written decision record, got {dry_run_flag}"
-    )
-
-    # ── Step 3: Verify concept_result written (even on dry_run) ───────────────
+    # ── Step 3: Verify NO concept_result written on dry_run ───────────────────
     results_after_dry = run_db(_count_concept_results())
 
-    # ACTUAL BEHAVIOUR: concept_results ARE written on dry_run.
-    # _store_concept_result is called after _evaluate_strategy, unconditionally.
-    # BUG: history accumulates during dry_run executions.
-    assert results_after_dry == results_before + 1, (
-        f"BUG CONFIRMED: dry_run=True wrote to concept_results. "
-        f"Count: {results_before} → {results_after_dry}. "
-        "_store_concept_result runs unconditionally after strategy evaluation."
+    # FIX BUG-WF-2: dry_run=True must NOT write to concept_results.
+    assert results_after_dry == results_before, (
+        f"dry_run=True must not write to concept_results. "
+        f"Count: {results_before} → {results_after_dry} (expected {results_before}). "
+        "_store_concept_result is now guarded by `if not dry_run`."
     )
 
     # ── Step 4: Real execution (dry_run=False) ─────────────────────────────────
