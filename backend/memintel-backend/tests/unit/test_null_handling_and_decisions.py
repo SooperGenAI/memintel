@@ -296,8 +296,9 @@ class TestDecisionPersistence:
         #             input_primitives, signal_errors, reason, action_ids_fired, dry_run
         args = pool.decision_inserts[0]
         concept_value = args[6]  # 7th arg (0-indexed = 6)
-        # revenue=0 (missing with zero policy → normalize(0) = 0.0); concept_value = 0.0
-        assert concept_value == 0.0
+        # DecisionStore serializes concept_value to TEXT before INSERT:
+        # revenue=0 (missing with zero policy → normalize(0) = 0.0) → "0.0"
+        assert concept_value == "0.0"
 
     def test_decision_record_contains_correct_threshold_applied(self):
         """Test 8: decision record contains correct threshold_applied (full params)."""

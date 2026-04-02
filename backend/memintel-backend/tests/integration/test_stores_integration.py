@@ -26,15 +26,12 @@ BUG-6-2   decisions.concept_value is DOUBLE PRECISION — Python str values
           DOUBLE PRECISION column. record() raises an asyncpg encoding error
           at INSERT time.
 
-Note: BUG-6-1 and BUG-6-2 share the same root cause: the column type must be
-changed (e.g. to TEXT or a separate concept_value_text column) to support the
-full bool | float | int | str | None union declared in DecisionRecord.
+Fixed by migration 0006 (concept_value TEXT) + DecisionStore serialization:
+  - BUG-6-1: bool True now stored as "True", retrieved as True
+  - BUG-6-2: str "high_risk" now stored and retrieved correctly
 
-BUG-7-1   definitions.uq_definition_version is UNIQUE (definition_id, version)
-          without namespace. promote() tries to INSERT a second row with the
-          same (definition_id, version) but a different namespace, which always
-          raises UniqueViolationError. Fix: change constraint to
-          UNIQUE (definition_id, version, namespace).
+Fixed by migration 0007 (definitions unique with namespace):
+  - BUG-7-1: promote() now succeeds — constraint is (definition_id, version, namespace)
 """
 from __future__ import annotations
 
@@ -292,22 +289,13 @@ class TestDefinitionStore:
 
     def test_promote_definition(self, db_pool, clean_tables, run):
         """
-        BUG-7-1: promote() cannot copy a definition to another namespace.
+        Register in 'org' namespace → promote to 'team'.
 
-        promote() tries to INSERT a new row with the target namespace, but the
-        DB constraint uq_definition_version is on (definition_id, version)
-        WITHOUT namespace.  Inserting a second row with the same definition_id
-        and version always raises UniqueViolationError regardless of namespace.
-
-        Root cause: the unique constraint should be
-            UNIQUE (definition_id, version, namespace)
-        to allow the same logical definition to exist in multiple namespaces.
-
-        Until the schema is corrected, promote() raises ConflictError for any
-        definition that already exists in any namespace.
+        Migration 0007 fixed BUG-7-1 by widening the unique constraint to
+        (definition_id, version, namespace), allowing the same definition to
+        exist in multiple namespaces. promote() inserts a new row with the
+        target namespace; the original 'org' row is retained unchanged.
         """
-        from app.models.errors import ConflictError
-
         store = DefinitionStore(db_pool)
         run(store.register(
             definition_id="shared_concept",
@@ -317,14 +305,20 @@ class TestDefinitionStore:
             body={"concept": "shared"},
         ))
 
-        with pytest.raises(ConflictError):
-            run(store.promote(
-                definition_id="shared_concept",
-                version="1.0",
-                from_namespace="org",
-                to_namespace="team",
-                elevated_key=False,
-            ))
+        promoted = run(store.promote(
+            definition_id="shared_concept",
+            version="1.0",
+            from_namespace="org",
+            to_namespace="team",
+            elevated_key=False,
+        ))
+        assert promoted.namespace.value == "team"
+        assert promoted.definition_id == "shared_concept"
+        assert promoted.version == "1.0"
+
+        # Original org row still exists
+        org_meta = run(store.get_metadata("shared_concept", "1.0"))
+        assert org_meta is not None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -480,18 +474,11 @@ class TestDecisionStore:
         self, db_pool, clean_tables, run
     ):
         """
-        BUG-6-1 — concept_value=True should round-trip as True (bool), not 1.0 (float).
+        concept_value=True round-trips as True (bool).
 
-        The decisions.concept_value column is DOUBLE PRECISION. PostgreSQL stores
-        Python bool True as 1.0 (float). On retrieval, asyncpg returns 1.0, and
-        Pydantic's DecisionRecord.concept_value: bool | float | int | str | None
-        resolves 1.0 as float — not as bool — because 1.0 is not an exact bool.
-
-        EXPECTED (correct): fetched.concept_value is True
-        ACTUAL (buggy):     fetched.concept_value == 1.0
-
-        Fix: change the column type from DOUBLE PRECISION to TEXT or add a
-        separate concept_value_bool / concept_value_text column.
+        Fixed by migration 0006: concept_value column is now TEXT.
+        DecisionStore serializes True → "True" on INSERT and deserializes
+        "True" → True on SELECT.
         """
         store = DecisionStore(db_pool)
         d = DecisionRecord(
@@ -501,35 +488,23 @@ class TestDecisionStore:
             condition_version="1.0",
             entity_id="ent_bool",
             fired=True,
-            concept_value=True,   # bool — stored in DOUBLE PRECISION column
+            concept_value=True,
             dry_run=False,
         )
         decision_id = run(store.record(d))
         fetched = run(store.get(decision_id))
         assert fetched is not None
-        # BUG-6-1: this assertion fails — actual value is 1.0 (float), not True (bool)
-        assert fetched.concept_value is True, (
-            f"BUG-6-1: concept_value=True was stored as {fetched.concept_value!r} "
-            f"({type(fetched.concept_value).__name__}). "
-            "The decisions.concept_value column type (DOUBLE PRECISION) "
-            "cannot preserve Python bool identity."
-        )
+        assert fetched.concept_value is True
 
     def test_concept_value_str_persisted_correctly(
         self, db_pool, clean_tables, run
     ):
         """
-        BUG-6-2 — concept_value='high_risk' should round-trip as 'high_risk' (str).
+        concept_value='high_risk' round-trips as 'high_risk' (str).
 
-        The decisions.concept_value column is DOUBLE PRECISION. asyncpg cannot
-        encode a Python str as float8 — it raises a DataError at INSERT time.
-        This means string concept values (e.g. from equals strategy on categorical
-        concepts) cannot be recorded in the decisions table at all.
-
-        EXPECTED (correct): fetched.concept_value == "high_risk"
-        ACTUAL (buggy):     asyncpg.DataError raised at store.record() time.
-
-        Fix: same as BUG-6-1 — change the column type or add a parallel text column.
+        Fixed by migration 0006: concept_value column is now TEXT.
+        DecisionStore stores the string as-is on INSERT and returns it
+        unchanged on SELECT (float() parse fails → str fallback path).
         """
         store = DecisionStore(db_pool)
         d = DecisionRecord(
@@ -539,17 +514,13 @@ class TestDecisionStore:
             condition_version="1.0",
             entity_id="ent_str",
             fired=True,
-            concept_value="high_risk",   # str — cannot encode for DOUBLE PRECISION
+            concept_value="high_risk",
             dry_run=False,
         )
         decision_id = run(store.record(d))
         fetched = run(store.get(decision_id))
         assert fetched is not None
-        # BUG-6-2: this assertion is never reached — record() raises an encoding error
-        assert fetched.concept_value == "high_risk", (
-            f"BUG-6-2: concept_value='high_risk' was stored as {fetched.concept_value!r}. "
-            "The decisions.concept_value DOUBLE PRECISION column cannot store strings."
-        )
+        assert fetched.concept_value == "high_risk"
 
     def test_list_decisions_by_entity(self, db_pool, clean_tables, run):
         """

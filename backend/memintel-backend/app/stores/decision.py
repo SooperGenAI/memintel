@@ -68,7 +68,7 @@ class DecisionStore:
             decision.condition_version,
             decision.entity_id,
             decision.fired,
-            decision.concept_value,
+            str(decision.concept_value) if decision.concept_value is not None else None,
             json.dumps(decision.threshold_applied) if decision.threshold_applied is not None else None,
             decision.ir_hash,
             json.dumps(decision.input_primitives) if decision.input_primitives is not None else None,
@@ -146,6 +146,35 @@ def _parse_jsonb(raw: Any) -> Any:
     return raw
 
 
+def _parse_concept_value(raw: str | None) -> bool | float | int | str | None:
+    """
+    Deserialise concept_value from the TEXT column.
+
+    Serialisation contract (DecisionStore.record):
+      None          → NULL
+      True          → "True"
+      False         → "False"
+      float/int     → str(value)   e.g. "1.87", "42"
+      str           → stored as-is e.g. "high_risk"
+
+    Deserialisation order:
+      1. NULL → None
+      2. Try float() — covers "1.87", "42", "-0.5", etc.
+      3. Check "True" / "False" — returns the corresponding bool
+      4. Fall through → return the raw string unchanged
+    """
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (ValueError, TypeError):
+        if raw == "True":
+            return True
+        if raw == "False":
+            return False
+        return raw
+
+
 def _row_to_record(row: Any) -> DecisionRecord:
     return DecisionRecord(
         decision_id=row["decision_id"],
@@ -156,7 +185,7 @@ def _row_to_record(row: Any) -> DecisionRecord:
         entity_id=row["entity_id"],
         evaluated_at=row.get("evaluated_at"),
         fired=row["fired"],
-        concept_value=row.get("concept_value"),
+        concept_value=_parse_concept_value(row.get("concept_value")),
         threshold_applied=_parse_jsonb(row.get("threshold_applied")),
         ir_hash=row.get("ir_hash"),
         input_primitives=_parse_jsonb(row.get("input_primitives")),
