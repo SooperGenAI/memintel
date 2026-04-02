@@ -19,14 +19,11 @@ Ambiguous behaviours discovered while reading implementations
    reason='no_match' — consistent with null_input shape (also CATEGORICAL/None),
    distinguishable from null_input by the reason field.
 
-4. PercentileStrategy cutoff=0, direction='top': the 100th-percentile of the
-   history equals the maximum value.  The condition fires only when
-   current > max(history), not "never fires."
+4. PercentileStrategy cutoff=0 always returns False with reason='threshold_zero'
+   (guard fires before rank computation — no entity can be in the top/bottom 0%).
 
-5. PercentileStrategy cutoff=100, direction='top': the 0th-percentile equals
-   the minimum value.  The condition fires when current > min(history),
-   meaning it fires for most values — not "always fires" (it still requires
-   strictly above the minimum).
+5. PercentileStrategy cutoff=100 always returns True with reason=None
+   (guard fires before rank computation — every entity is in the top/bottom 100%).
 
 6. ZScoreStrategy with all-identical history produces std=0.  The strategy
    returns False without crashing.
@@ -34,10 +31,11 @@ Ambiguous behaviours discovered while reading implementations
 7. ChangeStrategy with previous=0 returns False without crashing (division
    guard).
 
-8. The service layer in execute.py guards _HISTORY_MIN_RESULTS=3 before
-   calling strategy classes for z_score/percentile/change.  The strategy
-   classes themselves do NOT enforce this floor — they evaluate with whatever
-   history is provided (or return False for empty history).
+8. PercentileStrategy now enforces its own _HISTORY_MIN_RESULTS=3 floor at the
+   strategy class level (reason='insufficient_history').  The service layer in
+   execute.py applies the same guard upstream, so in production the strategy
+   guard is a safety net.  ZScoreStrategy and ChangeStrategy still rely on the
+   service layer guard only — their strategy classes accept any history length.
 """
 from __future__ import annotations
 
@@ -284,73 +282,80 @@ class TestPercentileBoundaries:
         )
         assert r.value is False
 
-    def test_cutoff_zero_top_fires_only_above_max(self):
+    def test_cutoff_zero_top_always_returns_false(self):
         """
-        direction='top', value=0 → threshold = percentile(100) = max(history).
-        current must be STRICTLY greater than max to fire.
-        current=100.0, max=10.0 → fires.
+        direction='top', value=0 → cutoff=0 guard fires before rank computation.
+        'Top 0%' can never be satisfied → always False, reason='threshold_zero'.
+        current=100.0 is above all history but still does NOT fire.
         """
         r = self.s.evaluate(
             _r(100.0), _hist(1.0, 5.0, 10.0),
             {"direction": "top", "value": 0},
         )
-        assert r.value is True
+        assert r.value is False
+        assert r.reason == "threshold_zero"
 
-    def test_cutoff_zero_top_at_max_does_not_fire(self):
+    def test_cutoff_zero_top_at_max_returns_false_threshold_zero(self):
         """
-        direction='top', value=0, current=max(history)=10.0 → does NOT fire.
-        current > percentile(100) means current > max, which is False at max.
+        direction='top', value=0, current=10.0 — guard fires, reason='threshold_zero'.
+        Previously False because strict > at max failed; now False because of guard.
         """
         r = self.s.evaluate(
             _r(10.0), _hist(1.0, 5.0, 10.0),
             {"direction": "top", "value": 0},
         )
         assert r.value is False
+        assert r.reason == "threshold_zero"
 
-    def test_cutoff_zero_bottom_fires_only_below_min(self):
+    def test_cutoff_zero_bottom_always_returns_false(self):
         """
-        direction='bottom', value=0 → threshold = percentile(0) = min(history).
-        current must be STRICTLY less than min to fire.
-        current=0.0, min=1.0 → fires.
+        direction='bottom', value=0 → cutoff=0 guard fires before rank computation.
+        'Bottom 0%' can never be satisfied → always False, reason='threshold_zero'.
+        current=0.0 is below all history but still does NOT fire.
         """
         r = self.s.evaluate(
             _r(0.0), _hist(1.0, 5.0, 10.0),
             {"direction": "bottom", "value": 0},
         )
-        assert r.value is True
+        assert r.value is False
+        assert r.reason == "threshold_zero"
 
-    def test_cutoff_zero_bottom_at_min_does_not_fire(self):
+    def test_cutoff_zero_bottom_at_min_returns_false_threshold_zero(self):
         """
-        direction='bottom', value=0, current=min(history)=1.0 → does NOT fire.
+        direction='bottom', value=0, current=1.0 — guard fires, reason='threshold_zero'.
         """
         r = self.s.evaluate(
             _r(1.0), _hist(1.0, 5.0, 10.0),
             {"direction": "bottom", "value": 0},
         )
         assert r.value is False
+        assert r.reason == "threshold_zero"
 
-    def test_cutoff_100_top_fires_above_min(self):
+    def test_cutoff_100_top_always_fires(self):
         """
-        direction='top', value=100 → threshold = percentile(0) = min(history) = 1.0.
-        Any current > 1.0 fires.  current=2.0 → fires.
-        (cutoff=100 does NOT mean 'always fires' — it still requires > min.)
+        direction='top', value=100 → cutoff=100 guard fires before rank computation.
+        'Top 100%' is always satisfied → always True, reason=None.
+        current=2.0 fires (as before); guard fires regardless of current value.
         """
         r = self.s.evaluate(
             _r(2.0), _hist(1.0, 5.0, 10.0),
             {"direction": "top", "value": 100},
         )
         assert r.value is True
+        assert r.reason is None
 
-    def test_cutoff_100_top_at_min_does_not_fire(self):
+    def test_cutoff_100_top_fires_even_at_min(self):
         """
-        direction='top', value=100, current=min(history)=1.0 → does NOT fire.
-        Strict > means exactly at min does not fire.
+        direction='top', value=100, current=min(history)=1.0 → FIRES.
+        Previously False (strict > at min failed); now True because of cutoff=100 guard.
+        'Top 100%' means every entity qualifies — current value is irrelevant.
         """
         r = self.s.evaluate(
             _r(1.0), _hist(1.0, 5.0, 10.0),
             {"direction": "top", "value": 100},
         )
-        assert r.value is False
+        assert r.value is True
+        assert r.reason is None
 
     def test_all_identical_history_top_does_not_fire_at_history_value(self):
         """
@@ -384,17 +389,17 @@ class TestPercentileBoundaries:
         )
         assert r.value is False
 
-    def test_single_history_item_top(self):
+    def test_single_history_item_returns_insufficient_history(self):
         """
-        Single-item history: percentile(any p) = that single value.
-        direction='top', value=10, history=[5.0], current=6.0 → fires (6 > 5).
-        Strategy class handles single-item history without error.
+        1-item history is below _HISTORY_MIN_RESULTS=3.
+        Strategy returns False with reason='insufficient_history' rather than computing.
         """
         r = self.s.evaluate(
             _r(6.0), _hist(5.0),
             {"direction": "top", "value": 10},
         )
-        assert r.value is True
+        assert r.value is False
+        assert r.reason == "insufficient_history"
 
     def test_null_input_returns_false_with_reason(self):
         """result.value=None → does not fire; reason='null_input'."""
@@ -405,19 +410,83 @@ class TestPercentileBoundaries:
         assert r.value is False
         assert r.reason == "null_input"
 
-    def test_two_history_items_linear_interpolation(self):
+    def test_two_history_items_returns_insufficient_history(self):
         """
-        history=[2.0, 8.0], value=50 (top 50%).
-        percentile(50) of [2.0, 8.0] = 2.0*0.5 + 8.0*0.5 = 5.0.
-        current=5.0 → 5.0 > 5.0 → False.
+        2-item history is below _HISTORY_MIN_RESULTS=3.
+        Strategy returns False with reason='insufficient_history'.
+        """
+        r = self.s.evaluate(
+            _r(5.001), _hist(2.0, 8.0),
+            {"direction": "top", "value": 50},
+        )
+        assert r.value is False
+        assert r.reason == "insufficient_history"
+
+    def test_three_history_items_linear_interpolation(self):
+        """
+        history=[2.0, 5.0, 8.0], value=50 (top 50%).
+        percentile(50) of [2.0, 5.0, 8.0] = 5.0 (middle value).
+        current=5.0 → 5.0 > 5.0 → False (strict >).
         current=5.001 → True.
         """
         s = self.s
         params = {"direction": "top", "value": 50}
-        hist = _hist(2.0, 8.0)
+        hist = _hist(2.0, 5.0, 8.0)
 
         assert s.evaluate(_r(5.0), hist, params).value is False
         assert s.evaluate(_r(5.001), hist, params).value is True
+
+
+    def test_percentile_cutoff_zero_never_fires(self):
+        """
+        cutoff=0 → no entity can be in 'top/bottom 0%'; always returns False.
+        Even with current=0.99 above all history, reason='threshold_zero'.
+        """
+        hist = _hist(0.1, 0.2, 0.3, 0.4, 0.5)
+        r = self.s.evaluate(
+            _r(0.99), hist,
+            {"direction": "top", "value": 0},
+        )
+        assert r.value is False
+        assert r.reason == "threshold_zero"
+
+    def test_percentile_cutoff_100_always_fires(self):
+        """
+        cutoff=100 → every entity is in 'top/bottom 100%'; always returns True.
+        Even with current=0.01 below all history, fires.
+        """
+        hist = _hist(0.1, 0.2, 0.3, 0.4, 0.5)
+        r = self.s.evaluate(
+            _r(0.01), hist,
+            {"direction": "top", "value": 100},
+        )
+        assert r.value is True
+        assert r.reason is None
+
+    def test_percentile_cutoff_zero_after_history_check(self):
+        """
+        cutoff=0 with 2-item history: insufficient_history guard fires FIRST.
+        reason='insufficient_history', NOT 'threshold_zero'.
+        Guards must be ordered: null_input → insufficient_history → cutoff=0 → cutoff=100.
+        """
+        r = self.s.evaluate(
+            _r(99.0), _hist(1.0, 2.0),
+            {"direction": "top", "value": 0},
+        )
+        assert r.value is False
+        assert r.reason == "insufficient_history"
+
+    def test_percentile_cutoff_100_after_history_check(self):
+        """
+        cutoff=100 with 2-item history: insufficient_history guard fires FIRST.
+        reason='insufficient_history', NOT None (normal fire).
+        """
+        r = self.s.evaluate(
+            _r(99.0), _hist(1.0, 2.0),
+            {"direction": "top", "value": 100},
+        )
+        assert r.value is False
+        assert r.reason == "insufficient_history"
 
 
 # ── ZScoreStrategy boundaries ─────────────────────────────────────────────────

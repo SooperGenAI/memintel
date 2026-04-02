@@ -32,6 +32,7 @@ from app.strategies.base import (
 
 _STRATEGY = "percentile"
 _VALID_DIRECTIONS = frozenset({"top", "bottom"})
+_HISTORY_MIN_RESULTS = 3  # minimum history records before rank is meaningful
 
 
 def _percentile(values: list[float], p: float) -> float:
@@ -111,6 +112,28 @@ class PercentileStrategy(ConditionStrategy):
 
         if not history:
             return self._boolean_decision(False, result, condition_id, condition_version)
+
+        if len(history) < _HISTORY_MIN_RESULTS:
+            return self._boolean_decision(
+                False, result, condition_id, condition_version,
+                reason="insufficient_history",
+                history_count=len(history),
+            )
+
+        if cutoff == 0.0:
+            # "Top/bottom 0%" — no entity can rank in a 0% slice; never fires.
+            return self._boolean_decision(
+                False, result, condition_id, condition_version,
+                reason="threshold_zero",
+                history_count=len(history),
+            )
+
+        if cutoff == 100.0:
+            # "Top/bottom 100%" — every entity is in 100% of history; always fires.
+            return self._boolean_decision(
+                True, result, condition_id, condition_version,
+                history_count=len(history),
+            )
 
         sorted_history = sorted(float(h.value) for h in history)
         current = float(result.value)
