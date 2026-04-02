@@ -160,6 +160,13 @@ class CalibrationService:
             )
 
         # 4. Compute adjusted params
+        if self._guardrails_store is None:
+            return CalibrationResult(
+                status=CalibrationStatus.NO_RECOMMENDATION,
+                no_recommendation_reason=NoRecommendationReason.GUARDRAILS_UNAVAILABLE,
+                current_params=current_params,
+            )
+
         bounds        = self._guardrails_store.get_threshold_bounds(condition.strategy.type.value)
         guardrails    = self._guardrails_store.get_guardrails()
         on_exceeded   = guardrails.constraints.on_bounds_exceeded

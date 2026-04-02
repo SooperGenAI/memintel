@@ -54,6 +54,7 @@ from app.models.calibration import FeedbackRequest, FeedbackResponse
 from app.persistence.db import get_db
 from app.registry.definitions import DefinitionRegistry
 from app.services.feedback import FeedbackService
+from app.stores.decision import DecisionStore
 from app.stores.definition import DefinitionStore
 from app.stores.feedback import FeedbackStore
 
@@ -77,9 +78,11 @@ async def get_feedback_service(
     feedback_store = FeedbackStore(pool)
     definition_store = DefinitionStore(pool)
     definition_registry = DefinitionRegistry(store=definition_store)
+    decision_store = DecisionStore(pool)
     return FeedbackService(
         feedback_store=feedback_store,
         definition_registry=definition_registry,
+        decision_store=decision_store,
     )
 
 

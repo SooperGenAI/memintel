@@ -554,6 +554,7 @@ def test_apply_calibration_200() -> None:
     """POST /conditions/apply-calibration with a fresh token returns 200."""
     svc = _MockCalibrationService()
     _app.dependency_overrides[get_calibration_service] = lambda: svc
+    _app.dependency_overrides[require_elevated_key] = lambda: None   # FIX 3: auth required
     try:
         with TestClient(_app) as client:
             r = client.post(
@@ -576,6 +577,7 @@ def test_apply_calibration_400_second_use() -> None:
     """
     svc = _MockCalibrationService()
     _app.dependency_overrides[get_calibration_service] = lambda: svc
+    _app.dependency_overrides[require_elevated_key] = lambda: None   # FIX 3: auth required
     try:
         with TestClient(_app) as client:
             # First use must succeed.

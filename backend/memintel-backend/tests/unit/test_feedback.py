@@ -129,17 +129,59 @@ class MockDefinitionRegistry:
         return {"condition_id": definition_id, "version": version}
 
 
+class MockDecisionStore:
+    """
+    Decision store stub for unit tests.
+
+    decision_found=True  → find_by_condition_entity_timestamp returns a fake record.
+    decision_found=False → find_by_condition_entity_timestamp returns None → 404.
+    """
+
+    def __init__(self, decision_found: bool = True):
+        self._decision_found = decision_found
+        self.find_calls: list[tuple] = []
+
+    async def find_by_condition_entity_timestamp(
+        self,
+        condition_id: str,
+        condition_version: str,
+        entity_id: str,
+        timestamp: str,
+    ) -> "FeedbackRecord | None":
+        self.find_calls.append((condition_id, condition_version, entity_id, timestamp))
+        if not self._decision_found:
+            return None
+        # Return a minimal stub — FeedbackService only checks for None.
+        from app.models.decision import DecisionRecord
+        return DecisionRecord(
+            decision_id="mock-001",
+            concept_id="org.mock_concept",
+            concept_version="1.0",
+            condition_id=condition_id,
+            condition_version=condition_version,
+            entity_id=entity_id,
+            fired=True,
+            concept_value=0.85,
+        )
+
+
 def _make_service(
     *,
     condition_registered: bool = True,
     condition_id: str = "org.churn_risk",
     condition_version: str = "1.0",
+    decision_found: bool = True,
 ) -> tuple[FeedbackService, MockFeedbackStore, MockDefinitionRegistry]:
     registry = MockDefinitionRegistry()
     if condition_registered:
         registry.seed(condition_id, condition_version)
     fb_store = MockFeedbackStore()
-    svc = FeedbackService(feedback_store=fb_store, definition_registry=registry)
+    decision_store = MockDecisionStore(decision_found=decision_found)
+    svc = FeedbackService(
+        feedback_store=fb_store,
+        definition_registry=registry,
+        decision_store=decision_store,
+    )
     return svc, fb_store, registry
 
 

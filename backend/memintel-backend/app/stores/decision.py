@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import structlog
+from datetime import datetime
 from typing import Any
 
 import asyncpg
@@ -98,6 +99,51 @@ class DecisionStore:
             WHERE decision_id = $1::uuid
             """,
             decision_id,
+        )
+        if row is None:
+            return None
+        return _row_to_record(row)
+
+    async def find_by_condition_entity_timestamp(
+        self,
+        condition_id: str,
+        condition_version: str,
+        entity_id: str,
+        timestamp: str,
+    ) -> "DecisionRecord | None":
+        """
+        Find a decision record by (condition_id, condition_version, entity_id, evaluated_at).
+        Returns None when not found or when timestamp cannot be parsed.
+
+        timestamp must be an ISO 8601 string; 'Z' suffix is treated as UTC.
+        asyncpg requires a Python datetime — the string is parsed here.
+        """
+        try:
+            ts: datetime = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            return None
+
+        row = await self._pool.fetchrow(
+            f"""
+            SELECT
+                decision_id::text,
+                concept_id, concept_version,
+                condition_id, condition_version,
+                entity_id, evaluated_at,
+                fired, concept_value,
+                threshold_applied, ir_hash,
+                input_primitives, signal_errors,
+                reason, action_ids_fired, dry_run
+            FROM {_TABLE}
+            WHERE condition_id = $1
+              AND condition_version = $2
+              AND entity_id = $3
+              AND evaluated_at = $4
+            """,
+            condition_id,
+            condition_version,
+            entity_id,
+            ts,
         )
         if row is None:
             return None

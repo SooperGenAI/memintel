@@ -33,26 +33,28 @@ W4  Async jobs stay in QUEUED state.
     running in the test environment. GET /jobs/{job_id} returns status=queued
     indefinitely. Pipeline 3 documents this gap explicitly.
 
-Gaps found (discrepancies between docs and implementation)
+Fixes applied (gaps resolved)
 ──────────────────────────────────────────────────────────
-G1  POST /feedback/decision — docs say "feedback must reference a real
-    decision"; implementation only validates the condition is registered.
-    No decision-record lookup occurs. Confirmed in test_feedback_no_decision.
+FIX 1 (G1)  POST /feedback/decision now validates that a decision record exists
+    for (condition_id, condition_version, entity, timestamp). Returns HTTP 404
+    if no matching record. Confirmed in test_feedback_no_decision_gap.
 
-G2  POST /decisions/explain — docs say "HTTP 404 — no decision record found";
-    implementation re-executes the concept deterministically. It never looks
-    up the decisions table. The "decision" in the response is synthesised,
-    not replayed from history.
+FIX 2 (G2)  POST /decisions/explain now looks up the stored decision record
+    instead of re-executing. Returns HTTP 404 if no record found. Confirmed in
+    test_explain_pipeline.
 
-G3  POST /conditions/apply-calibration — spec implies elevated key required;
-    code has no auth dependency. Any caller can apply a calibration token
-    without authentication. Confirmed in test_apply_calibration_no_auth.
+FIX 3 (G3)  POST /conditions/apply-calibration now requires X-Elevated-Key.
+    Returns HTTP 403 without auth. Confirmed in test_apply_calibration_no_auth_gap.
+
+FIX 4 (G5)  CalibrationService.calibrate() no longer crashes when
+    guardrails_store=None. Returns no_recommendation with reason
+    'guardrails_unavailable'. Confirmed in test_complete_churn_detection_pipeline.
 
 G4  Async job worker is not implemented. Jobs enqueued via POST /execute/async
     remain in QUEUED state permanently in this environment. No worker picks
     them up. Documented in test_async_execution_pipeline.
 
-Test count: 5 pipeline tests + 2 gap-confirmation tests = 7 tests total
+Test count: 5 pipeline tests + 2 fix-confirmation tests = 7 tests total
 """
 from __future__ import annotations
 
@@ -301,15 +303,56 @@ def test_complete_churn_detection_pipeline(e2e_client, elevated_headers, api_hea
     assert decision_row["fired"] is True
     assert decision_row["entity_id"] == EVAL_ENTITY
 
+    # ── Step 9b: Seed decision records for feedback entities ─────────────────
+    # FIX 1: FeedbackService now validates that a decision record exists for
+    # (condition_id, condition_version, entity, timestamp).
+    # We need real decision records for the 3 feedback entities.
+    fb_entities = ["e2e_fb_entity_1", "e2e_fb_entity_2", "e2e_fb_entity_3"]
+    for fb_entity in fb_entities:
+        r = client.post(
+            "/evaluate/full",
+            json={
+                "concept_id":        _P1_CONCEPT_ID,
+                "concept_version":   _P1_CONCEPT_VER,
+                "condition_id":      _P1_COND_ID,
+                "condition_version": _P1_COND_VER,
+                "entity":            fb_entity,
+            },
+            headers=api_headers,
+        )
+        assert r.status_code == 200, f"Step 9b evaluate/full for {fb_entity}: {r.text}"
+
+    # Wait for all 3 decision records to be written (fire-and-forget)
+    async def _fetch_fb_decisions():
+        async with pool.acquire() as conn:
+            return await conn.fetch(
+                "SELECT entity_id, evaluated_at FROM decisions "
+                "WHERE condition_id = $1 AND entity_id = ANY($2::text[])",
+                _P1_COND_ID,
+                fb_entities,
+            )
+
+    fb_rows = []
+    for _ in range(10):
+        fb_rows = run_db(_fetch_fb_decisions())
+        if len(fb_rows) >= 3:
+            break
+        time.sleep(0.1)
+    assert len(fb_rows) >= 3, (
+        "Step 9b: expected 3 decision records for feedback entities"
+    )
+    fb_timestamps = {
+        row["entity_id"]: row["evaluated_at"].isoformat()
+        for row in fb_rows
+    }
+
     # ── Step 10: Submit 3 feedback records (MIN_FEEDBACK_THRESHOLD = 3) ───────
-    # GAP G1: FeedbackService does NOT validate that a decision record exists
-    # for (condition_id, condition_version, entity, timestamp). It only checks
-    # that the condition is registered. Feedback timestamps below are arbitrary.
-    # The unique constraint is (condition_id, condition_version, entity, timestamp).
+    # FIX 1: FeedbackService now validates decision record existence.
+    # We use the actual evaluated_at timestamps from the decision records above.
     feedback_cases = [
-        ("e2e_fb_entity_1", "2026-04-01T10:00:00Z"),
-        ("e2e_fb_entity_2", "2026-04-01T10:00:00Z"),
-        ("e2e_fb_entity_3", "2026-04-01T10:00:00Z"),
+        ("e2e_fb_entity_1", fb_timestamps["e2e_fb_entity_1"]),
+        ("e2e_fb_entity_2", fb_timestamps["e2e_fb_entity_2"]),
+        ("e2e_fb_entity_3", fb_timestamps["e2e_fb_entity_3"]),
     ]
     fb_ids = []
     for entity, ts in feedback_cases:
@@ -332,50 +375,37 @@ def test_complete_churn_detection_pipeline(e2e_client, elevated_headers, api_hea
         fb_ids.append(fb_resp["feedback_id"])
     assert len(fb_ids) == 3
 
-    # ── Steps 11–15: Calibrate → apply → rebind → re-evaluate ────────────────
-    # GAP G5: CalibrationService crashes when app.state.guardrails_store is None.
-    # The service calls self._guardrails_store.get_threshold_bounds() without
-    # a None guard. With guardrails_store=None, this raises AttributeError.
-    # The TestClient (raise_server_exceptions=True) propagates the exception.
-    # Calibration (and the apply-calibration/rebind/re-evaluate steps that
-    # depend on it) cannot be exercised in this test environment.
-    #
-    # Workaround: use raise_server_exceptions=False for this request and
-    # treat a 500 as a known infrastructure limitation (not a test assertion).
-    import starlette.testclient as _tc
-    _orig_rse = client.app  # save reference; we can't change raise_server_exceptions in-place
-
-    # Create a permissive client for the calibration step only
-    with _tc.TestClient(client.app, raise_server_exceptions=False) as _lax:
-        r = _lax.post(
-            "/conditions/calibrate",
-            json={"condition_id": _P1_COND_ID, "condition_version": _P1_COND_VER},
-            headers=api_headers,
-        )
-
-    if r.status_code == 500:
-        # GAP G5 confirmed: CalibrationService.calibrate() crashes when
-        # guardrails_store is None (AttributeError on get_threshold_bounds).
-        # Steps 12–15 depend on a calibration token — skipped due to this gap.
-        # The calibration + apply + rebind + re-evaluate path is verified in
-        # test_apply_calibration_no_auth_gap and the contract test suite.
-        return
-
-    # If calibration succeeded (guardrails configured externally), continue
+    # ── Step 11: Calibrate ────────────────────────────────────────────────────
+    # FIX 4 (G5): CalibrationService now handles guardrails_store=None gracefully.
+    # Instead of crashing with AttributeError, it returns no_recommendation with
+    # reason 'guardrails_unavailable'. No 500 error.
+    r = client.post(
+        "/conditions/calibrate",
+        json={"condition_id": _P1_COND_ID, "condition_version": _P1_COND_VER},
+        headers=api_headers,
+    )
     assert r.status_code == 200, f"Step 11 calibrate failed: {r.text}"
     calib = r.json()
-    if calib["status"] != "recommendation_available":
-        return  # no recommendation (e.g. insufficient feedback) — stop here
+    if calib["status"] == "no_recommendation":
+        reason = calib.get("no_recommendation_reason", "")
+        if reason == "guardrails_unavailable":
+            # FIX 4 confirmed: graceful no_recommendation instead of 500 crash.
+            # Steps 12–15 require a calibration token — skipped (guardrails absent).
+            return
+        # Other no_recommendation reasons (insufficient_data, bounds_exceeded) — stop.
+        return
 
+    assert calib["status"] == "recommendation_available", (
+        f"Step 11: unexpected calibration status {calib['status']}"
+    )
     cal_token = calib["calibration_token"]
 
-    # ── Step 12: Apply calibration ─────────────────────────────────────────────
-    # GAP G3: No auth required — confirmed. Call without headers.
-    with _tc.TestClient(client.app, raise_server_exceptions=False) as _lax:
-        r = _lax.post(
-            "/conditions/apply-calibration",
-            json={"calibration_token": cal_token},
-        )
+    # ── Step 12: Apply calibration (requires elevated key — FIX 3) ────────────
+    r = client.post(
+        "/conditions/apply-calibration",
+        json={"calibration_token": cal_token},
+        headers=elevated_headers,
+    )
     assert r.status_code == 200, f"Step 12 apply-calibration failed: {r.text}"
     apply_result = r.json()
     new_cond_ver = apply_result["new_version"]
@@ -665,10 +695,9 @@ def test_explain_pipeline(e2e_client, elevated_headers, api_headers):
     POST /conditions/explain — deterministic, no LLM. Returns human-readable
     explanation of the condition strategy and parameter choices.
 
-    POST /decisions/explain — GAP G2: docs say "HTTP 404 — no decision record
-    found"; implementation re-executes deterministically using the concept
-    executor. It does NOT look up the decisions table. The response is a
-    synthesised decision explanation, not a replay of history.
+    POST /decisions/explain — FIX 2 (G2): now looks up the stored decision
+    record from the decisions table instead of re-executing. Returns HTTP 404
+    if no record exists for (condition_id, condition_version, entity, timestamp).
     """
     client, pool, run_db = e2e_client
 
@@ -697,18 +726,8 @@ def test_explain_pipeline(e2e_client, elevated_headers, api_headers):
         f"got keys: {list(explanation.keys())}"
     )
 
-    # Compile the concept — required by /decisions/explain (which re-executes
-    # the concept via a compiled execution graph rather than looking up the DB).
-    # Without a compiled graph, explain_decision returns HTTP 404:
-    #   "No compiled graph found for concept '...'"
-    r = client.post(
-        "/compile",
-        json={"concept": _P4_CONCEPT_BODY["body"]},
-        headers=elevated_headers,
-    )
-    assert r.status_code == 200, f"P4 compile concept: {r.text}"
-
-    # Execute full to write a decision record (then explain it)
+    # Execute full to write a decision record (FIX 2: explain now reads from DB)
+    P4_ENTITY = "e2e_risk_entity_001"
     r = client.post(
         "/evaluate/full",
         json={
@@ -716,33 +735,64 @@ def test_explain_pipeline(e2e_client, elevated_headers, api_headers):
             "concept_version":   "v1",
             "condition_id":      _P4_COND_ID,
             "condition_version": "v1",
-            "entity":            "e2e_risk_entity_001",
-            "timestamp":         "2026-04-01T09:00:00Z",
+            "entity":            P4_ENTITY,
         },
         headers=api_headers,
     )
     assert r.status_code == 200, f"P4 evaluate/full: {r.text}"
 
-    # Explain decision — GAP G2: implementation re-executes via compiled graph,
-    # does NOT look up the decisions table.
-    # The endpoint requires a compiled graph (POST /compile done above).
+    # Wait for decision record to be written (fire-and-forget)
+    async def _fetch_p4_decision():
+        async with pool.acquire() as conn:
+            return await conn.fetchrow(
+                "SELECT evaluated_at FROM decisions "
+                "WHERE condition_id = $1 AND entity_id = $2",
+                _P4_COND_ID, P4_ENTITY,
+            )
+
+    p4_row = None
+    for _ in range(10):
+        p4_row = run_db(_fetch_p4_decision())
+        if p4_row:
+            break
+        time.sleep(0.1)
+    assert p4_row is not None, "P4: expected decision record after /evaluate/full"
+    p4_decision_ts = p4_row["evaluated_at"].isoformat()
+
+    # Explain decision — FIX 2: uses stored record, not re-execution.
+    # Pass the exact evaluated_at timestamp from the DB.
     r = client.post(
         "/decisions/explain",
         json={
             "condition_id":      _P4_COND_ID,
             "condition_version": "v1",
-            "entity":            "e2e_risk_entity_001",
-            "timestamp":         "2026-04-01T09:00:00Z",
+            "entity":            P4_ENTITY,
+            "timestamp":         p4_decision_ts,
         },
         headers=api_headers,
     )
     assert r.status_code == 200, f"P4 explain decision: {r.text}"
     dec_exp = r.json()
-    assert "condition_id" in dec_exp
-    assert "entity" in dec_exp
-    # GAP G2 confirmed: the endpoint re-executes the concept rather than
-    # replaying the stored decision record. It also requires a pre-compiled
-    # graph in the execution_graphs table — not just a definition in the registry.
+    assert dec_exp["condition_id"] == _P4_COND_ID
+    assert dec_exp["entity"] == P4_ENTITY
+    assert "decision" in dec_exp
+    assert "concept_value" in dec_exp
+    # FIX 2 confirmed: explanation built from stored decision record, not re-execution.
+
+    # Confirm 404 for non-existent decision record (fake timestamp)
+    r = client.post(
+        "/decisions/explain",
+        json={
+            "condition_id":      _P4_COND_ID,
+            "condition_version": "v1",
+            "entity":            P4_ENTITY,
+            "timestamp":         "2020-01-01T00:00:00Z",  # no decision record
+        },
+        headers=api_headers,
+    )
+    assert r.status_code == 404, (
+        f"P4: expected 404 for non-existent decision record, got {r.status_code}: {r.text}"
+    )
 
 
 # ── Pipeline 5: Version Immutability ──────────────────────────────────────────
@@ -929,12 +979,11 @@ def test_version_immutability_pipeline(e2e_client, elevated_headers, api_headers
 @pytest.mark.e2e
 def test_feedback_no_decision_gap(e2e_client, elevated_headers, api_headers):
     """
-    Confirm GAP G1: POST /feedback/decision does not validate that a
-    decision record exists for (condition_id, condition_version, entity, timestamp).
+    FIX 1 (G1): POST /feedback/decision now validates that a decision record
+    exists for (condition_id, condition_version, entity, timestamp).
 
-    The implementation only checks that the condition is registered.
-    Feedback submitted for a (entity, timestamp) that has no corresponding
-    row in the `decisions` table is accepted without error.
+    The implementation now looks up the decisions table and returns HTTP 404
+    if no matching record exists.
     """
     client, pool, run_db = e2e_client
     cond_id = "e2e.gap1.orphan_feedback_cond"
@@ -973,8 +1022,8 @@ def test_feedback_no_decision_gap(e2e_client, elevated_headers, api_headers):
     }, headers=elevated_headers)
     assert r.status_code == 200
 
-    # Submit feedback for an entity/timestamp that has NO decision record
-    # Docs say HTTP 404 should be returned. Implementation returns 200 (GAP G1).
+    # Submit feedback for an entity/timestamp that has NO decision record.
+    # FIX 1: implementation now returns HTTP 404 (decision record not found).
     r = client.post(
         "/feedback/decision",
         json={
@@ -986,55 +1035,36 @@ def test_feedback_no_decision_gap(e2e_client, elevated_headers, api_headers):
         },
         headers=api_headers,
     )
-    # GAP G1 confirmed: implementation accepts feedback without decision record
-    assert r.status_code == 200, (
-        f"GAP G1 confirmed: feedback accepted without decision record "
-        f"(status={r.status_code})"
+    # FIX 1 confirmed: decision record lookup returns 404 when no record exists.
+    assert r.status_code == 404, (
+        f"FIX 1 (G1): expected 404 (no decision record), got {r.status_code}: {r.text}"
     )
-    assert r.json()["status"] == "recorded"
 
 
 @pytest.mark.e2e
 def test_apply_calibration_no_auth_gap(e2e_client, elevated_headers, api_headers):
     """
-    Confirm GAP G3: POST /conditions/apply-calibration requires no auth.
+    FIX 3 (G3): POST /conditions/apply-calibration now requires an elevated key.
 
-    The spec implies this should require an elevated key (it modifies the
-    condition registry). The implementation has no auth dependency on this
-    endpoint.
+    The spec requires X-Elevated-Key (this endpoint modifies the condition
+    registry). FIX 3 added Depends(require_elevated_key) to the route handler.
 
-    Approach: call /conditions/apply-calibration with an invalid (fake) token
-    and NO auth headers. The server should return:
-      - HTTP 400 (invalid token) if the auth gap is real — endpoint reached.
-      - HTTP 403 (forbidden) if auth IS enforced.
-
-    We confirm the gap by observing HTTP 400 (not 403): the request reaches
-    the service layer without any auth check, and only fails on token validation.
-
-    This avoids calling /conditions/calibrate (which crashes when
-    guardrails_store=None — GAP G5).
+    Approach: call /conditions/apply-calibration without auth headers.
+    The server should return HTTP 403 (forbidden) before reaching token validation.
     """
     client, pool, run_db = e2e_client
 
     # Use a clearly invalid token
     fake_token = "e2e-fake-token-that-does-not-exist-in-db"
 
-    # Call apply-calibration with NO auth headers — GAP G3
+    # Call apply-calibration with NO auth headers — FIX 3 should return 403
     r = client.post(
         "/conditions/apply-calibration",
         json={"calibration_token": fake_token},
         # Intentionally no auth headers
     )
 
-    # GAP G3 confirmed: endpoint accepts the request without auth check,
-    # fails with 400 (invalid token), NOT 403 (unauthorized).
-    # If auth were enforced, we would receive 403 before token validation.
-    assert r.status_code in (400, 422), (
-        f"GAP G3 confirmed: apply-calibration reached service layer without auth "
-        f"(status={r.status_code}, not 403); "
-        f"spec should require X-Elevated-Key header"
-    )
-    assert r.status_code != 403, (
-        "GAP G3 NOT confirmed: apply-calibration returned 403, "
-        "meaning auth IS enforced (this would mean the gap was fixed)"
+    # FIX 3 confirmed: auth check runs before token validation → 403 returned.
+    assert r.status_code == 403, (
+        f"FIX 3 (G3): expected 403 (auth required), got {r.status_code}: {r.text}"
     )

@@ -104,6 +104,7 @@ class NoRecommendationReason(str, Enum):
     BOUNDS_EXCEEDED         = "bounds_exceeded"
     NOT_APPLICABLE_STRATEGY = "not_applicable_strategy"
     INSUFFICIENT_DATA       = "insufficient_data"
+    GUARDRAILS_UNAVAILABLE  = "guardrails_unavailable"
 
 
 # ── Feedback models ────────────────────────────────────────────────────────────

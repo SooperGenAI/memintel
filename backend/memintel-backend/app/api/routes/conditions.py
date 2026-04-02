@@ -62,7 +62,7 @@ import asyncpg
 from fastapi import APIRouter, Depends, Query
 from fastapi import Request
 
-from app.api.deps import require_api_key
+from app.api.deps import require_api_key, require_elevated_key
 from app.models.calibration import (
     ApplyCalibrationRequest,
     ApplyCalibrationResult,
@@ -230,6 +230,7 @@ async def calibrate_condition(
 async def apply_calibration(
     req: ApplyCalibrationRequest,
     service: CalibrationService = Depends(get_calibration_service),
+    _: None = Depends(require_elevated_key),
 ) -> ApplyCalibrationResult:
     """
     Consume a calibration_token and create a new immutable condition version

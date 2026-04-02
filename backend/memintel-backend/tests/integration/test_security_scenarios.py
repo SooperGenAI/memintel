@@ -47,6 +47,7 @@ from app.api.routes import execute as execute_route
 from app.api.routes import registry as registry_route
 from app.api.routes import tasks as tasks_route
 from app.api.routes import feedback as feedback_route
+from app.api.deps import require_elevated_key
 from app.api.routes import conditions as conditions_route
 from app.api.routes.conditions import get_calibration_service
 from app.api.routes.registry import get_registry_service
@@ -566,6 +567,9 @@ def test_invalid_token_via_http_returns_400() -> None:
     """
     When apply_calibration() raises PARAMETER_ERROR for an invalid token,
     the HTTP response must be 400 with error.type = 'parameter_error'.
+
+    FIX 3: apply-calibration now requires elevated key. The test bypasses
+    auth (require_elevated_key overridden to no-op) to isolate token validation.
     """
     app = _make_app()
 
@@ -581,6 +585,7 @@ def test_invalid_token_via_http_returns_400() -> None:
         return svc
 
     app.dependency_overrides[get_calibration_service] = _mock_calibration_service
+    app.dependency_overrides[require_elevated_key] = lambda: None  # FIX 3: bypass auth
 
     try:
         with TestClient(app, raise_server_exceptions=False) as client:

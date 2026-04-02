@@ -53,6 +53,7 @@ from app.runtime.condition_evaluator import ConditionEvaluator
 from app.runtime.data_resolver import DataResolver, MockConnector
 from app.runtime.executor import ConceptExecutor
 from app.services.explanation import ExplanationService
+from app.stores.decision import DecisionStore
 from app.stores.definition import DefinitionStore
 from app.stores.graph import GraphStore
 
@@ -111,11 +112,13 @@ async def get_explanation_service(
         primitive_sources=primitive_sources,
         async_connector_registry=async_registry,
     )
+    decision_store = DecisionStore(pool)
     return ExplanationService(
         definition_registry=definition_registry,
         concept_executor=executor,
         condition_evaluator=evaluator,
         data_resolver=data_resolver,
+        decision_store=decision_store,
     )
 
 

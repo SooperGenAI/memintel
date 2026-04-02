@@ -41,10 +41,12 @@ from app.models.condition import (
     ConditionDefinition,
     ConditionExplanation,
     DecisionExplanation,
+    DecisionType,
     DriverContribution,
     StrategyDefinition,
     StrategyType,
 )
+from app.models.errors import NotFoundError
 from app.models.result import ConceptResult
 
 log = structlog.get_logger(__name__)
@@ -55,21 +57,22 @@ class ExplanationService:
     Generates DecisionExplanation objects by re-executing the concept and
     condition evaluation paths deterministically.
 
-    explain_decision() uses the same execution path as POST /evaluate/full,
-    with explain=True to capture per-signal driver contributions.
+    explain_decision() looks up the stored decision record and builds the
+    explanation from persisted fields — no concept re-execution.
 
     Parameters
     ──────────
     definition_registry — must implement async get(id, version) → dict.
                           Raises NotFoundError if not registered.
-    concept_executor    — must implement async aexecute(concept_id, version,
-                          entity, data_resolver, timestamp, explain)
-                          → ConceptResult.
-    condition_evaluator — must implement evaluate(condition, entity,
-                          data_resolver, timestamp) → DecisionValue.
-    data_resolver       — passed through to executor and evaluator.
-                          May be None; callers are responsible for providing
-                          a real resolver for production use.
+    concept_executor    — kept for explain_condition() wiring compatibility.
+                          Not used by explain_decision().
+    condition_evaluator — kept for explain_condition() wiring compatibility.
+                          Not used by explain_decision().
+    data_resolver       — kept for wiring compatibility.
+                          Not used by explain_decision().
+    decision_store      — must implement async find_by_condition_entity_timestamp(
+                          condition_id, condition_version, entity_id, timestamp)
+                          → DecisionRecord | None.
     """
 
     def __init__(
@@ -78,11 +81,13 @@ class ExplanationService:
         concept_executor: Any,
         condition_evaluator: Any,
         data_resolver: Any = None,
+        decision_store: Any = None,
     ) -> None:
         self._registry = definition_registry
         self._executor = concept_executor
         self._evaluator = condition_evaluator
         self._data_resolver = data_resolver
+        self._decision_store = decision_store
 
     # ── Public API ──────────────────────────────────────────────────────────────
 
@@ -140,58 +145,71 @@ class ExplanationService:
         """
         Return a full explanation of a specific decision result.
 
-        Re-executes concept execution and condition evaluation deterministically.
-        Results are identical for any given (condition_id, condition_version,
-        entity, timestamp) tuple.
+        Looks up the stored decision record by (condition_id, condition_version,
+        entity, timestamp) and builds the explanation from persisted fields.
+        Raises NotFoundError → HTTP 404 if no matching record exists.
 
         Raises NotFoundError if (condition_id, condition_version) is not
         registered in the definition registry.
         """
-        # 1. Load and parse condition definition.
+        # 1. Load and parse condition definition (for strategy type / params).
         body = await self._registry.get(condition_id, condition_version)
         condition = ConditionDefinition.model_validate(body)
 
-        # 2. Execute concept with explain=True for driver attribution.
-        concept_result: ConceptResult = await self._executor.aexecute(
-            concept_id=condition.concept_id,
-            version=condition.concept_version,
-            entity=entity,
-            data_resolver=self._data_resolver,
-            timestamp=timestamp,
-            explain=True,
-        )
-
-        # 3. Evaluate condition to get the decision value.
-        decision = await self._evaluator.aevaluate(
-            condition=condition,
-            entity=entity,
-            data_resolver=self._data_resolver,
+        # 2. Look up the stored decision record.
+        if self._decision_store is None:
+            raise NotFoundError(
+                f"No decision record found for condition '{condition_id}' "
+                f"version '{condition_version}', entity '{entity}', "
+                f"timestamp '{timestamp}'.",
+                location="timestamp",
+            )
+        record = await self._decision_store.find_by_condition_entity_timestamp(
+            condition_id=condition_id,
+            condition_version=condition_version,
+            entity_id=entity,
             timestamp=timestamp,
         )
+        if record is None:
+            raise NotFoundError(
+                f"No decision record found for condition '{condition_id}' "
+                f"version '{condition_version}', entity '{entity}', "
+                f"timestamp '{timestamp}'.",
+                location="timestamp",
+                suggestion="Provide the exact evaluated_at timestamp from the decision record.",
+            )
 
-        # 4. Rank and normalise driver contributions.
-        #    INVARIANT: sum(d.contribution for d in drivers) == 1.0.
-        drivers = _rank_drivers(concept_result)
-
-        # 5. Resolve strategy-aware fields.
+        # 3. Resolve strategy-aware fields from stored params.
         strategy_type = condition.strategy.type
         threshold_applied: float | None = None
         label_matched: str | None = None
+        stored_params: dict = record.threshold_applied or {}
 
         if strategy_type in (
             StrategyType.THRESHOLD,
             StrategyType.PERCENTILE,
             StrategyType.CHANGE,
         ):
-            threshold_applied = condition.strategy.params.value
+            raw = stored_params.get("value")
+            threshold_applied = float(raw) if raw is not None else None
         elif strategy_type == StrategyType.Z_SCORE:
-            threshold_applied = condition.strategy.params.threshold
+            raw = stored_params.get("threshold")
+            threshold_applied = float(raw) if raw is not None else None
         elif strategy_type == StrategyType.EQUALS:
-            # Categorical match — no numeric threshold.
             label_matched = (
-                decision.value if isinstance(decision.value, str) else None
+                record.concept_value if isinstance(record.concept_value, str) else None
             )
-        # composite: both remain None (operator, not a single threshold)
+        # composite: both remain None
+
+        # 4. Resolve decision_type from strategy.
+        decision_type = (
+            DecisionType.CATEGORICAL
+            if strategy_type == StrategyType.EQUALS
+            else DecisionType.BOOLEAN
+        )
+
+        # 5. Build drivers from stored input_primitives (equal contribution).
+        drivers = _drivers_from_primitives(record.input_primitives)
 
         log.info(
             "decision_explained",
@@ -200,7 +218,7 @@ class ExplanationService:
                 "condition_version": condition_version,
                 "entity": entity,
                 "strategy_type": strategy_type.value,
-                "decision": decision.value,
+                "decision": record.fired,
                 "drivers_count": len(drivers),
             },
         )
@@ -209,10 +227,10 @@ class ExplanationService:
             condition_id=condition_id,
             condition_version=condition_version,
             entity=entity,
-            timestamp=timestamp,
-            decision=decision.value,
-            decision_type=decision.decision_type,
-            concept_value=concept_result.value,
+            timestamp=record.evaluated_at,
+            decision=record.fired,
+            decision_type=decision_type,
+            concept_value=record.concept_value,
             strategy_type=strategy_type,
             threshold_applied=threshold_applied,
             label_matched=label_matched,
@@ -282,6 +300,26 @@ def _explain_strategy(strategy: StrategyDefinition) -> tuple[str, str]:
         )
 
     return summary, rationale
+
+
+def _drivers_from_primitives(
+    input_primitives: "dict | None",
+) -> list[DriverContribution]:
+    """
+    Build DriverContribution list from stored input_primitives.
+
+    Uses equal contribution weights (1/n per signal, normalised to sum to 1.0).
+    Returns an empty list when input_primitives is None or empty.
+    """
+    if not input_primitives:
+        return []
+    signals = list(input_primitives.items())
+    n = len(signals)
+    per_signal = round(1.0 / n, 6)
+    return [
+        DriverContribution(signal=k, contribution=per_signal, value=v)
+        for k, v in signals
+    ]
 
 
 def _rank_drivers(concept_result: ConceptResult) -> list[DriverContribution]:

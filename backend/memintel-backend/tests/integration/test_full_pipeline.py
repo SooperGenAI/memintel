@@ -66,6 +66,7 @@ from app.models.task import (
     TaskStatus,
     TaskUpdateRequest,
 )
+from app.models.decision import DecisionRecord
 from app.registry.definitions import DefinitionRegistry
 from app.services.calibration import CalibrationService
 from app.services.feedback import FeedbackService
@@ -292,6 +293,39 @@ class InMemoryFeedbackStore:
         timestamp: str,
     ) -> FeedbackRecord | None:
         return self._by_key.get((condition_id, condition_version, entity, timestamp))
+
+
+# ── _AlwaysFoundDecisionStore ─────────────────────────────────────────────────
+
+class _AlwaysFoundDecisionStore:
+    """
+    Decision store stub that always returns a valid DecisionRecord.
+
+    FeedbackService.submit() (FIX 1) validates that a decision record exists
+    for (condition_id, condition_version, entity, timestamp). Integration tests
+    use fake timestamps; this stub bypasses the lookup so they can focus on
+    the calibration flow rather than decision record management.
+    """
+
+    async def find_by_condition_entity_timestamp(
+        self,
+        condition_id: str,
+        condition_version: str,
+        entity_id: str,
+        timestamp: str,
+    ) -> DecisionRecord:
+        return DecisionRecord(
+            decision_id="mock-decision-stub",
+            concept_id="org.mock_concept",
+            concept_version="1.0",
+            condition_id=condition_id,
+            condition_version=condition_version,
+            entity_id=entity_id,
+            fired=True,
+            concept_value=0.85,
+            threshold_applied={"direction": "above", "value": 0.80},
+            input_primitives={"feature_a": 0.85},
+        )
 
 
 # ── InMemoryCalibrationTokenStore ─────────────────────────────────────────────
@@ -665,6 +699,7 @@ def _make_services(
     fb_svc = FeedbackService(
         feedback_store=fb_store,
         definition_registry=registry,
+        decision_store=_AlwaysFoundDecisionStore(),
     )
     cal_svc = CalibrationService(
         feedback_store=fb_store,

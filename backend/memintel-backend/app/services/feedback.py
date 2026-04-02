@@ -33,7 +33,7 @@ from app.models.calibration import (
     FeedbackResponse,
     FeedbackValue,
 )
-from app.models.errors import ErrorType, MemintelError
+from app.models.errors import ErrorType, MemintelError, NotFoundError
 
 log = structlog.get_logger(__name__)
 
@@ -59,15 +59,20 @@ class FeedbackService:
                           Raises ConflictError on uniqueness key violation.
     definition_registry — must implement async get(id, version) → dict.
                           Raises NotFoundError if the condition is not registered.
+    decision_store      — must implement async find_by_condition_entity_timestamp(
+                          condition_id, condition_version, entity_id, timestamp)
+                          → DecisionRecord | None. Used to verify the decision exists.
     """
 
     def __init__(
         self,
         feedback_store: Any,
         definition_registry: Any,
+        decision_store: Any,
     ) -> None:
         self._feedback_store = feedback_store
         self._registry = definition_registry
+        self._decision_store = decision_store
 
     # ── Public API ──────────────────────────────────────────────────────────────
 
@@ -91,7 +96,24 @@ class FeedbackService:
         #  Raises NotFoundError → HTTP 404 if not found.
         await self._registry.get(req.condition_id, req.condition_version)
 
-        # Step 3 — persist the feedback record.
+        # Step 3 — verify a decision record exists for (condition_id, condition_version,
+        #  entity, timestamp). Raises NotFoundError → HTTP 404 if not found.
+        decision = await self._decision_store.find_by_condition_entity_timestamp(
+            condition_id=req.condition_id,
+            condition_version=req.condition_version,
+            entity_id=req.entity,
+            timestamp=req.timestamp,
+        )
+        if decision is None:
+            raise NotFoundError(
+                f"No decision record found for condition '{req.condition_id}' "
+                f"version '{req.condition_version}', entity '{req.entity}', "
+                f"timestamp '{req.timestamp}'.",
+                location="timestamp",
+                suggestion="Provide the exact evaluated_at timestamp from the decision record.",
+            )
+
+        # Step 4 — persist the feedback record.
         #  FeedbackStore.create() raises ConflictError → HTTP 409 on duplicate.
         record = await self._feedback_store.create(
             FeedbackRecord(

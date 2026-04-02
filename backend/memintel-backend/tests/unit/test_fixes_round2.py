@@ -184,12 +184,14 @@ async def test_aevaluate_calls_executor_on_cache_miss():
 @pytest.mark.asyncio
 async def test_explain_decision_snapshot_mode_does_not_crash():
     """
-    FIX 3: explain_decision() with timestamp=None must not crash.
-    Before the fix, the sync evaluate() path raised RuntimeError on cache miss
-    because the result was not cached for None-timestamp (snapshot mode).
-    After the fix, aevaluate() is awaited and _aget_concept_result() awaits
-    executor.execute() directly.
+    FIX 2 (updated): explain_decision() now looks up the stored decision record
+    instead of re-executing. With timestamp=None, the stored record is looked up
+    and returned if found; NotFoundError is raised if not found.
+
+    This test verifies that explain_decision() does not crash when a valid
+    stored record is available (decision_store returns a record).
     """
+    from app.models.decision import DecisionRecord as DR
     from app.services.explanation import ExplanationService
 
     condition_id = "high_churn"
@@ -208,45 +210,50 @@ async def test_explain_decision_snapshot_mode_does_not_crash():
         },
     }
 
-    cr = _concept_result(value=0.82)
-
     class _MockRegistry:
         async def get(self, cid, ver):
             return body
 
-    mock_executor = MagicMock()
-    mock_executor.aexecute = AsyncMock(return_value=cr)
-
-    # evaluator with aevaluate that returns a fixed decision
-    mock_evaluator = MagicMock()
-    mock_evaluator.aevaluate = AsyncMock(return_value=DecisionValue(
-        value=True,
-        decision_type=DecisionType.BOOLEAN,
-        condition_id=condition_id,
-        condition_version=condition_version,
-        entity=entity,
-        timestamp=None,
-    ))
+    class _MockDecisionStore:
+        async def find_by_condition_entity_timestamp(
+            self,
+            condition_id,
+            condition_version,
+            entity_id,
+            timestamp,
+        ):
+            return DR(
+                decision_id="mock-001",
+                concept_id="org.churn_score",
+                concept_version="1.0",
+                condition_id=condition_id,
+                condition_version=condition_version,
+                entity_id=entity_id,
+                fired=True,
+                concept_value=0.82,
+                threshold_applied={"direction": "above", "value": 0.5},
+                input_primitives={"feature_a": 0.82},
+            )
 
     svc = ExplanationService(
         definition_registry=_MockRegistry(),
-        concept_executor=mock_executor,
-        condition_evaluator=mock_evaluator,
-        data_resolver=DataResolver(connector=MockConnector(data={}), backoff_base=0.0),
+        concept_executor=None,
+        condition_evaluator=None,
+        data_resolver=None,
+        decision_store=_MockDecisionStore(),
     )
 
-    # timestamp=None — snapshot mode — must not crash
+    # timestamp=None — must not crash; stored record is returned
     result = await svc.explain_decision(
         condition_id=condition_id,
         condition_version=condition_version,
         entity=entity,
-        timestamp=None,   # ← snapshot mode
+        timestamp=None,
     )
 
     assert result is not None
-    assert result.decision is True
-    # aevaluate must have been called (not the sync evaluate)
-    mock_evaluator.aevaluate.assert_awaited_once()
+    assert result.decision is True  # fired=True
+    assert result.concept_value == 0.82
 
 
 # ── FIX 4: /execute/static uses async executor ────────────────────────────────

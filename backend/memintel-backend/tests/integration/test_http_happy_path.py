@@ -43,6 +43,7 @@ from app.api.routes import conditions as conditions_route
 from app.api.routes import execute as execute_route
 from app.api.routes import feedback as feedback_route
 from app.api.routes import tasks as tasks_route
+from app.api.deps import require_elevated_key
 from app.api.routes.conditions import get_calibration_service
 from app.api.routes.execute import get_execute_service
 from app.api.routes.feedback import get_feedback_service
@@ -257,6 +258,7 @@ def test_happy_path_seven_steps() -> None:
     _app.dependency_overrides[get_execute_service]        = lambda: execute_svc
     _app.dependency_overrides[get_feedback_service]       = lambda: feedback_svc
     _app.dependency_overrides[get_calibration_service]    = lambda: calibration_svc
+    _app.dependency_overrides[require_elevated_key]       = lambda: None  # FIX 3: auth now required
 
     try:
         with TestClient(_app) as client:
