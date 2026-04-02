@@ -428,11 +428,15 @@ async def seed_task(
 # to test guardrails-dependent behaviour without requiring a live
 # GuardrailsStore or POST /guardrails HTTP calls.
 
+from app.api.routes.execute import get_execute_service
 from app.api.routes.tasks import get_task_authoring_service
 from app.persistence.db import get_db
 from app.registry.definitions import DefinitionRegistry
+from app.runtime.data_resolver import DataResolver
+from app.services.execute import ExecuteService
 from app.services.task_authoring import TaskAuthoringService
 from app.stores import ContextStore, DefinitionStore, TaskStore
+from tests.mocks.mock_connector import MockTableConnector
 from tests.mocks.mock_llm_client import MockLLMClient
 
 
@@ -557,6 +561,134 @@ def mock_llm_e2e_client_with_guardrails(e2e_setup):
         try:
             with TestClient(app, raise_server_exceptions=True) as client:
                 yield client, pool, run_db, mock_llm
+        except RuntimeError as exc:
+            if "Cannot connect" in str(exc):
+                pytest.skip(f"Test database unavailable: {exc}")
+                return
+            raise
+
+    yield _make
+
+
+# ── MockConnector injection fixtures ───────────────────────────────────────────
+#
+# These fixtures extend the standard e2e_client by overriding the
+# get_execute_service FastAPI dependency so that DataResolver uses
+# MockTableConnector for primitive fetching instead of the empty MockConnector
+# that the production code uses when no real connectors are configured.
+#
+# Injection approach: patch _make_resolver on the ExecuteService instance so
+# that every DataResolver it creates uses our table-backed connector.  This
+# exercises the real evaluation pipeline (DAGBuilder, ConceptExecutor,
+# strategy evaluation) with controlled primitive values — the production data
+# path short of a real database or REST endpoint.
+#
+# The optional ``async_connector`` parameter lets tests inject a
+# MockAsyncRestConnector into the async_connector_registry path with
+# caller-supplied primitive_sources, testing the full async fetch flow.
+
+
+def _make_execute_service_override(
+    mock_connector: MockTableConnector | None = None,
+    async_connector: Any = None,
+    primitive_sources: dict | None = None,
+) -> Any:
+    """
+    Return a FastAPI dependency override that injects mock connectors into
+    ExecuteService._make_resolver().
+
+    Parameters
+    ──────────
+    mock_connector:    Sync MockTableConnector used as the default connector
+                       for all primitives not served by async_connector.
+    async_connector:   Optional MockAsyncRestConnector (or similar async object).
+                       When provided, it is registered in the async_connector_registry
+                       under async_connector.connector_name.
+    primitive_sources: Required when async_connector is set — maps primitive names
+                       to PrimitiveSourceConfig so DataResolver routes them through
+                       the async connector.
+    """
+    import asyncpg
+    from fastapi import Depends, Request
+
+    from app.models.config import PrimitiveSourceConfig
+
+    effective_sync = mock_connector or MockTableConnector()
+
+    async def _override(
+        request: Request,
+        pool: asyncpg.Pool = Depends(get_db),
+    ) -> ExecuteService:
+        service = ExecuteService(pool=pool)
+
+        # Build async registry if an async connector was provided.
+        async_registry: dict = {}
+        effective_sources: dict = {}
+        if async_connector is not None:
+            name = getattr(async_connector, "connector_name", "async_mock")
+            async_registry[name] = async_connector
+            effective_sources = primitive_sources or {}
+
+        def _patched_make_resolver() -> DataResolver:
+            return DataResolver(
+                connector=effective_sync,
+                backoff_base=0.0,
+                primitive_sources=effective_sources,
+                async_connector_registry=async_registry,
+            )
+
+        service._make_resolver = _patched_make_resolver  # type: ignore[method-assign]
+        return service
+
+    return _override
+
+
+@pytest.fixture
+def mock_connector_e2e_client(e2e_setup):
+    """
+    Factory fixture — yields a callable that produces (client, pool, run_db)
+    with MockTableConnector injected into the execution pipeline.
+
+    Identical to ``e2e_client`` except the primitive data connector returns
+    values from a caller-supplied table instead of always returning None.
+
+    Usage::
+
+        def test_foo(mock_connector_e2e_client, api_headers, elevated_headers):
+            data = {"account.active_user_rate_30d": {"account_001": 0.25}}
+            connector = MockTableConnector(data)
+            with mock_connector_e2e_client(connector) as (client, pool, run_db):
+                r = client.post("/evaluate/full", json={...}, headers=api_headers)
+
+    Async REST connector variant::
+
+        connector = MockAsyncRestConnector(data, connector_name="rest_mock")
+        sources = {"account.active_user_rate_30d": PrimitiveSourceConfig(
+            connector="rest_mock", query="/api/v1/{entity_id}")}
+        with mock_connector_e2e_client(
+            async_connector=connector, primitive_sources=sources
+        ) as (client, pool, run_db):
+            ...
+    """
+    from contextlib import contextmanager
+
+    pool, run_db = e2e_setup
+
+    @contextmanager
+    def _make(
+        mock_connector: MockTableConnector | None = None,
+        async_connector: Any = None,
+        primitive_sources: dict | None = None,
+    ):
+        app = _make_e2e_app()
+        app.dependency_overrides[get_execute_service] = _make_execute_service_override(
+            mock_connector=mock_connector,
+            async_connector=async_connector,
+            primitive_sources=primitive_sources,
+        )
+        try:
+            with TestClient(app, raise_server_exceptions=True) as client:
+                yield client, pool, run_db
         except RuntimeError as exc:
             if "Cannot connect" in str(exc):
                 pytest.skip(f"Test database unavailable: {exc}")
