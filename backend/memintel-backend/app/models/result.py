@@ -284,7 +284,7 @@ class DecisionResult(BaseModel):
     history_count reflects how many historical results were found (0 if the
     query failed). Set only when reason is also set.
     """
-    value: bool | str
+    value: bool | str | None
     type: DecisionType
     entity: str
     condition_id: str

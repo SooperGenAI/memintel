@@ -58,10 +58,8 @@ class EqualsStrategy(ConditionStrategy):
                                       is not in the declared label set.
         """
         if result.value is None:
-            return self._boolean_decision(
-                False, result, condition_id, condition_version,
-                reason="null_input",
-                history_count=None,
+            return self._categorical_null_decision(
+                result, condition_id, condition_version,
             )
         require_text(result, _STRATEGY)
 

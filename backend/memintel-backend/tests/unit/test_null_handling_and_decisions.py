@@ -224,7 +224,7 @@ class TestNullGuardStrategies:
         assert dv.decision_type == DecisionType.BOOLEAN
 
     def test_equals_none_input_returns_null_input(self):
-        """Test 3: equals with None input → fired=False, reason=null_input."""
+        """Test 3: equals with None input → value=None, reason=null_input, CATEGORICAL."""
         strategy = EqualsStrategy()
         result = _cat_result(None)
         dv = strategy.evaluate(
@@ -232,9 +232,9 @@ class TestNullGuardStrategies:
             {"value": "premium"},
             condition_id="c1", condition_version="1.0",
         )
-        assert dv.value is False
+        assert dv.value is None
         assert dv.reason == "null_input"
-        assert dv.decision_type == DecisionType.BOOLEAN
+        assert dv.decision_type == DecisionType.CATEGORICAL
 
 
 class TestConnectorErrorHandling:

@@ -369,7 +369,7 @@ class DecisionValue(BaseModel):
     history_count is the number of historical results that were available at
     evaluation time. Set when reason is set; None otherwise.
     """
-    value: bool | str
+    value: bool | str | None
     decision_type: DecisionType
     condition_id: str
     condition_version: str
@@ -438,7 +438,7 @@ class DecisionExplanation(BaseModel):
     condition_version: str
     entity: str
     timestamp: datetime | None
-    decision: bool | str
+    decision: bool | str | None
     decision_type: DecisionType
     concept_value: float | int | str
     strategy_type: StrategyType

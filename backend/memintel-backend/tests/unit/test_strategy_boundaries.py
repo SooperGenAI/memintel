@@ -11,9 +11,9 @@ Ambiguous behaviours discovered while reading implementations
    inequalities (> / <).  When the current value sits EXACTLY at the computed
    threshold, the condition does NOT fire.
 
-2. EqualsStrategy normally returns decision<categorical>. However, when
-   result.value is None (null_input) it returns decision<boolean> — the only
-   strategy where null_input changes the decision_type.
+2. EqualsStrategy null_input returns decision<categorical> with value=None —
+   consistent with all non-null equals results (which are also CATEGORICAL).
+   value=None signals that input was absent; reason='null_input' is also set.
 
 3. EqualsStrategy non-match returns value="" (empty string) with
    decision_type=CATEGORICAL, NOT False with decision_type=BOOLEAN.
@@ -722,19 +722,22 @@ class TestEqualsBoundaries:
     def _strategy(self):
         self.s = EqualsStrategy()
 
-    def test_null_input_returns_boolean_decision_not_categorical(self):
+    def test_null_input_returns_categorical_with_none_value(self):
         """
-        BOUNDARY: EqualsStrategy is the only strategy where the decision_type
-        changes on null_input.  Non-null results return CATEGORICAL; null_input
-        returns BOOLEAN.  This is because _boolean_decision() is called on the
-        null path, not _categorical_decision().
+        BOUNDARY: EqualsStrategy null_input returns decision<categorical> with
+        value=None — consistent with all non-null equals results (which are also
+        CATEGORICAL).  This differs from numeric strategies, where null_input
+        returns decision<boolean> with value=False.
+
+        value=None distinguishes null-input from a non-match (value="") so
+        callers can tell WHY no label was produced.
         """
         r = self.s.evaluate(
             _null(), [],
             {"value": "high"},
         )
-        assert r.value is False
-        assert r.decision_type == DecisionType.BOOLEAN
+        assert r.value is None
+        assert r.decision_type == DecisionType.CATEGORICAL
 
     def test_null_input_has_null_input_reason(self):
         """null_input path sets reason='null_input'."""
@@ -1026,12 +1029,11 @@ class TestCrossStrategyInvariants:
         (PercentileStrategy, {"direction": "top", "value": 25}),
         (ZScoreStrategy, {"direction": "above", "threshold": 1.5, "window": "30d"}),
         (ChangeStrategy, {"direction": "increase", "value": 0.1, "window": "7d"}),
-        (EqualsStrategy, {"value": "high"}),
     ])
-    def test_null_input_produces_boolean_decision(self, strategy_cls, null_params):
+    def test_numeric_null_input_produces_boolean_decision(self, strategy_cls, null_params):
         """
-        All strategies: null_input path produces decision<boolean>,
-        even EqualsStrategy which normally produces decision<categorical>.
+        Numeric strategies (threshold/percentile/z_score/change): null_input path
+        produces decision<boolean> with value=False.
         """
         s = strategy_cls()
         r = s.evaluate(_null(), [], null_params)
@@ -1039,6 +1041,20 @@ class TestCrossStrategyInvariants:
             f"{strategy_cls.__name__}: expected BOOLEAN on null_input, "
             f"got {r.decision_type!r}"
         )
+
+    def test_equals_null_input_produces_categorical_decision(self):
+        """
+        EqualsStrategy: null_input produces decision<categorical> with value=None.
+        This is different from numeric strategies (which return BOOLEAN/False) and
+        reflects that equals always returns CATEGORICAL regardless of input state.
+        """
+        s = EqualsStrategy()
+        r = s.evaluate(_null(), [], {"value": "high"})
+        assert r.decision_type == DecisionType.CATEGORICAL, (
+            f"EqualsStrategy: expected CATEGORICAL on null_input, "
+            f"got {r.decision_type!r}"
+        )
+        assert r.value is None
 
     @pytest.mark.parametrize("strategy_cls,fired_result,history,params", [
         (

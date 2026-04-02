@@ -156,3 +156,27 @@ class ConditionStrategy(ABC):
             entity=result.entity,
             timestamp=result.timestamp,
         )
+
+    @staticmethod
+    def _categorical_null_decision(
+        result: ConceptResult,
+        condition_id: str,
+        condition_version: str,
+    ) -> DecisionValue:
+        """
+        Build a null decision<categorical> when result.value is None.
+
+        Returns decision_type=CATEGORICAL (consistent with all non-null equals
+        results) with value=None and reason='null_input' so callers can
+        distinguish a null-input result from an empty-string non-match.
+        """
+        return DecisionValue(
+            value=None,
+            decision_type=DecisionType.CATEGORICAL,
+            condition_id=condition_id,
+            condition_version=condition_version,
+            entity=result.entity,
+            timestamp=result.timestamp,
+            reason="null_input",
+            history_count=None,
+        )
