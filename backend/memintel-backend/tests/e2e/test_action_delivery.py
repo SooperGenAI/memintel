@@ -284,19 +284,24 @@ def test_webhook_payload_contains_decision_data(mock_webhook_connector_e2e_clien
     assert "timestamp" in req_body
 
 
-# ── Test 3 — Custom payload template sent verbatim ─────────────────────────────
+# ── Test 3 — Custom payload template interpolated correctly ─────────────────────
 
 @pytest.mark.e2e
 def test_webhook_custom_payload_template(mock_webhook_connector_e2e_client):
     """
-    When payload_template is set on the action config, it is sent VERBATIM.
+    When payload_template is set on the action config, string values are
+    interpolated with decision fields before the payload is sent.
 
-    IMPORTANT: payload_template is NOT interpolated — placeholders like
-    {entity} are sent as literal strings.  _invoke_webhook() sends the
-    template dict as-is (no format_map or string substitution).
+    Supported placeholders:
+      {entity}            — entity ID
+      {value}             — decision outcome ('True'/'False' or matched label)
+      {decision_value}    — alias for {value}
+      {condition_id}      — condition ID
+      {condition_version} — condition version
+      {timestamp}         — ISO 8601 evaluation timestamp
 
-    This documents the actual production behaviour, which differs from the
-    WebhookActionConfig docstring that describes planned interpolation.
+    Non-string template values (numbers, bools, nested structures) pass
+    through unchanged.  Unknown placeholders are left as-is.
     """
     CID, VER          = "wd.t3.concept", "v1"
     COND_ID, COND_VER = "wd.t3.condition", "v1"
@@ -304,12 +309,14 @@ def test_webhook_custom_payload_template(mock_webhook_connector_e2e_client):
     ENTITY            = "account_001"
 
     template = {
-        "alert_entity": "{entity}",     # NOT interpolated — sent literally
-        "alert_type": "churn_risk",
-        "score": "{decision_value}",    # NOT interpolated — sent literally
+        "alert_entity": "{entity}",         # → interpolated to entity ID
+        "alert_type": "churn_risk",         # → static, unchanged
+        "score": "{decision_value}",        # → interpolated to str(decision.value)
+        "cond": "{condition_id}",           # → interpolated to condition_id
+        "static_num": 42,                   # → non-string, passed through as-is
     }
 
-    data = {_PRIM: {ENTITY: _LOW}}
+    data = {_PRIM: {ENTITY: _LOW}}   # condition fires (True)
     connector = MockTableConnector(data)
 
     with mock_webhook_connector_e2e_client(connector) as (client, pool, run_db, webhook):
@@ -328,15 +335,20 @@ def test_webhook_custom_payload_template(mock_webhook_connector_e2e_client):
 
     assert webhook.call_count == 1
     req_body = webhook.last_request.json()
-    # Template is sent verbatim — placeholders are NOT substituted.
-    assert req_body["alert_entity"] == "{entity}", (
-        "payload_template is sent verbatim; {entity} should not be interpolated"
+
+    # String placeholders are interpolated.
+    assert req_body["alert_entity"] == ENTITY, (
+        f"{{entity}} should be interpolated to entity ID, got {req_body['alert_entity']!r}"
     )
     assert req_body["alert_type"] == "churn_risk"
-    assert "score" in req_body
-    assert req_body["score"] == "{decision_value}", (
-        "payload_template is sent verbatim; {decision_value} should not be interpolated"
+    assert req_body["score"] == "True", (
+        f"{{decision_value}} should be 'True' (condition fired), got {req_body['score']!r}"
     )
+    assert req_body["cond"] == COND_ID, (
+        f"{{condition_id}} should be interpolated, got {req_body['cond']!r}"
+    )
+    # Non-string values pass through unchanged.
+    assert req_body["static_num"] == 42
 
 
 # ── Test 4 — Custom headers sent ───────────────────────────────────────────────

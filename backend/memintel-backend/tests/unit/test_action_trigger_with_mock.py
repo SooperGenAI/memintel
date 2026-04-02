@@ -272,3 +272,120 @@ def test_fire_on_any_always_fires():
 
     assert triggered_true[0].status  == ActionTriggeredStatus.TRIGGERED
     assert triggered_false[0].status == ActionTriggeredStatus.TRIGGERED
+
+
+# ── Template interpolation tests ────────────────────────────────────────────────
+
+def test_payload_template_interpolated_correctly():
+    """
+    String values in payload_template with {placeholder} patterns are
+    substituted with decision fields before the webhook payload is sent.
+
+    Supported placeholders verified:
+      {entity}         → entity ID string
+      {decision_value} → str(decision.value)
+      {value}          → same as {decision_value} (alias)
+      {condition_id}   → condition ID string
+      {timestamp}      → ISO 8601 timestamp string
+
+    Non-string template values pass through unchanged.
+    Unknown placeholders are left as-is.
+    """
+    template = {
+        "user":           "{entity}",
+        "fired":          "{decision_value}",
+        "val_alias":      "{value}",
+        "cond":           "{condition_id}",
+        "ts":             "{timestamp}",
+        "unknown":        "{no_such_field}",  # left unchanged
+        "static_number":  99,                 # non-string — unchanged
+        "static_bool":    False,              # non-string — unchanged
+    }
+    action = _webhook_action(
+        fire_on=FireOn.ANY,
+        payload_template=template,
+    )
+    dec = _decision(
+        value=True,
+        entity="account_001",
+        condition_id="cond_churn",
+        condition_version="v2",
+        timestamp="2025-11-14T10:00:00Z",
+    )
+
+    server = MockWebhookServer()
+    with server:
+        _run(
+            ActionTrigger().trigger_bound_actions(
+                decision=dec, actions=[action], dry_run=False
+            )
+        )
+
+    assert server.call_count == 1
+    body = server.last_request.json()
+
+    assert body["user"]          == "account_001", "{{entity}} not interpolated"
+    assert body["fired"]         == "True",         "{{decision_value}} not interpolated"
+    assert body["val_alias"]     == "True",         "{{value}} alias not interpolated"
+    assert body["cond"]          == "cond_churn",   "{{condition_id}} not interpolated"
+    assert body["ts"]            == "2025-11-14T10:00:00Z", "{{timestamp}} not interpolated"
+    assert body["unknown"]       == "{no_such_field}", "unknown placeholder must stay as-is"
+    assert body["static_number"] == 99,             "non-string int must pass through"
+    assert body["static_bool"]   is False,          "non-string bool must pass through"
+
+
+def test_message_template_interpolated_correctly(monkeypatch):
+    """
+    Notification message_template already uses format_map(_SafeFormat(...))
+    and does NOT have the same verbatim-sending bug that payload_template had.
+
+    This test confirms the existing correct behaviour is preserved after the
+    payload_template fix.
+
+    Placeholders supported in message_template (from decision_payload keys):
+      {entity}, {value}, {condition_id}, {condition_version}, {timestamp}
+    """
+    from app.models.action import NotificationActionConfig, TriggerConfig
+    from app.models.task import Namespace
+
+    # No CANVAS_NOTIFICATION_ENDPOINT → notification logs locally (no HTTP).
+    monkeypatch.delenv("CANVAS_NOTIFICATION_ENDPOINT", raising=False)
+
+    action = ActionDefinition(
+        action_id="notify_test",
+        version="v1",
+        config=NotificationActionConfig(
+            type="notification",
+            channel="test-channel",
+            message_template="Entity {entity} fired: {value}",
+        ),
+        trigger=TriggerConfig(
+            fire_on=FireOn.ANY,
+            condition_id="cond_x",
+            condition_version="v1",
+        ),
+        namespace=Namespace.ORG,
+    )
+    dec = _decision(value=True, entity="account_42")
+
+    # No httpx mock needed — notification without endpoint never makes HTTP calls.
+    triggered = _run(
+        ActionTrigger().trigger_bound_actions(
+            decision=dec, actions=[action], dry_run=False
+        )
+    )
+
+    assert triggered[0].status == ActionTriggeredStatus.TRIGGERED
+    payload = triggered[0].payload_sent
+    assert payload is not None
+    assert payload["status"] == "logged"
+    # Verify interpolation occurred in the message.
+    assert "account_42" in payload["message"], (
+        "{{entity}} should be interpolated in message_template"
+    )
+    assert "True" in payload["message"], (
+        "{{value}} should be interpolated in message_template"
+    )
+    assert "{entity}" not in payload["message"], (
+        "literal placeholder must not appear in sent message"
+    )

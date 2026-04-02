@@ -23,6 +23,19 @@ Action execution types:
 
 ${ENV_VAR} substitutions are resolved in webhook header values at call time.
 They are NOT resolved in endpoint URLs — endpoints are treated as literals.
+
+payload_template interpolation:
+  When WebhookActionConfig.payload_template is set, string values in the
+  template dict are interpolated with decision fields before sending.
+  Supported placeholders:
+    {entity}            — the entity that was evaluated
+    {value}             — decision outcome (True/False or matched label)
+    {decision_value}    — alias for {value}; preferred in webhook templates
+    {condition_id}      — the condition that produced the decision
+    {condition_version} — the condition version
+    {timestamp}         — ISO 8601 evaluation timestamp (empty string when None)
+  Non-string template values (numbers, bools, nested dicts) pass through
+  unchanged.  Unknown placeholders are left as-is.
 """
 from __future__ import annotations
 
@@ -71,6 +84,31 @@ class _SafeFormat(dict):  # type: ignore[type-arg]
 
     def __missing__(self, key: str) -> str:
         return f"{{{key}}}"
+
+
+def _interpolate_template(
+    template: dict[str, Any],
+    context: dict[str, str],
+) -> dict[str, Any]:
+    """
+    Substitute ``{placeholder}`` patterns in string values of a payload template.
+
+    Only top-level string values are substituted.  Non-string values (numbers,
+    bools, nested dicts/lists) pass through unchanged.  Unknown placeholders
+    are left as-is (not removed).
+
+    Parameters
+    ──────────
+    template — the payload_template dict from WebhookActionConfig.
+    context  — mapping of placeholder name → replacement string.
+    """
+    result: dict[str, Any] = {}
+    for key, value in template.items():
+        if isinstance(value, str):
+            for placeholder, replacement in context.items():
+                value = value.replace("{" + placeholder + "}", replacement)
+        result[key] = value
+    return result
 
 
 class ActionTrigger:
@@ -289,11 +327,31 @@ async def _invoke_webhook(
     Header values with ``${ENV_VAR}`` placeholders are resolved from the
     environment at call time.  The endpoint URL is used verbatim.
 
+    When payload_template is set, string values in the template are
+    interpolated with decision fields before sending (see module docstring
+    for the full placeholder reference).  When absent, the full
+    decision_payload is sent as-is.
+
     HTTP 4xx/5xx responses raise httpx.HTTPStatusError — the caller records
     status='failed'.  Connection/timeout errors also propagate as exceptions.
     """
     headers = _resolve_env_vars(config.headers)
-    body = config.payload_template if config.payload_template is not None else decision_payload
+
+    if config.payload_template is not None:
+        # Build the interpolation context from decision fields.
+        # Both "value" and "decision_value" are provided so templates can
+        # use either key; "decision_value" is the preferred webhook alias.
+        context: dict[str, str] = {
+            "entity":            str(decision_payload.get("entity", "")),
+            "value":             str(decision_payload.get("value", "")),
+            "decision_value":    str(decision_payload.get("value", "")),
+            "condition_id":      str(decision_payload.get("condition_id", "")),
+            "condition_version": str(decision_payload.get("condition_version", "")),
+            "timestamp":         str(decision_payload.get("timestamp") or ""),
+        }
+        body = _interpolate_template(config.payload_template, context)
+    else:
+        body = decision_payload
 
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.request(
