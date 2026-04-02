@@ -74,7 +74,7 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from typing import Any
 
-from app.api.deps import require_elevated_key
+from app.api.deps import require_api_key, require_elevated_key
 from app.compiler.dag_builder import DAGBuilder
 from app.models.concept import ConceptDefinition
 from app.models.condition import ConditionDefinition, DecisionValue
@@ -202,6 +202,7 @@ async def get_execute_service(
 async def evaluate_full(
     req: EvaluateFullRequest,
     service: ExecuteService = Depends(get_execute_service),
+    _: None = Depends(require_api_key),
 ) -> FullPipelineResult:
     """
     Run the full ψ → φ → α pipeline for a given entity.
@@ -241,6 +242,7 @@ async def evaluate_full(
 async def evaluate_condition(
     req: EvaluateConditionRequest,
     service: ExecuteService = Depends(get_execute_service),
+    _: None = Depends(require_api_key),
 ) -> DecisionResult:
     """
     Run the φ layer (condition evaluation) for a single entity.
@@ -272,6 +274,7 @@ async def evaluate_condition(
 async def evaluate_condition_batch(
     req: EvaluateConditionBatchRequest,
     service: ExecuteService = Depends(get_execute_service),
+    _: None = Depends(require_api_key),
 ) -> list[DecisionResult]:
     """
     Run condition evaluation (φ layer) for N entities in a single call.
@@ -301,6 +304,7 @@ async def evaluate_condition_batch(
 async def execute_batch(
     req: ExecuteBatchRequest,
     service: ExecuteService = Depends(get_execute_service),
+    _: None = Depends(require_api_key),
 ) -> BatchExecuteResult:
     """
     Run concept execution for N entities against the same (id, version).
@@ -331,6 +335,7 @@ async def execute_batch(
 async def execute_range(
     req: ExecuteRangeRequest,
     service: ExecuteService = Depends(get_execute_service),
+    _: None = Depends(require_api_key),
 ) -> list[ConceptResult]:
     """
     Run concept execution for one entity across a closed time range.
@@ -360,6 +365,7 @@ async def execute_range(
 async def execute_async(
     req: ExecuteRequest,
     service: ExecuteService = Depends(get_execute_service),
+    _: None = Depends(require_api_key),
 ) -> Job:
     """
     Enqueue a concept execution job and return immediately.
@@ -436,6 +442,7 @@ class StaticExecuteRequest(BaseModel):
 async def execute_static(
     req: StaticExecuteRequest,
     pool: asyncpg.Pool = Depends(get_db),
+    _: None = Depends(require_api_key),
 ) -> dict:
     """
     Evaluate a registered condition using caller-supplied primitive values.
@@ -444,8 +451,8 @@ async def execute_static(
     Compiles the linked concept on the fly, evaluates it with the provided
     data dict, then runs the condition strategy.
 
-    This endpoint is for local testing only — it does not require auth and
-    bypasses the production data pipeline entirely.
+    This endpoint is for local testing only — it bypasses the production
+    data pipeline entirely.
 
     Returns the DecisionValue as a JSON object.
     """
@@ -540,6 +547,7 @@ async def execute_static(
 async def execute(
     req: ExecuteRequest,
     service: ExecuteService = Depends(get_execute_service),
+    _: None = Depends(require_api_key),
 ) -> ConceptResult:
     """
     Run ψ layer execution for a single entity.

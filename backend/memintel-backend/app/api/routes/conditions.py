@@ -62,6 +62,7 @@ import asyncpg
 from fastapi import APIRouter, Depends, Query
 from fastapi import Request
 
+from app.api.deps import require_api_key
 from app.models.calibration import (
     ApplyCalibrationRequest,
     ApplyCalibrationResult,
@@ -153,6 +154,7 @@ async def get_calibration_service(
 async def explain_condition(
     req: ExplainConditionRequest,
     service: ExplanationService = Depends(get_explanation_service),
+    _: None = Depends(require_api_key),
 ) -> ConditionExplanation:
     """
     Return a human-readable explanation of a condition definition.
@@ -187,6 +189,7 @@ async def explain_condition(
 async def calibrate_condition(
     req: CalibrateRequest,
     service: CalibrationService = Depends(get_calibration_service),
+    _: None = Depends(require_api_key),
 ) -> CalibrationResult:
     """
     Analyse stored feedback and/or a target alert volume to recommend
@@ -265,6 +268,7 @@ async def get_condition(
         description="Condition version to retrieve (required)",
     ),
     store: DefinitionStore = Depends(get_definition_store),
+    _: None = Depends(require_api_key),
 ) -> ConditionDefinition:
     """
     Return the full ConditionDefinition for the given (condition_id, version).

@@ -44,6 +44,7 @@ import asyncpg
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
+from app.api.deps import require_api_key
 from app.models.condition import DecisionExplanation
 from app.persistence.db import get_db
 from app.registry.definitions import DefinitionRegistry
@@ -129,6 +130,7 @@ async def get_explanation_service(
 async def explain_decision(
     req: ExplainDecisionRequest,
     service: ExplanationService = Depends(get_explanation_service),
+    _: None = Depends(require_api_key),
 ) -> DecisionExplanation:
     """
     Return a full explanation of a decision result.

@@ -121,18 +121,17 @@ class TestAuthenticationEnforcement:
     ────────
     ENFORCED (correct):
       GET  /tasks           — requires X-Api-Key → 401
+      GET  /tasks/{id}      — requires X-Api-Key → 401
+      GET  /registry/definitions  — requires X-Api-Key → 401
+      POST /decisions/explain     — requires X-Api-Key → 401
+      POST /feedback/decision     — requires X-Api-Key → 401
+      POST /execute               — requires X-Api-Key → 401
       POST /compile         — requires X-Elevated-Key → 403
       POST /registry/definitions — requires X-Elevated-Key → 403
       POST /actions         — requires X-Elevated-Key → 403
       POST /guardrails      — requires X-Elevated-Key → 403
 
     SECURITY GAP — routes that return non-401/403 with no auth:
-      GET  /tasks/{id}               → 404 (not auth-gated)
-      GET  /registry/definitions     → 200 (public read, no auth)
-      POST /decisions/explain        → 404 (no auth, body validated only)
-      POST /conditions/calibrate     → 422 (no auth)
-      POST /feedback/decision        → 404/422 (no auth)
-      POST /execute                  → 404/422 (no auth)
       GET  /guardrails               → 404 (no auth, returns 404 when no version)
       POST /context/context          → 201 (no auth; double-prefix BUG-C3)
     """
@@ -154,37 +153,27 @@ class TestAuthenticationEnforcement:
         r = client.get("/tasks", headers=wrong_api_key_headers)
         assert r.status_code == 401
 
-    def test_get_task_by_id_without_auth_not_gated(self, app_client):
-        """
-        GET /tasks/{id} returns 404 for an unknown ID with no auth headers.
-
-        SECURITY GAP: This route has no authentication requirement.
-        Any unauthenticated caller can probe task IDs. The 404 here is only
-        because the task doesn't exist — an existing task_id would return 200.
-        """
+    def test_get_task_by_id_without_auth_returns_401(self, app_client):
+        """GET /tasks/{id} now enforces API key authentication."""
         client, _ = app_client
         r = client.get("/tasks/nonexistent-task-id")
-        # SECURITY GAP: should be 401 but is 404 — no auth guard
-        assert r.status_code == 404, (
-            f"SECURITY GAP: GET /tasks/{{id}} returned {r.status_code} (expected 404 "
-            "since no auth guard exists — existing tasks return 200 without auth)"
+        assert r.status_code == 401, (
+            f"GET /tasks/{{id}} must return 401 without auth, got {r.status_code}"
         )
+        body = r.json()
+        assert "error" in body
+        assert body["error"]["type"] == "auth_error"
 
-    def test_list_registry_definitions_without_auth_returns_200(self, app_client):
-        """
-        GET /registry/definitions returns 200 with no auth headers.
-
-        SECURITY GAP: Definition registry is publicly readable. Any caller
-        (including unauthenticated external parties) can enumerate all
-        registered concepts, conditions, actions, and features.
-        """
+    def test_list_registry_definitions_without_auth_returns_401(self, app_client):
+        """GET /registry/definitions now enforces API key authentication."""
         client, _ = app_client
         r = client.get("/registry/definitions")
-        # SECURITY GAP: returns 200 — no authentication required for registry reads
-        assert r.status_code == 200, (
-            f"SECURITY GAP: GET /registry/definitions returned {r.status_code}; "
-            "expected 200 (the gap is that no auth is required)"
+        assert r.status_code == 401, (
+            f"GET /registry/definitions must return 401 without auth, got {r.status_code}"
         )
+        body = r.json()
+        assert "error" in body
+        assert body["error"]["type"] == "auth_error"
 
     def test_post_compile_without_elevated_key_returns_403(self, app_client):
         """POST /compile rejects requests without an elevated key."""
@@ -218,14 +207,8 @@ class TestAuthenticationEnforcement:
             f"POST /guardrails without elevated key must not return 200, got {r.status_code}"
         )
 
-    def test_post_decisions_explain_without_auth_is_not_gated(self, app_client):
-        """
-        POST /decisions/explain accepts requests with no auth headers.
-
-        SECURITY GAP: Decision explanation requires no authentication.
-        Callers can query arbitrary (condition_id, entity) decision data
-        without proving identity.
-        """
+    def test_post_decisions_explain_without_auth_returns_401(self, app_client):
+        """POST /decisions/explain now enforces API key authentication."""
         client, _ = app_client
         r = client.post(
             "/decisions/explain",
@@ -236,19 +219,15 @@ class TestAuthenticationEnforcement:
                 "timestamp": "2024-01-01T00:00:00Z",
             },
         )
-        # SECURITY GAP: 404 (no auth) rather than 401
-        assert r.status_code in (404, 422), (
-            f"SECURITY GAP: POST /decisions/explain returns {r.status_code} "
-            "with no auth (should be 401)"
+        assert r.status_code == 401, (
+            f"POST /decisions/explain must return 401 without auth, got {r.status_code}"
         )
+        body = r.json()
+        assert "error" in body
+        assert body["error"]["type"] == "auth_error"
 
-    def test_post_feedback_without_auth_is_not_gated(self, app_client):
-        """
-        POST /feedback/decision accepts requests with no auth headers.
-
-        SECURITY GAP: Feedback submission requires no authentication.
-        Any caller can submit feedback for arbitrary decisions.
-        """
+    def test_post_feedback_without_auth_returns_401(self, app_client):
+        """POST /feedback/decision now enforces API key authentication."""
         client, _ = app_client
         r = client.post(
             "/feedback/decision",
@@ -260,19 +239,15 @@ class TestAuthenticationEnforcement:
                 "feedback": "correct",
             },
         )
-        # SECURITY GAP: 404 (no auth) rather than 401
-        assert r.status_code in (404, 422), (
-            f"SECURITY GAP: POST /feedback/decision returns {r.status_code} "
-            "with no auth (expected 401)"
+        assert r.status_code == 401, (
+            f"POST /feedback/decision must return 401 without auth, got {r.status_code}"
         )
+        body = r.json()
+        assert "error" in body
+        assert body["error"]["type"] == "auth_error"
 
-    def test_post_execute_without_auth_is_not_gated(self, app_client):
-        """
-        POST /execute accepts requests with no auth.
-
-        SECURITY GAP: Concept execution (ψ layer) requires no authentication.
-        External callers can execute arbitrary concept graphs.
-        """
+    def test_post_execute_without_auth_returns_401(self, app_client):
+        """POST /execute now enforces API key authentication."""
         client, _ = app_client
         r = client.post(
             "/execute",
@@ -283,10 +258,12 @@ class TestAuthenticationEnforcement:
                 "timestamp": "2024-01-01T00:00:00Z",
             },
         )
-        # SECURITY GAP: 404 or 422 (not 401)
-        assert r.status_code in (404, 422), (
-            f"SECURITY GAP: POST /execute returns {r.status_code} with no auth"
+        assert r.status_code == 401, (
+            f"POST /execute must return 401 without auth, got {r.status_code}"
         )
+        body = r.json()
+        assert "error" in body
+        assert body["error"]["type"] == "auth_error"
 
 
 # ── GROUP 2: Elevated key enforcement ──────────────────────────────────────────
@@ -654,7 +631,9 @@ class TestEntityPseudonymisation:
     the API.
     """
 
-    def test_entity_pii_not_echoed_in_decision_not_found_error(self, app_client):
+    def test_entity_pii_not_echoed_in_decision_not_found_error(
+        self, app_client, valid_api_key_headers
+    ):
         """
         When a decision record is not found (404), the error body must not echo
         the entity value. The error message describes the missing decision, not
@@ -671,6 +650,7 @@ class TestEntityPseudonymisation:
                 "entity": pii_entity,
                 "timestamp": "2024-01-01T00:00:00Z",
             },
+            headers=valid_api_key_headers,
         )
         # This should return 404 (condition not found in DB), not 422
         assert r.status_code == 404, (
@@ -682,7 +662,9 @@ class TestEntityPseudonymisation:
             f"SECURITY: entity PII '{pii_entity}' found verbatim in 404 error response"
         )
 
-    def test_entity_pii_not_in_execution_not_found_error(self, app_client):
+    def test_entity_pii_not_in_execution_not_found_error(
+        self, app_client, valid_api_key_headers
+    ):
         """
         When a concept is not found (404), the error body must not echo the
         entity value submitted in the execution request.
@@ -698,6 +680,7 @@ class TestEntityPseudonymisation:
                 "entity": pii_entity,
                 "timestamp": "2024-01-01T00:00:00Z",
             },
+            headers=valid_api_key_headers,
         )
         assert r.status_code in (404, 422), (
             f"Expected 404 or 422, got {r.status_code}: {r.text}"
@@ -712,7 +695,9 @@ class TestEntityPseudonymisation:
             # This is acceptable for the test since the gap is already noted in the docstring
             pass
 
-    def test_entity_pii_not_in_feedback_decision_not_found_error(self, app_client):
+    def test_entity_pii_not_in_feedback_decision_not_found_error(
+        self, app_client, valid_api_key_headers
+    ):
         """
         When feedback is submitted for a non-existent decision (404), the error
         body must not echo the entity value.
@@ -729,6 +714,7 @@ class TestEntityPseudonymisation:
                 "timestamp": "2024-01-01T00:00:00Z",
                 "feedback": "correct",
             },
+            headers=valid_api_key_headers,
         )
         assert r.status_code in (404, 422), (
             f"Expected 404 or 422, got {r.status_code}: {r.text}"
@@ -738,21 +724,19 @@ class TestEntityPseudonymisation:
                 f"SECURITY: entity PII '{pii_entity}' echoed in 404 error response"
             )
 
-    def test_fastapi_422_echoes_input_is_known_gap(self, app_client):
+    def test_fastapi_422_does_not_echo_input(self, app_client, valid_api_key_headers):
         """
-        SECURITY GAP (documented): FastAPI's 422 validation error response
-        includes the full request input in detail[].input.
+        Custom RequestValidationError handler strips the 'input' field from
+        422 validation error responses, preventing PII from being echoed back.
 
-        If a request fails body validation AND contains PII in any field,
-        the PII will be echoed back in the 422 response. This is standard
-        FastAPI/Pydantic behaviour and requires a custom validation error
-        handler to suppress.
+        FIX 3: A custom validation_exception_handler in main.py replaces FastAPI's
+        built-in 422 handler and removes the 'input' field from each error entry.
         """
         client, _ = app_client
         pii_entity = f"pii-in-422.{_uid()}@example.com"
 
-        # Submit a request with a MISSING required field to trigger 422
-        # Entity is present but the required field 'id' is absent from ExecuteRequest
+        # Submit a request with a MISSING required field to trigger 422.
+        # Entity is present but the required field 'id' is absent from ExecuteRequest.
         r = client.post(
             "/execute",
             json={
@@ -760,16 +744,21 @@ class TestEntityPseudonymisation:
                 "version": "1.0",
                 "entity": pii_entity,
             },
+            headers=valid_api_key_headers,
         )
         assert r.status_code == 422
-        # SECURITY GAP: FastAPI echoes back the input including the entity value
-        # The assertion below DOCUMENTS the gap (it asserts the gap exists, not that it's secure)
+        # FIX 3: custom handler strips 'input' — PII must NOT appear in response
+        body = r.json()
         body_text = r.text
-        # FastAPI includes input in detail[].input — the entity IS echoed back
-        assert pii_entity in body_text, (
-            "SECURITY GAP confirmed: FastAPI 422 responses echo back input fields. "
-            "PII submitted in 'entity' appears verbatim in the 422 error body."
+        assert pii_entity not in body_text, (
+            "FIX 3 FAILED: PII from 'entity' field still appears in 422 response body."
         )
+        # The detail array must still be present with loc/msg/type but no 'input'
+        assert "detail" in body
+        for err in body.get("detail", []):
+            assert "input" not in err, (
+                f"'input' field found in 422 detail entry: {err}"
+            )
 
     def test_entity_stored_as_provided_is_design_decision(self):
         """
@@ -876,12 +865,11 @@ class TestInputSanitisation:
         self, permissive_client, valid_elevated_headers
     ):
         """
-        A null byte (\\x00) in definition_id must not produce an unhandled
-        500 that exposes DB internals.
+        A null byte (\\x00) in definition_id must not produce an unhandled 500.
 
-        Postgres rejects null bytes in text columns with a CheckViolationError
-        or similar. The API should surface this as a clean 4xx. If it returns
-        500, the error body must not expose DB credentials or raw SQL.
+        FIX 2: A global asyncpg.PostgresError exception handler in main.py
+        catches the DataError raised by Postgres for null bytes and returns
+        HTTP 422 with {"detail": "Invalid data format"}.
         """
         null_byte_id = f"def-\x00-invalid-{_uid()}"
         r = permissive_client.post(
@@ -889,19 +877,18 @@ class TestInputSanitisation:
             json=_register_def_payload(null_byte_id, namespace="org"),
             headers=valid_elevated_headers,
         )
-        if r.status_code == 500:
-            # 500 is a security gap — but at minimum the response must not expose credentials
-            assert _body_has_no_db_credentials(r.text), (
-                "SECURITY: DB credentials exposed in 500 response to null-byte input"
-            )
-            pytest.xfail(
-                "SECURITY GAP: null byte in definition_id causes unhandled 500. "
-                "The application should catch asyncpg errors and return 422."
-            )
-        else:
-            assert r.status_code in (200, 400, 422), (
-                f"Unexpected status for null-byte input: {r.status_code}"
-            )
+        # FIX 2: must return 4xx, not 500
+        assert r.status_code != 500, (
+            f"FIX 2 FAILED: null byte in definition_id still causes 500. "
+            f"Response: {r.text[:300]}"
+        )
+        assert r.status_code in (200, 400, 422), (
+            f"Unexpected status for null-byte input: {r.status_code}"
+        )
+        # Credentials must not appear regardless of status
+        assert _body_has_no_db_credentials(r.text), (
+            "SECURITY: DB credentials exposed in response to null-byte input"
+        )
 
     def test_unicode_in_definition_id_handled_safely(
         self, permissive_client, valid_elevated_headers

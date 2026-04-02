@@ -28,8 +28,10 @@ import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import asyncpg
 import structlog
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_redoc_html
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -258,11 +260,44 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
     )
 
 
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """
+    Override FastAPI's default 422 handler to strip the 'input' field from
+    validation errors, preventing user-supplied data from being echoed back.
+    """
+    errors = [
+        {"loc": e["loc"], "msg": e["msg"], "type": e["type"]}
+        for e in exc.errors()
+    ]
+    return JSONResponse(status_code=422, content={"detail": errors})
+
+
+@app.exception_handler(asyncpg.PostgresError)
+async def postgres_error_handler(request: Request, exc: asyncpg.PostgresError) -> JSONResponse:
+    """
+    Map asyncpg database errors to safe HTTP responses.
+
+    Prevents raw PostgreSQL error messages (which may include query fragments
+    or data) from leaking to callers.
+    """
+    if isinstance(exc, asyncpg.CheckViolationError):
+        return JSONResponse(status_code=422, content={"detail": "Invalid field value"})
+    if isinstance(exc, asyncpg.DataError):
+        return JSONResponse(status_code=422, content={"detail": "Invalid data format"})
+    log.error(
+        "postgres_error",
+        exc_type=type(exc).__name__,
+        exc_str=str(exc),
+    )
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
+
 @app.exception_handler(Exception)
 async def generic_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """
-    Catch-all handler for unexpected exceptions (unhandled Python errors,
-    RequestValidationError, etc.). Always returns HTTP 500 ErrorResponse.
+    Catch-all handler for unexpected exceptions (unhandled Python errors).
+    Always returns HTTP 500 ErrorResponse.
 
     Logs the exception before responding.
     """

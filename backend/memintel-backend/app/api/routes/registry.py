@@ -63,7 +63,7 @@ import asyncpg
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field, field_validator
 
-from app.api.deps import require_elevated_key
+from app.api.deps import require_api_key, require_elevated_key
 from app.models.concept import (
     DefinitionResponse,
     LineageResult,
@@ -215,6 +215,7 @@ async def search_definitions(
     limit: int = Query(default=20, ge=1, le=100),
     cursor: str | None = Query(default=None, description="Pagination cursor"),
     service: RegistryService = Depends(get_registry_service),
+    _: None = Depends(require_api_key),
 ) -> SearchResult:
     """
     Search definitions by keyword across id, namespace, and metadata.
@@ -272,6 +273,7 @@ async def register_feature(
 async def get_feature_usages(
     feature_id: str,
     service: RegistryService = Depends(get_registry_service),
+    _: None = Depends(require_api_key),
 ) -> UsageResult:
     """
     Return all definitions that depend on the given feature.
@@ -296,6 +298,7 @@ async def get_feature_usages(
 async def get_feature(
     feature_id: str,
     service: RegistryService = Depends(get_registry_service),
+    _: None = Depends(require_api_key),
 ) -> RegisteredFeature:
     """
     Return a registered feature by feature_id.
@@ -319,6 +322,7 @@ async def list_features(
     limit: int = Query(default=20, ge=1, le=100),
     cursor: str | None = Query(default=None, description="Pagination cursor"),
     service: RegistryService = Depends(get_registry_service),
+    _: None = Depends(require_api_key),
 ) -> FeatureSearchResult:
     """
     Search features in the feature registry.
@@ -349,6 +353,7 @@ async def list_definitions(
     limit: int = Query(default=20, ge=1, le=100),
     cursor: str | None = Query(default=None, description="Pagination cursor"),
     service: RegistryService = Depends(get_registry_service),
+    _: None = Depends(require_api_key),
 ) -> SearchResult:
     """
     Return a paginated list of definitions.
@@ -444,6 +449,7 @@ async def register_definitions_batch(
 async def get_versions(
     definition_id: str,
     service: RegistryService = Depends(get_registry_service),
+    _: None = Depends(require_api_key),
 ) -> list[VersionSummary]:
     """
     Return all versions of a definition, newest-first (created_at DESC).
@@ -467,6 +473,7 @@ async def get_versions(
 async def get_lineage(
     definition_id: str,
     service: RegistryService = Depends(get_registry_service),
+    _: None = Depends(require_api_key),
 ) -> LineageResult:
     """
     Return the version chain and namespace promotion history of a definition.
@@ -492,6 +499,7 @@ async def get_semantic_diff(
     version_from: str = Query(..., description="Base version (older)"),
     version_to: str = Query(..., description="Target version (newer)"),
     service: RegistryService = Depends(get_registry_service),
+    _: None = Depends(require_api_key),
 ) -> SemanticDiffResult:
     """
     Compare two versions of a definition and return the semantic diff.

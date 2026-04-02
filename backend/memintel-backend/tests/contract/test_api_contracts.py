@@ -120,7 +120,7 @@ class TestOpenAPISchema:
 class TestRequestValidation:
     """Tests 4-9: FastAPI/Pydantic validation rejects invalid requests with 422."""
 
-    def test_missing_concept_id_returns_422(self, app_client):
+    def test_missing_concept_id_returns_422(self, app_client, api_key_headers):
         """Test 4: POST /evaluate/full without concept_id → 422."""
         client, _ = app_client
         r = client.post("/evaluate/full", json={
@@ -128,10 +128,10 @@ class TestRequestValidation:
             "condition_id": "cond.example",
             "condition_version": "1.0",
             "entity": "e1",
-        })
+        }, headers=api_key_headers)
         assert r.status_code == 422
 
-    def test_concept_id_too_long_returns_422(self, app_client):
+    def test_concept_id_too_long_returns_422(self, app_client, api_key_headers):
         """Test 5: POST /evaluate/full with 256-char concept_id → 422 (max_length=255)."""
         client, _ = app_client
         r = client.post("/evaluate/full", json={
@@ -140,7 +140,7 @@ class TestRequestValidation:
             "condition_id": "cond.example",
             "condition_version": "1.0",
             "entity": "e1",
-        })
+        }, headers=api_key_headers)
         assert r.status_code == 422
 
     def test_missing_intent_returns_422(self, app_client):
@@ -149,7 +149,7 @@ class TestRequestValidation:
         r = client.post("/tasks", json={"dry_run": False})
         assert r.status_code == 422
 
-    def test_wrong_feedback_value_returns_422(self, app_client):
+    def test_wrong_feedback_value_returns_422(self, app_client, api_key_headers):
         """Test 7: POST /feedback/decision with invalid feedback enum → 422."""
         client, _ = app_client
         r = client.post("/feedback/decision", json={
@@ -158,7 +158,7 @@ class TestRequestValidation:
             "entity": "e1",
             "timestamp": "2026-01-01T00:00:00Z",
             "feedback": "definitely_wrong_value",
-        })
+        }, headers=api_key_headers)
         assert r.status_code == 422
 
     def test_invalid_task_status_enum_returns_422(self, app_client, api_key_headers):
@@ -167,14 +167,15 @@ class TestRequestValidation:
         r = client.get("/tasks?status=not_a_real_status", headers=api_key_headers)
         assert r.status_code == 422
 
-    def test_invalid_definition_type_returns_422(self, app_client):
+    def test_invalid_definition_type_returns_422(self, app_client, api_key_headers):
         """Test 9: GET /registry/definitions?definition_type=bogus → 422 (BUG-C2 fix).
 
         After FIX 2, definition_type is a validated Literal enum.
         Invalid values now return 422 instead of silently returning an empty list.
         """
         client, _ = app_client
-        r = client.get("/registry/definitions?definition_type=totally_bogus_type")
+        r = client.get("/registry/definitions?definition_type=totally_bogus_type",
+                       headers=api_key_headers)
         assert r.status_code == 422
 
     def test_missing_required_query_param_returns_422(self, app_client):
@@ -275,20 +276,20 @@ class TestResponseShapes:
         assert "has_more" in body
         assert "next_cursor" in body
 
-    def test_get_nonexistent_task_returns_404(self, app_client):
+    def test_get_nonexistent_task_returns_404(self, app_client, api_key_headers):
         """Test 15: GET /tasks/{id} for unknown id → 404."""
         client, _ = app_client
-        r = client.get("/tasks/nonexistent-task-id")
+        r = client.get("/tasks/nonexistent-task-id", headers=api_key_headers)
         assert r.status_code == 404
         body = r.json()
         assert "error" in body
 
     # ── Registry ──────────────────────────────────────────────────────────────
 
-    def test_list_registry_definitions_returns_search_result_shape(self, app_client):
+    def test_list_registry_definitions_returns_search_result_shape(self, app_client, api_key_headers):
         """Test 16: GET /registry/definitions → 200 SearchResult shape."""
         client, _ = app_client
-        r = client.get("/registry/definitions?namespace=org")
+        r = client.get("/registry/definitions?namespace=org", headers=api_key_headers)
         assert r.status_code == 200
         body = r.json()
         assert "items" in body
@@ -364,7 +365,7 @@ class TestResponseShapes:
 
     # ── Feedback ──────────────────────────────────────────────────────────────
 
-    def test_post_feedback_returns_404_for_unknown_decision(self, app_client):
+    def test_post_feedback_returns_404_for_unknown_decision(self, app_client, api_key_headers):
         """Test 20: POST /feedback/decision for a non-existent decision → 404.
 
         The feedback service requires a matching decision record. With an empty
@@ -377,7 +378,7 @@ class TestResponseShapes:
             "entity": "e1",
             "timestamp": "2026-01-01T00:00:00Z",
             "feedback": "false_positive",
-        })
+        }, headers=api_key_headers)
         assert r.status_code == 404
         body = r.json()
         assert "error" in body
@@ -411,7 +412,7 @@ class TestResponseShapes:
         r = client.post("/conditions/calibrate", json={
             "condition_id": "cond.calibrate_test",
             "condition_version": "1.0",
-        })
+        }, headers={"X-Api-Key": API_KEY})
         assert r.status_code == 200
         body = r.json()
         assert "status" in body
@@ -420,7 +421,7 @@ class TestResponseShapes:
 
 
 # ── import the constant for inlined assertions ─────────────────────────────────
-from tests.contract.conftest import ELEVATED_KEY
+from tests.contract.conftest import API_KEY, ELEVATED_KEY
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -430,10 +431,10 @@ from tests.contract.conftest import ELEVATED_KEY
 class TestErrorShapes:
     """Tests 22-25: all error responses use the canonical ErrorResponse shape."""
 
-    def test_404_error_has_canonical_shape(self, app_client):
+    def test_404_error_has_canonical_shape(self, app_client, api_key_headers):
         """Test 22: any 404 response → {error: {type, message}} shape."""
         client, _ = app_client
-        r = client.get("/tasks/no-such-task-id")
+        r = client.get("/tasks/no-such-task-id", headers=api_key_headers)
         assert r.status_code == 404
         body = r.json()
         assert "error" in body, f"Expected 'error' key in 404 body, got: {body}"
@@ -475,7 +476,7 @@ class TestErrorShapes:
         assert body["error"]["type"] == "auth_error"
         assert "message" in body["error"]
 
-    def test_422_uses_fastapi_detail_format(self, app_client):
+    def test_422_uses_fastapi_detail_format(self, app_client, api_key_headers):
         """Test 25: request validation failure → 422 with FastAPI 'detail' array.
 
         FastAPI's built-in RequestValidationError handler returns:
@@ -483,7 +484,8 @@ class TestErrorShapes:
         This is distinct from the Memintel ErrorResponse format used for 4xx/5xx.
         """
         client, _ = app_client
-        r = client.post("/evaluate/full", json={"this_key": "is_not_valid"})
+        r = client.post("/evaluate/full", json={"this_key": "is_not_valid"},
+                        headers=api_key_headers)
         assert r.status_code == 422
         body = r.json()
         assert "detail" in body, f"Expected 'detail' key in 422 body, got: {body}"
@@ -557,15 +559,15 @@ class TestPagination:
 class TestDeterminism:
     """Tests 28-30: same inputs always produce the same outputs."""
 
-    def test_same_inputs_same_output(self, app_client):
+    def test_same_inputs_same_output(self, app_client, api_key_headers):
         """Test 28: two identical GET /registry/definitions requests → identical response."""
         client, _ = app_client
-        r1 = client.get("/registry/definitions?namespace=org")
-        r2 = client.get("/registry/definitions?namespace=org")
+        r1 = client.get("/registry/definitions?namespace=org", headers=api_key_headers)
+        r2 = client.get("/registry/definitions?namespace=org", headers=api_key_headers)
         assert r1.status_code == r2.status_code == 200
         assert r1.json() == r2.json()
 
-    def test_evaluate_full_without_timestamp_is_snapshot_mode(self, app_client, elevated_headers):
+    def test_evaluate_full_without_timestamp_is_snapshot_mode(self, app_client, api_key_headers):
         """Test 29: POST /evaluate/full without timestamp → snapshot mode.
 
         Without timestamp the service uses the current time (snapshot mode).
@@ -581,8 +583,8 @@ class TestDeterminism:
             "condition_version": "1.0",
             "entity": "entity_snapshot",
         }
-        r1 = client.post("/evaluate/full", json=body)
-        r2 = client.post("/evaluate/full", json=body)
+        r1 = client.post("/evaluate/full", json=body, headers=api_key_headers)
+        r2 = client.post("/evaluate/full", json=body, headers=api_key_headers)
         # Both calls must return the same HTTP status
         assert r1.status_code == r2.status_code
         # Both calls must return the same error type (concept/condition not found)
@@ -591,7 +593,7 @@ class TestDeterminism:
             b1.get("error", {}).get("type") == b2.get("error", {}).get("type")
         )
 
-    def test_evaluate_full_with_timestamp_is_deterministic(self, app_client, elevated_headers):
+    def test_evaluate_full_with_timestamp_is_deterministic(self, app_client, api_key_headers):
         """Test 30: POST /evaluate/full with the same timestamp → identical responses.
 
         With a fixed timestamp the pipeline is deterministic: primitive fetches
@@ -607,8 +609,8 @@ class TestDeterminism:
             "entity": "entity_det_1",
             "timestamp": "2026-01-01T00:00:00Z",
         }
-        r1 = client.post("/evaluate/full", json=body)
-        r2 = client.post("/evaluate/full", json=body)
+        r1 = client.post("/evaluate/full", json=body, headers=api_key_headers)
+        r2 = client.post("/evaluate/full", json=body, headers=api_key_headers)
         assert r1.status_code == r2.status_code
         assert r1.json() == r2.json()
 
@@ -645,7 +647,7 @@ class TestFixes:
         r = client.get("/tasks", headers=api_key_headers)
         assert r.status_code == 200
 
-    def test_fix2_invalid_definition_type_returns_422(self, app_client):
+    def test_fix2_invalid_definition_type_returns_422(self, app_client, api_key_headers):
         """FIX 2 (BUG-C2): GET /registry/definitions?definition_type=bad → 422.
 
         Before fix: definition_type was str — invalid values silently returned
@@ -654,16 +656,18 @@ class TestFixes:
         return HTTP 422 immediately.
         """
         client, _ = app_client
-        r = client.get("/registry/definitions?definition_type=not_a_real_type")
+        r = client.get("/registry/definitions?definition_type=not_a_real_type",
+                       headers=api_key_headers)
         assert r.status_code == 422, (
             f"Expected 422 from Literal validation, got {r.status_code}: {r.text}"
         )
 
-    def test_fix2_valid_definition_type_still_returns_200(self, app_client):
+    def test_fix2_valid_definition_type_still_returns_200(self, app_client, api_key_headers):
         """FIX 2 (BUG-C2): valid definition_type values still return 200."""
         client, _ = app_client
         for valid_type in ("concept", "condition", "action", "primitive", "feature"):
-            r = client.get(f"/registry/definitions?definition_type={valid_type}")
+            r = client.get(f"/registry/definitions?definition_type={valid_type}",
+                           headers=api_key_headers)
             assert r.status_code == 200, (
                 f"definition_type='{valid_type}' should return 200, got {r.status_code}"
             )

@@ -65,7 +65,7 @@ import asyncpg
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from app.api.deps import require_elevated_key
+from app.api.deps import require_api_key, require_elevated_key
 from app.models.concept import (
     ConceptDefinition,
     ExecutionGraph,
@@ -188,6 +188,7 @@ async def compile_explain_plan(
 async def get_graph(
     graph_id: str,
     store: GraphStore = Depends(get_graph_store),
+    _: None = Depends(require_api_key),
 ) -> ExecutionGraph:
     """
     Retrieve a stored execution graph by graph_id.

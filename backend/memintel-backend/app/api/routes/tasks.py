@@ -181,6 +181,7 @@ async def list_tasks(
 async def get_task(
     task_id: str,
     store: TaskStore = Depends(get_task_store),
+    _: None = Depends(require_api_key),
 ) -> Task:
     """
     Return the full task definition by task_id.
@@ -208,6 +209,7 @@ async def update_task(
     task_id: str,
     body: TaskUpdateRequest,
     service: TaskAuthoringService = Depends(get_task_authoring_service),
+    _: None = Depends(require_api_key),
 ) -> Task:
     """
     Update operational task settings.
@@ -240,6 +242,7 @@ async def update_task(
 async def delete_task(
     task_id: str,
     service: TaskAuthoringService = Depends(get_task_authoring_service),
+    _: None = Depends(require_api_key),
 ) -> Task:
     """
     Soft-delete a task (status → 'deleted').

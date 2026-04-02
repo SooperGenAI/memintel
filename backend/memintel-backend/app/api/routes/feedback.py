@@ -49,6 +49,7 @@ import structlog
 import asyncpg
 from fastapi import APIRouter, Depends
 
+from app.api.deps import require_api_key
 from app.models.calibration import FeedbackRequest, FeedbackResponse
 from app.persistence.db import get_db
 from app.registry.definitions import DefinitionRegistry
@@ -93,6 +94,7 @@ async def get_feedback_service(
 async def submit_feedback(
     req: FeedbackRequest,
     service: FeedbackService = Depends(get_feedback_service),
+    _: None = Depends(require_api_key),
 ) -> FeedbackResponse:
     """
     Record user feedback on a specific decision result.

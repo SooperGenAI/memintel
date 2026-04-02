@@ -26,6 +26,7 @@ if "aioredis" not in sys.modules:
 import asyncpg
 import pytest
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.testclient import TestClient
 
@@ -221,6 +222,22 @@ def _make_test_app() -> FastAPI:
     app = FastAPI(title="Memintel Backend API", lifespan=_test_lifespan)
     app.add_exception_handler(MemintelError, memintel_error_handler)
     app.add_exception_handler(HTTPException, _http_exc_handler)
+
+    @app.exception_handler(RequestValidationError)
+    async def _validation_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+        errors = [
+            {"loc": e["loc"], "msg": e["msg"], "type": e["type"]}
+            for e in exc.errors()
+        ]
+        return JSONResponse(status_code=422, content={"detail": errors})
+
+    @app.exception_handler(asyncpg.PostgresError)
+    async def _postgres_handler(request: Request, exc: asyncpg.PostgresError) -> JSONResponse:
+        if isinstance(exc, asyncpg.CheckViolationError):
+            return JSONResponse(status_code=422, content={"detail": "Invalid field value"})
+        if isinstance(exc, asyncpg.DataError):
+            return JSONResponse(status_code=422, content={"detail": "Invalid data format"})
+        return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
     app.include_router(execute.evaluate_router, prefix="/evaluate", tags=["Execution"])
     app.include_router(execute.router,          prefix="/execute",  tags=["Execution"])
