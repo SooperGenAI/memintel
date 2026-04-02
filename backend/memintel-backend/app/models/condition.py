@@ -193,12 +193,30 @@ class EqualsParams(BaseModel):
         return v
 
 
+class OperandRef(BaseModel):
+    """
+    A version-pinned reference to an operand condition.
+
+    Stored inside CompositeParams.operands so that the exact version of each
+    operand is locked at task-authoring time (compile time).  Evaluation always
+    fetches the pinned version — calibrating an operand to a new version does
+    NOT silently change composite behaviour.
+
+    condition_id      — registered condition_id (e.g. 'org.high_churn_risk').
+    condition_version — the version pinned at compile time (e.g. '1.0').
+    """
+    condition_id: str
+    condition_version: str
+
+
 class CompositeParams(BaseModel):
     """
     composite strategy parameters.
 
     operator: 'AND' | 'OR' | 'NOT'
-    operands: list of condition_ids to evaluate
+    operands: list of version-pinned operand condition references (OperandRef).
+              Each entry locks the (condition_id, condition_version) pair that
+              was current when the composite condition was authored.
 
     Operator-specific operand counts (enforced by model validator):
       NOT — exactly 1 operand (inversion of a single boolean condition)
@@ -211,7 +229,7 @@ class CompositeParams(BaseModel):
       - all operand condition_ids must exist in the registry
     """
     operator: CompositeOperator
-    operands: list[str] = Field(min_length=1)
+    operands: list[OperandRef] = Field(min_length=1)
 
     @model_validator(mode="after")
     def _validate_operand_count(self) -> "CompositeParams":
@@ -377,14 +395,28 @@ class DecisionValue(BaseModel):
     Actions receive DecisionValue directly — they do not unwrap it.
     Use unwrap() to extract .value and discard provenance.
 
-    reason is set when the strategy could not be evaluated due to insufficient
-    or unavailable history. Possible values:
+    reason is set when the strategy could not be evaluated, or when the input
+    data was missing or unavailable. Possible values:
+      "fetch_error"          — the connector raised ConnectorError; the primitive
+                               could not be fetched. Data quality failure.
+                               Categorically different from a legitimate null:
+                               the value is absent due to infrastructure failure,
+                               not because the entity has no value at this time.
+                               value=False; the decision did not fire.
+      "null_input"           — the primitive legitimately has no value for this
+                               entity at this time. Expected domain behaviour;
+                               the missing_data_policy was applied (null).
+                               value=False; the decision did not fire.
       "insufficient_history" — fewer than the minimum required historical results
                                are available for this entity + concept pair.
                                value=False; the decision did not fire.
       "history_unavailable"  — the history query raised an exception; execution
                                continued with empty history as fallback.
                                value=False; the decision did not fire.
+      "zero_variance"        — std(history) == 0; z-score is undefined.
+      "infinite_change"      — previous value == 0; any movement is infinite.
+      "threshold_zero"       — percentile cutoff == 0%; no entity qualifies.
+      "no_match"             — equals strategy: result label not in target set.
     history_count is the number of historical results that were available at
     evaluation time. Set when reason is set; None otherwise.
     """

@@ -277,10 +277,20 @@ class DecisionResult(BaseModel):
     value is bool for boolean strategies (threshold/percentile/z_score/change/composite).
     value is str (the matched label) for the equals strategy on categorical input.
 
-    reason is populated when z_score, percentile, or change strategies could not
-    evaluate due to insufficient or unavailable history. Auditable and queryable.
+    reason is populated when the strategy could not evaluate or the input data
+    was missing or unavailable. Auditable and queryable. Valid values:
+      "fetch_error"          — connector failed to return a value; data quality
+                               issue. Categorically distinct from null_input:
+                               the primitive is absent due to infrastructure
+                               failure, not because the entity has no value.
+      "null_input"           — primitive legitimately has no value for this
+                               entity at this time. Expected domain behaviour.
       "insufficient_history" — fewer than the required minimum results available.
       "history_unavailable"  — history query failed; fallback to False.
+      "zero_variance"        — all historical values identical; z-score undefined.
+      "infinite_change"      — previous value was 0; change is undefined.
+      "threshold_zero"       — percentile cutoff == 0%; no entity qualifies.
+      "no_match"             — equals strategy: result label did not match target.
     history_count reflects how many historical results were found (0 if the
     query failed). Set only when reason is also set.
     """

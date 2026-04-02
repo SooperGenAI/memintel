@@ -336,8 +336,13 @@ def _threshold_cond_reg_body(cond_id: str, concept_id: str,
 def _composite_cond_reg_body(cond_id: str, concept_id: str,
                               operator: str, operands: list[str],
                               version: str = "v1",
-                              concept_version: str = "v1") -> dict:
+                              concept_version: str = "v1",
+                              operand_version: str = "v1") -> dict:
     """Build a definition-registry request body for a composite condition."""
+    pinned_operands = [
+        {"condition_id": op_id, "condition_version": operand_version}
+        for op_id in operands
+    ]
     return {
         "definition_id": cond_id,
         "version": version,
@@ -351,7 +356,7 @@ def _composite_cond_reg_body(cond_id: str, concept_id: str,
             "concept_version": concept_version,
             "strategy": {
                 "type": "composite",
-                "params": {"operator": operator, "operands": operands},
+                "params": {"operator": operator, "operands": pinned_operands},
             },
         },
     }

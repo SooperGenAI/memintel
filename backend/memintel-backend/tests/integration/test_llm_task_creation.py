@@ -538,13 +538,31 @@ def test_llm_schema_conformance_each_strategy() -> None:
     cases = [
         ("threshold",  _THRESHOLD_OUTPUT, {"direction": "above", "value": 0.80}),
         ("z_score",    _Z_SCORE_OUTPUT,   {"threshold": 2.5, "direction": "above", "window": "30d"}),
-        ("composite",  _COMPOSITE_OUTPUT, {"operator": "AND", "operands": ["org.high_churn_risk", "org.high_ltv_customer"]}),
+        ("composite",  _COMPOSITE_OUTPUT, {"operator": "AND", "operands": [
+            {"condition_id": "org.high_churn_risk",    "condition_version": "1.0"},
+            {"condition_id": "org.high_ltv_customer",  "condition_version": "1.0"},
+        ]}),
         ("equals",     _EQUALS_OUTPUT,    {"value": "high_risk", "labels": ["low_risk", "medium_risk", "high_risk"]}),
     ]
 
     for strategy_type, llm_output, expected_params in cases:
         scripted = ScriptedLLMClient([copy.deepcopy(llm_output)])
         svc, def_store, task_store = _make_service(scripted)
+
+        # Composite: pre-register the operand conditions so that
+        # _pin_composite_operand_versions() can resolve their latest versions.
+        if strategy_type == "composite":
+            for op_id, op_body in [
+                ("org.high_churn_risk",   {"condition_id": "org.high_churn_risk",   "version": "1.0", "namespace": "org", "concept_id": "org.churn_score",  "concept_version": "1.0", "strategy": {"type": "threshold", "params": {"direction": "above", "value": 0.7}}}),
+                ("org.high_ltv_customer", {"condition_id": "org.high_ltv_customer", "version": "1.0", "namespace": "org", "concept_id": "org.ltv_score",    "concept_version": "1.0", "strategy": {"type": "threshold", "params": {"direction": "above", "value": 500.0}}}),
+            ]:
+                run(def_store.register(
+                    definition_id=op_id,
+                    version="1.0",
+                    body=op_body,
+                    namespace="org",
+                    definition_type="condition",
+                ))
 
         request = CreateTaskRequest(
             intent=f"alert when {strategy_type} condition fires",

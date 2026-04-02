@@ -41,7 +41,7 @@ class DecisionRecord(BaseModel):
     threshold_applied: dict[str, Any] | None = None
     ir_hash: str | None = None
     input_primitives: dict[str, Any] | None = None
-    signal_errors: dict[str, str] | None = None
+    signal_errors: dict[str, Any] | None = None
     reason: str | None = None
     action_ids_fired: list[str] = Field(default_factory=list)
     dry_run: bool = False

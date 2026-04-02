@@ -188,6 +188,11 @@ class TaskAuthoringService:
         # Action binding resolution (priority order: LLM → guardrails → ctx → sys).
         resolved_action_dict = self._resolve_action(action_dict, request)
 
+        # Pin composite operand versions before parsing.
+        # The LLM emits operands as plain condition_ids (strings). Convert each to
+        # a version-pinned OperandRef dict so CompositeParams.operands is satisfied.
+        await self._pin_composite_operand_versions(condition_dict)
+
         # Parse into domain models.
         try:
             concept   = ConceptDefinition(**concept_dict)
@@ -388,6 +393,50 @@ class TaskAuthoringService:
             if key not in output or not isinstance(output.get(key), dict):
                 return f"LLM output missing required key '{key}' (must be a JSON object)"
         return None
+
+    # ── Composite operand version pinning ──────────────────────────────────────
+
+    async def _pin_composite_operand_versions(self, condition_dict: dict) -> None:
+        """
+        Convert plain string operands to version-pinned OperandRef dicts in-place.
+
+        The LLM emits composite operands as bare condition_ids, e.g.:
+          {"operator": "AND", "operands": ["org.high_churn_risk", "org.high_ltv_customer"]}
+
+        This method replaces each string with the OperandRef form, resolved to
+        the latest registered version at authoring time:
+          {"operator": "AND", "operands": [
+              {"condition_id": "org.high_churn_risk", "condition_version": "1.0"},
+              {"condition_id": "org.high_ltv_customer", "condition_version": "2.0"},
+          ]}
+
+        OperandRef dicts that are already pinned (dicts with condition_id /
+        condition_version) are passed through unchanged so idempotent callers
+        and direct-API registrations are not broken.
+
+        Raises:
+          NotFoundError — if an operand condition_id has no registered versions.
+        """
+        strategy = condition_dict.get("strategy") or {}
+        if strategy.get("type") != "composite":
+            return
+        params = strategy.get("params") or {}
+        raw_operands = params.get("operands") or []
+        pinned: list[dict] = []
+        for operand in raw_operands:
+            if isinstance(operand, dict):
+                # Already a pinned OperandRef — pass through unchanged.
+                pinned.append(operand)
+            else:
+                # Plain string condition_id — resolve to latest version.
+                operand_id: str = operand
+                version_list = await self._definition_registry.versions(operand_id)
+                latest_version = version_list.versions[0].version
+                pinned.append({
+                    "condition_id": operand_id,
+                    "condition_version": latest_version,
+                })
+        params["operands"] = pinned
 
     # ── Strategy validation ─────────────────────────────────────────────────────
 

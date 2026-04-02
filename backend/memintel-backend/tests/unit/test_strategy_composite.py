@@ -5,7 +5,7 @@ Unit tests for CompositeStrategy and CompositeParams model validation.
 import pytest
 from pydantic import ValidationError
 
-from app.models.condition import CompositeOperator, CompositeParams, DecisionType, DecisionValue
+from app.models.condition import CompositeOperator, CompositeParams, DecisionType, DecisionValue, OperandRef
 from app.models.errors import ErrorType, MemintelError
 from app.models.result import ConceptOutputType, ConceptResult
 from app.strategies.composite import CompositeStrategy
@@ -294,20 +294,31 @@ class TestCompositeParamsValidation:
     # ── Valid cases ─────────────────────────────────────────────────────────────
 
     def test_not_with_one_operand_is_valid(self):
-        p = CompositeParams(operator=CompositeOperator.NOT, operands=["c1"])
+        p = CompositeParams(operator=CompositeOperator.NOT, operands=[OperandRef(condition_id="c1", condition_version="1.0")])
         assert p.operator == CompositeOperator.NOT
-        assert p.operands == ["c1"]
+        assert len(p.operands) == 1
+        assert p.operands[0].condition_id == "c1"
 
     def test_and_with_two_operands_is_valid(self):
-        p = CompositeParams(operator=CompositeOperator.AND, operands=["c1", "c2"])
-        assert p.operands == ["c1", "c2"]
+        p = CompositeParams(operator=CompositeOperator.AND, operands=[
+            OperandRef(condition_id="c1", condition_version="1.0"),
+            OperandRef(condition_id="c2", condition_version="1.0"),
+        ])
+        assert len(p.operands) == 2
 
     def test_or_with_two_operands_is_valid(self):
-        p = CompositeParams(operator=CompositeOperator.OR, operands=["c1", "c2"])
-        assert p.operands == ["c1", "c2"]
+        p = CompositeParams(operator=CompositeOperator.OR, operands=[
+            OperandRef(condition_id="c1", condition_version="1.0"),
+            OperandRef(condition_id="c2", condition_version="1.0"),
+        ])
+        assert len(p.operands) == 2
 
     def test_and_with_three_operands_is_valid(self):
-        p = CompositeParams(operator=CompositeOperator.AND, operands=["c1", "c2", "c3"])
+        p = CompositeParams(operator=CompositeOperator.AND, operands=[
+            OperandRef(condition_id="c1", condition_version="1.0"),
+            OperandRef(condition_id="c2", condition_version="1.0"),
+            OperandRef(condition_id="c3", condition_version="1.0"),
+        ])
         assert len(p.operands) == 3
 
     # ── Invalid cases ────────────────────────────────────────────────────────────
@@ -315,19 +326,26 @@ class TestCompositeParamsValidation:
     def test_not_with_two_operands_raises(self):
         """NOT requires exactly 1 operand — 2 is invalid."""
         with pytest.raises(ValidationError) as exc:
-            CompositeParams(operator=CompositeOperator.NOT, operands=["c1", "c2"])
+            CompositeParams(operator=CompositeOperator.NOT, operands=[
+                OperandRef(condition_id="c1", condition_version="1.0"),
+                OperandRef(condition_id="c2", condition_version="1.0"),
+            ])
         assert "exactly one operand" in str(exc.value).lower() or "1" in str(exc.value)
 
     def test_and_with_one_operand_raises(self):
         """AND requires at least 2 operands."""
         with pytest.raises(ValidationError) as exc:
-            CompositeParams(operator=CompositeOperator.AND, operands=["c1"])
+            CompositeParams(operator=CompositeOperator.AND, operands=[
+                OperandRef(condition_id="c1", condition_version="1.0"),
+            ])
         assert "at least two" in str(exc.value).lower() or "2" in str(exc.value)
 
     def test_or_with_one_operand_raises(self):
         """OR requires at least 2 operands."""
         with pytest.raises(ValidationError) as exc:
-            CompositeParams(operator=CompositeOperator.OR, operands=["c1"])
+            CompositeParams(operator=CompositeOperator.OR, operands=[
+                OperandRef(condition_id="c1", condition_version="1.0"),
+            ])
         assert "at least two" in str(exc.value).lower() or "2" in str(exc.value)
 
     def test_not_enum_member_is_reachable(self):

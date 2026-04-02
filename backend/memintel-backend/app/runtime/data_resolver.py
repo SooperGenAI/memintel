@@ -363,6 +363,10 @@ class DataResolver:
         # Discarded when the DataResolver instance goes out of scope.
         self._cache: dict[tuple[str, str, str | None], PrimitiveValue] = {}
 
+    def has_fetch_errors(self) -> bool:
+        """Return True if any primitive fetch in this request raised a ConnectorError."""
+        return any(pv.fetch_error for pv in self._cache.values())
+
     def _get_connector(self, primitive_name: str) -> ConnectorBase:
         """
         Return the connector to use for a named primitive.

@@ -1204,7 +1204,10 @@ def test_error_injection() -> None:
             "params": {
                 "operator": "AND",
                 # Both operands are the same condition → self-referential cycle
-                "operands": ["org.circular_condition", "org.circular_condition"],
+                "operands": [
+                    {"condition_id": "org.circular_condition", "condition_version": "1.0"},
+                    {"condition_id": "org.circular_condition", "condition_version": "1.0"},
+                ],
             },
         },
     }

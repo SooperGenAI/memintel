@@ -349,7 +349,10 @@ def _composite_condition_body(
         "concept_version": "1.0",
         "strategy": {
             "type": "composite",
-            "params": {"operator": "AND", "operands": ["cond-a", "cond-b"]},
+            "params": {"operator": "AND", "operands": [
+                {"condition_id": "cond-a", "condition_version": "1.0"},
+                {"condition_id": "cond-b", "condition_version": "1.0"},
+            ]},
         },
         "namespace": "personal",
     }

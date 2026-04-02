@@ -98,7 +98,10 @@ _CONDITIONS = {
         concept_id="revenue_value", concept_version="1.0",
         strategy={"type": "composite", "params": {
             "operator": "AND",
-            "operands": ["high_revenue", "is_gold_account"],
+            "operands": [
+                {"condition_id": "high_revenue",    "condition_version": "1.0"},
+                {"condition_id": "is_gold_account", "condition_version": "1.0"},
+            ],
         }},
     ),
 }
@@ -167,7 +170,8 @@ def evaluate_composite(condition_id: str, entity: str, data: dict) -> DecisionVa
     operands = params["operands"]
 
     # Evaluate each operand using the existing evaluate() path.
-    raw_results = [evaluate(op_id, entity, data) for op_id in operands]
+    # operands is a list of OperandRef dicts {"condition_id": ..., "condition_version": ...}
+    raw_results = [evaluate(op_ref["condition_id"], entity, data) for op_ref in operands]
 
     # Adapt categorical -> boolean so CompositeStrategy accepts them.
     bool_results = []

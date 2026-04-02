@@ -623,6 +623,11 @@ _OP_FALSE_BODY = {
 }
 
 
+def _operand_refs(operand_ids: list[str], version: str = "1.0") -> list[dict]:
+    """Convert a list of condition_ids to OperandRef dicts with the given version."""
+    return [{"condition_id": oid, "condition_version": version} for oid in operand_ids]
+
+
 def _composite_condition_body(operator: str, operands: list[str]) -> dict:
     return {
         "condition_id": f"composite_{operator.lower()}",
@@ -632,7 +637,7 @@ def _composite_condition_body(operator: str, operands: list[str]) -> dict:
         "concept_version": "1.0",
         "strategy": {
             "type": "composite",
-            "params": {"operator": operator, "operands": operands},
+            "params": {"operator": operator, "operands": _operand_refs(operands)},
         },
     }
 
@@ -644,7 +649,7 @@ def _composite_pool(operator: str, operands: list[str], operand_bodies: dict) ->
     fetchrow_map includes:
       (composite_id, "1.0") → composite condition row (version-keyed lookup)
       ("org.test_score", "1.0") → concept row
-      "op_true" / "op_false" → operand condition rows (latest-version lookup)
+      ("op_true", "1.0") / ("op_false", "1.0") → operand rows (pinned-version lookup)
     """
     condition_id = f"composite_{operator.lower()}"
     return MockPool(
@@ -653,7 +658,7 @@ def _composite_pool(operator: str, operands: list[str], operand_bodies: dict) ->
                 _composite_condition_body(operator, operands)
             )},
             ("org.test_score", "1.0"): _concept_row(),
-            **{name: {"body": json.dumps(body)} for name, body in operand_bodies.items()},
+            **{(name, "1.0"): {"body": json.dumps(body)} for name, body in operand_bodies.items()},
         },
         fetch_rows=[],
     )

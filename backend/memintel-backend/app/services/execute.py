@@ -43,6 +43,7 @@ import asyncpg
 import structlog
 
 from app.compiler.dag_builder import DAGBuilder
+from app.compiler.ir_generator import IRGenerator
 from app.models.action import ActionDefinition
 from app.models.condition import ConditionDefinition, DecisionType, DecisionValue, StrategyType
 from app.models.concept import ConceptDefinition
@@ -389,6 +390,21 @@ class ExecuteService:
         strategy_type = StrategyType(condition.strategy.type)
         params = condition.strategy.params.model_dump()
 
+        # ── fetch_error check ─────────────────────────────────────────────────
+        # Connector failure is categorically different from a legitimate null.
+        # Check BEFORE history fetch and BEFORE calling the strategy so that
+        # "fetch_error" is always distinguishable from "null_input" at every layer.
+        if concept_result.value is None and resolver.has_fetch_errors():
+            return DecisionValue(
+                value=False,
+                decision_type=DecisionType.BOOLEAN,
+                condition_id=condition.condition_id,
+                condition_version=condition.version,
+                entity=entity,
+                timestamp=timestamp,
+                reason="fetch_error",
+            )
+
         # ── History fetch for stateful strategies ──────────────────────────────
         history: list[ConceptResult] = []
 
@@ -443,8 +459,10 @@ class ExecuteService:
         # ── Composite recursive evaluation ─────────────────────────────────────
         if strategy_type == StrategyType.COMPOSITE:
             operand_results = []
-            for operand_id in condition.strategy.params.operands:
-                operand_condition = await self._fetch_condition_latest(operand_id)
+            for operand_ref in condition.strategy.params.operands:
+                operand_condition = await self._fetch_condition(
+                    operand_ref.condition_id, operand_ref.condition_version
+                )
                 operand_concept = await self._fetch_concept(
                     operand_condition.concept_id, operand_condition.concept_version
                 )
@@ -886,28 +904,30 @@ class ExecuteService:
         from app.runtime.data_resolver import PrimitiveValue as _PV  # local to avoid circular
 
         input_primitives: dict[str, Any] = {}
-        signal_errors: dict[str, str] = {}
+        signal_errors: dict[str, Any] = {}
         for prim_name, pv in primitive_collector.items():
-            input_primitives[prim_name] = pv.value if hasattr(pv, "value") else pv
             if hasattr(pv, "fetch_error") and pv.fetch_error:
-                signal_errors[prim_name] = pv.error_msg or ""
+                input_primitives[prim_name] = {"error": "fetch_error"}
+                signal_errors[prim_name] = {"primitive_id": prim_name, "error_type": "fetch_error"}
+            else:
+                input_primitives[prim_name] = pv.value if hasattr(pv, "value") else pv
 
         # Determine concept_value for the decision record.
         if concept_result.value is None:
-            _concept_value: float | None = None
+            _concept_value: bool | float | str | None = None
         elif concept_result.type == ConceptOutputType.FLOAT:
             _concept_value = float(concept_result.value)
         elif concept_result.type == ConceptOutputType.BOOLEAN:
-            _concept_value = 1.0 if concept_result.value else 0.0
-        else:
-            _concept_value = None
+            _concept_value = bool(concept_result.value)
+        else:  # CATEGORICAL
+            _concept_value = str(concept_result.value)
 
         action_ids_fired = [
             t.action_id for t in triggered
             if t.status == ActionTriggeredStatus.TRIGGERED
         ]
 
-        ir_hash_val = getattr(condition, "ir_hash", None)
+        ir_hash_val = IRGenerator().hash_graph(graph)
 
         _eval_ts: datetime | None = None
         _ts_str = getattr(req, "timestamp", None)

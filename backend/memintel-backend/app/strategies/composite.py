@@ -50,6 +50,17 @@ from app.strategies.base import (
 _STRATEGY = "composite"
 _VALID_OPERATORS = frozenset({"AND", "OR", "NOT"})
 
+#: Reasons that propagate through composite operators without combination.
+#: An operand carrying one of these reasons is unevaluated or data-quality-failed;
+#: the composite result inherits the reason rather than computing a logical value.
+_PROPAGATING_REASONS: frozenset[str] = frozenset({
+    "null_input",
+    "insufficient_history",
+    "zero_variance",
+    "threshold_zero",
+    "fetch_error",   # connector failure — distinct from legitimate null_input
+})
+
 
 class CompositeStrategy(ConditionStrategy):
     """
@@ -170,6 +181,19 @@ class CompositeStrategy(ConditionStrategy):
             fired = all(bool_values)
         else:  # OR
             fired = any(bool_values)
+
+        # Propagate reasons from unevaluated or data-quality-failed operands.
+        # When the result is False and any operand carries a propagating reason
+        # (fetch_error, null_input, insufficient_history, …), the composite
+        # inherits that reason so the caller can distinguish data-quality failures
+        # from genuine logical False results.
+        if not fired:
+            for op in operand_results:
+                if op.reason in _PROPAGATING_REASONS:
+                    return self._boolean_decision(
+                        False, result, condition_id, condition_version,
+                        reason=op.reason,
+                    )
 
         # The composite result entity/timestamp come from the caller's context;
         # use result.entity and result.timestamp as the provenance anchor.

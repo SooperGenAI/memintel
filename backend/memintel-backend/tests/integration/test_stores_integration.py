@@ -574,6 +574,189 @@ class TestDecisionStore:
         assert all(r["condition_version"] == "v1" for r in v1_rows)
         assert all(r["condition_version"] == "v2" for r in v2_rows)
 
+    def test_decision_record_contains_all_required_fields(
+        self, db_pool, clean_tables, run
+    ):
+        """
+        All 8 required decision fields are persisted and retrieved:
+        input_primitives, concept_value, threshold_applied, condition_version,
+        signal_errors, ir_hash, action_ids_fired, dry_run.
+        """
+        store = DecisionStore(db_pool)
+        d = DecisionRecord(
+            concept_id="all_fields_concept",
+            concept_version="1.0",
+            condition_id="all_fields_cond",
+            condition_version="3.1",
+            entity_id="ent_allfields",
+            fired=True,
+            concept_value=0.91,
+            threshold_applied={"direction": "above", "value": 0.85},
+            ir_hash="sha256_abcdef",
+            input_primitives={"prim_a": 1.0, "prim_b": None},
+            signal_errors={"prim_c": {"primitive_id": "prim_c", "error_type": "fetch_error"}},
+            reason=None,
+            action_ids_fired=["action_x", "action_y"],
+            dry_run=True,
+        )
+        decision_id = run(store.record(d))
+        fetched = run(store.get(decision_id))
+        assert fetched is not None
+
+        # Each of the 8 required fields:
+        assert fetched.input_primitives == {"prim_a": 1.0, "prim_b": None}
+        assert fetched.concept_value == pytest.approx(0.91)
+        assert fetched.threshold_applied == {"direction": "above", "value": 0.85}
+        assert fetched.condition_version == "3.1"
+        assert fetched.signal_errors == {"prim_c": {"primitive_id": "prim_c", "error_type": "fetch_error"}}
+        assert fetched.ir_hash == "sha256_abcdef"
+        assert set(fetched.action_ids_fired) == {"action_x", "action_y"}
+        assert fetched.dry_run is True
+
+    def test_concept_value_round_trip_bool(self, db_pool, clean_tables, run):
+        """
+        concept_value=True stores as "True" (TEXT) and reads back as bool True.
+        concept_value=False stores as "False" and reads back as bool False.
+        """
+        store = DecisionStore(db_pool)
+
+        d_true = DecisionRecord(
+            concept_id="bool_rt",
+            concept_version="1.0",
+            condition_id="bool_rt_cond",
+            condition_version="1.0",
+            entity_id="ent_bool_true",
+            fired=True,
+            concept_value=True,
+            dry_run=False,
+        )
+        d_false = DecisionRecord(
+            concept_id="bool_rt",
+            concept_version="1.0",
+            condition_id="bool_rt_cond",
+            condition_version="1.0",
+            entity_id="ent_bool_false",
+            fired=False,
+            concept_value=False,
+            dry_run=False,
+        )
+
+        id_true = run(store.record(d_true))
+        id_false = run(store.record(d_false))
+
+        f_true = run(store.get(id_true))
+        f_false = run(store.get(id_false))
+
+        assert f_true is not None
+        assert f_true.concept_value is True
+        assert type(f_true.concept_value) is bool
+
+        assert f_false is not None
+        assert f_false.concept_value is False
+        assert type(f_false.concept_value) is bool
+
+    def test_concept_value_round_trip_categorical(self, db_pool, clean_tables, run):
+        """
+        concept_value='high_risk' (categorical str) stores and reads back as str.
+        Verifies no coercion to float or None.
+        """
+        store = DecisionStore(db_pool)
+        d = DecisionRecord(
+            concept_id="cat_rt",
+            concept_version="1.0",
+            condition_id="cat_rt_cond",
+            condition_version="1.0",
+            entity_id="ent_cat",
+            fired=True,
+            concept_value="high_risk",
+            dry_run=False,
+        )
+        decision_id = run(store.record(d))
+        fetched = run(store.get(decision_id))
+        assert fetched is not None
+        assert fetched.concept_value == "high_risk"
+        assert type(fetched.concept_value) is str
+
+    def test_signal_errors_captures_fetch_failures(self, db_pool, clean_tables, run):
+        """
+        signal_errors maps primitive names to fetch_error entries.
+        Primitives without errors are absent from signal_errors.
+        concept_value=None for a concept that produced no output.
+        """
+        store = DecisionStore(db_pool)
+        d = DecisionRecord(
+            concept_id="sig_err_concept",
+            concept_version="1.0",
+            condition_id="sig_err_cond",
+            condition_version="1.0",
+            entity_id="ent_sigerr",
+            fired=False,
+            concept_value=None,
+            input_primitives={
+                "good_prim": 0.5,
+                "bad_prim": {"error": "fetch_error"},
+            },
+            signal_errors={
+                "bad_prim": {"primitive_id": "bad_prim", "error_type": "fetch_error"},
+            },
+            dry_run=False,
+        )
+        decision_id = run(store.record(d))
+        fetched = run(store.get(decision_id))
+        assert fetched is not None
+
+        # fetch_error primitive appears in signal_errors
+        assert "bad_prim" in fetched.signal_errors
+        assert fetched.signal_errors["bad_prim"]["error_type"] == "fetch_error"
+
+        # successful primitive is NOT in signal_errors
+        assert "good_prim" not in fetched.signal_errors
+
+        # concept_value None is preserved
+        assert fetched.concept_value is None
+
+    def test_input_primitives_includes_null_values(self, db_pool, clean_tables, run):
+        """
+        input_primitives preserves null values (None) for primitives that
+        returned null legitimately, distinct from fetch_error markers.
+        """
+        store = DecisionStore(db_pool)
+        d = DecisionRecord(
+            concept_id="prims_null_concept",
+            concept_version="1.0",
+            condition_id="prims_null_cond",
+            condition_version="1.0",
+            entity_id="ent_primnull",
+            fired=False,
+            concept_value=0.0,
+            input_primitives={
+                "present_prim": 42.0,
+                "null_prim": None,
+                "error_prim": {"error": "fetch_error"},
+            },
+            signal_errors={
+                "error_prim": {"primitive_id": "error_prim", "error_type": "fetch_error"},
+            },
+            dry_run=False,
+        )
+        decision_id = run(store.record(d))
+        fetched = run(store.get(decision_id))
+        assert fetched is not None
+
+        # All three primitives appear in input_primitives
+        assert "present_prim" in fetched.input_primitives
+        assert "null_prim" in fetched.input_primitives
+        assert "error_prim" in fetched.input_primitives
+
+        # Legitimate null is None (not absent, not a dict)
+        assert fetched.input_primitives["null_prim"] is None
+
+        # Fetch-error is the marker dict, not None
+        assert fetched.input_primitives["error_prim"] == {"error": "fetch_error"}
+
+        # Present primitive is correct value
+        assert fetched.input_primitives["present_prim"] == pytest.approx(42.0)
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # STORE 4 — FeedbackStore

@@ -314,16 +314,18 @@ class ConditionEvaluator:
         params: dict,
     ) -> dict:
         """
-        Resolve composite operand condition_ids to their DecisionValues.
+        Resolve composite operand OperandRef dicts to their DecisionValues.
 
-        Replaces params['operands'] (list of condition_ids) with
-        params['operand_results'] (list of DecisionValues) so CompositeStrategy
-        can evaluate them directly.
+        Replaces params['operands'] (list of OperandRef dicts with
+        condition_id/condition_version) with params['operand_results']
+        (list of DecisionValues) so CompositeStrategy can evaluate them directly.
         """
-        operand_ids: list[str] = params.get("operands", [])
+        operand_refs: list[dict] = params.get("operands", [])
         operand_results: list[DecisionValue] = [
-            self._operand_resolver(op_id, "1.0", entity, timestamp)
-            for op_id in operand_ids
+            self._operand_resolver(
+                op_ref["condition_id"], op_ref["condition_version"], entity, timestamp
+            )
+            for op_ref in operand_refs
         ]
         # CompositeStrategy expects 'operand_results', not 'operands'.
         resolved = dict(params)
