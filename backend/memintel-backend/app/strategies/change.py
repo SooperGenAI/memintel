@@ -20,7 +20,9 @@ Note: direction values are 'increase'/'decrease'/'any'.
 
 Edge cases:
   - history is empty          → cannot compute change; does not fire.
-  - previous value is 0       → division by zero; does not fire.
+  - previous value is 0, current != 0 → infinite change; always fires
+                                       (reason='infinite_change').
+  - previous value is 0, current == 0 → no change from zero; does not fire.
 """
 from __future__ import annotations
 
@@ -102,11 +104,23 @@ class ChangeStrategy(ConditionStrategy):
             return self._boolean_decision(False, result, condition_id, condition_version)
 
         previous = float(history[-1].value)
-        if previous == 0.0:
-            # Cannot compute percentage change — does not fire.
-            return self._boolean_decision(False, result, condition_id, condition_version)
+        current  = float(result.value)
 
-        current    = float(result.value)
+        if previous == 0.0:
+            if current == 0.0:
+                # No change from zero — does not fire.
+                return self._boolean_decision(
+                    False, result, condition_id, condition_version,
+                    reason=None,
+                    history_count=len(history),
+                )
+            else:
+                # Any movement from zero is infinite change — always fires.
+                return self._boolean_decision(
+                    True, result, condition_id, condition_version,
+                    reason="infinite_change",
+                    history_count=len(history),
+                )
         pct_change = (current - previous) / abs(previous)
 
         if direction == "increase":

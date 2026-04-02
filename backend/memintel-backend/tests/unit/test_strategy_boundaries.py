@@ -30,8 +30,10 @@ Ambiguous behaviours discovered while reading implementations
    from insufficient_history (not enough data) and from a normal non-fire
    (reason=None).
 
-7. ChangeStrategy with previous=0 returns False without crashing (division
-   guard).
+7. ChangeStrategy with previous=0, current!=0: fires with reason='infinite_change'
+   (any non-zero movement from zero is treated as infinite percentage change).
+   previous=0, current=0: False, reason=None (no change occurred).
+   The guard fires AFTER null_input and insufficient_history checks.
 
 8. PercentileStrategy now enforces its own _HISTORY_MIN_RESULTS=3 floor at the
    strategy class level (reason='insufficient_history').  The service layer in
@@ -686,16 +688,96 @@ class TestChangeBoundaries:
     def _strategy(self):
         self.s = ChangeStrategy()
 
-    def test_previous_zero_returns_false_no_crash(self):
+    def test_change_previous_zero_current_nonzero_fires(self):
         """
-        history[-1].value == 0 → division by zero guard → does NOT fire.
-        No ZeroDivisionError raised.
+        history[-1].value == 0, current=5.0 (non-zero).
+        Any movement from zero is infinite change → always fires.
+        reason='infinite_change'; no ZeroDivisionError raised.
         """
         r = self.s.evaluate(
             _r(5.0), _hist(1.0, 2.0, 0.0),   # last item = 0
             {"direction": "increase", "value": 0.1, "window": "7d"},
         )
+        assert r.value is True
+        assert r.reason == "infinite_change"
+
+    def test_change_previous_zero_current_zero_no_change(self):
+        """
+        history[-1].value == 0, current=0.0.
+        No change from zero — does not fire.
+        reason=None (this is a normal non-fire, not a guard short-circuit label).
+        """
+        r = self.s.evaluate(
+            _r(0.0), _hist(1.0, 2.0, 0.0),   # last item = 0
+            {"direction": "increase", "value": 0.1, "window": "7d"},
+        )
         assert r.value is False
+        assert r.reason is None
+
+    def test_change_previous_zero_current_nonzero_fires_explicit(self):
+        """
+        history=[0.0]*5, current=0.5 — any non-zero movement from zero.
+        reason='infinite_change', history_count=5.
+        """
+        r = self.s.evaluate(
+            _r(0.5), _hist(0.0, 0.0, 0.0, 0.0, 0.0),
+            {"direction": "increase", "value": 0.1, "window": "7d"},
+        )
+        assert r.value is True
+        assert r.reason == "infinite_change"
+        assert r.history_count == 5
+
+    def test_change_previous_zero_current_zero_no_fire(self):
+        """
+        history=[0.0]*5, current=0.0 — no movement from zero.
+        False, reason=None; no guard label needed.
+        """
+        r = self.s.evaluate(
+            _r(0.0), _hist(0.0, 0.0, 0.0, 0.0, 0.0),
+            {"direction": "increase", "value": 0.1, "window": "7d"},
+        )
+        assert r.value is False
+        assert r.reason is None
+
+    def test_change_previous_zero_after_history_check(self):
+        """
+        2-item history, both zero. ChangeStrategy has no minimum history floor
+        of its own, so the empty-history guard does NOT fire (2 > 0).
+        The previous=0 guard fires: current=0.5 ≠ 0 → reason='infinite_change'.
+        (Contrast with PercentileStrategy which enforces 3-item minimum itself.)
+        """
+        r = self.s.evaluate(
+            _r(0.5), _hist(0.0, 0.0),
+            {"direction": "increase", "value": 0.1, "window": "7d"},
+        )
+        assert r.value is True
+        assert r.reason == "infinite_change"
+
+    def test_change_previous_zero_negative_current(self):
+        """
+        history=[0.0]*5, current=-0.5 (negative movement from zero).
+        Any non-zero movement is infinite change → fires.
+        reason='infinite_change' regardless of sign.
+        """
+        r = self.s.evaluate(
+            _r(-0.5), _hist(0.0, 0.0, 0.0, 0.0, 0.0),
+            {"direction": "any", "value": 0.1, "window": "7d"},
+        )
+        assert r.value is True
+        assert r.reason == "infinite_change"
+
+    def test_change_infinite_change_uses_history_minus_one(self):
+        """
+        history[-1]=0.0 (most recent), history[-2]=5.0.
+        current=0.5 — previous is history[-1]=0.0, not history[0]=5.0.
+        reason='infinite_change' confirms the guard used history[-1].
+        """
+        r = self.s.evaluate(
+            _r(0.5), _hist(5.0, 3.0, 0.0),   # history[-1] = 0.0
+            {"direction": "increase", "value": 0.1, "window": "7d"},
+        )
+        assert r.value is True
+        assert r.reason == "infinite_change"
 
     def test_exactly_at_change_threshold_does_not_fire_increase(self):
         """

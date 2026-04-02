@@ -99,13 +99,17 @@ class TestChangeHappyPath:
         )
         assert r.value is False
 
-    def test_zero_previous_does_not_fire(self, strategy):
-        """Division by zero guard — does not raise; returns False."""
+    def test_zero_previous_nonzero_current_fires(self, strategy):
+        """
+        previous=0, current=1.0 — any non-zero movement from zero fires.
+        reason='infinite_change'; no ZeroDivisionError raised.
+        """
         r = strategy.evaluate(
             _result(1.0), _history([0.0]),
             {"direction": "increase", "value": 0.5},
         )
-        assert r.value is False
+        assert r.value is True
+        assert r.reason == "infinite_change"
 
 
 class TestChangeDecisionValue:
