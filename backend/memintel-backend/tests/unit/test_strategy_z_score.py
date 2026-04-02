@@ -90,13 +90,15 @@ class TestZScoreHappyPath:
         assert r.value is False
 
     def test_zero_std_does_not_fire(self, strategy):
-        """All history values identical → std=0 → undefined z → does not fire."""
+        """All history values identical → std=0 → undefined z → does not fire.
+        reason='zero_variance' is set to distinguish from a normal silent False."""
         flat_history = _history([0.5, 0.5, 0.5, 0.5])
         r = strategy.evaluate(
             _result(0.5), flat_history,
             {"threshold": 1.0, "direction": "any"},
         )
         assert r.value is False
+        assert r.reason == "zero_variance"
 
     def test_empty_history_does_not_fire(self, strategy):
         r = strategy.evaluate(

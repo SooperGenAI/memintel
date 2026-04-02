@@ -116,7 +116,11 @@ class ZScoreStrategy(ConditionStrategy):
 
         if std == 0.0:
             # No deviation possible — condition does not fire.
-            return self._boolean_decision(False, result, condition_id, condition_version)
+            return self._boolean_decision(
+                False, result, condition_id, condition_version,
+                reason="zero_variance",
+                history_count=len(history),
+            )
 
         z = (float(result.value) - mean) / std
 

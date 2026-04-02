@@ -26,7 +26,9 @@ Ambiguous behaviours discovered while reading implementations
    (guard fires before rank computation — every entity is in the top/bottom 100%).
 
 6. ZScoreStrategy with all-identical history produces std=0.  The strategy
-   returns False without crashing.
+   returns False with reason='zero_variance' — not silent.  This is distinct
+   from insufficient_history (not enough data) and from a normal non-fire
+   (reason=None).
 
 7. ChangeStrategy with previous=0 returns False without crashing (division
    guard).
@@ -498,16 +500,59 @@ class TestZScoreBoundaries:
     def _strategy(self):
         self.s = ZScoreStrategy()
 
-    def test_std_zero_all_identical_returns_false_no_crash(self):
+    def test_std_zero_all_identical_returns_false_with_reason(self):
         """
         All history values identical → std=0 → z is undefined.
-        Strategy returns False without raising an exception.
+        Strategy returns False with reason='zero_variance', not silently.
+        history_count reflects the number of history records used.
         """
         r = self.s.evaluate(
             _r(5.0), _hist(3.0, 3.0, 3.0, 3.0, 3.0),
             {"direction": "above", "threshold": 1.5, "window": "30d"},
         )
         assert r.value is False
+        assert r.reason == "zero_variance"
+        assert r.history_count == 5
+
+    def test_zscore_zero_variance_returns_reason(self):
+        """
+        zero_variance path: history=[0.35]*5, current=0.95 (far above mean).
+        Even though current is far above mean, std=0 → z undefined → does not fire.
+        reason='zero_variance' and history_count=5 must both be set.
+        """
+        r = self.s.evaluate(
+            _r(0.95), _hist(0.35, 0.35, 0.35, 0.35, 0.35),
+            {"direction": "above", "threshold": 1.5, "window": "30d"},
+        )
+        assert r.value is False
+        assert r.reason == "zero_variance"
+        assert r.history_count == 5
+
+    def test_zscore_zero_variance_is_not_insufficient_history(self):
+        """
+        zero_variance is a different condition from insufficient_history.
+        5-item identical history has enough records; the guard fires because
+        std=0, not because data is scarce.  reason must NOT be 'insufficient_history'.
+        """
+        r = self.s.evaluate(
+            _r(0.95), _hist(0.35, 0.35, 0.35, 0.35, 0.35),
+            {"direction": "above", "threshold": 1.5, "window": "30d"},
+        )
+        assert r.reason != "insufficient_history"
+
+    def test_zscore_zero_variance_after_history_check(self):
+        """
+        2-item identical history: ZScoreStrategy itself does NOT enforce a
+        minimum history floor (that is the service layer's job).  But the
+        zero_variance guard fires here too — 2 identical values still give std=0.
+        reason='zero_variance', NOT 'insufficient_history'.
+        """
+        r = self.s.evaluate(
+            _r(0.95), _hist(0.35, 0.35),
+            {"direction": "above", "threshold": 1.5, "window": "30d"},
+        )
+        assert r.value is False
+        assert r.reason == "zero_variance"
 
     def test_z_exactly_at_threshold_does_not_fire_above(self):
         """
