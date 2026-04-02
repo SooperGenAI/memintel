@@ -181,6 +181,9 @@ async def lifespan(app: FastAPI):
     # Elevated key for internal platform endpoints — read from environment.
     # Absent → all elevated endpoints return HTTP 403.
     app.state.elevated_key = os.environ.get("MEMINTEL_ELEVATED_KEY")
+    # API key for developer-facing read endpoints — read from environment.
+    # Absent → require_api_key is permissive (development mode).
+    app.state.api_key = os.environ.get("MEMINTEL_API_KEY")
 
     log.info(
         "startup_complete",

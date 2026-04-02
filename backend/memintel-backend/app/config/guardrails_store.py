@@ -131,6 +131,16 @@ class GuardrailsStore:
 
     # ── Read accessors ─────────────────────────────────────────────────────────
 
+    def is_loaded(self) -> bool:
+        """
+        Return True if guardrails have been loaded via load(), False otherwise.
+
+        Use this guard before calling get_guardrails() in contexts where the
+        store may legitimately be unloaded (e.g. dependency injection during
+        tests or graceful-degradation paths).
+        """
+        return self._guardrails is not None
+
     def get_guardrails(self) -> Guardrails:
         """
         Return the full parsed Guardrails object.

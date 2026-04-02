@@ -339,9 +339,11 @@ async def list_features(
     status_code=200,
 )
 async def list_definitions(
-    definition_type: str | None = Query(
+    definition_type: Literal[
+        "concept", "condition", "action", "primitive", "feature"
+    ] | None = Query(
         default=None,
-        description="Filter by type (concept, condition, action, primitive)",
+        description="Filter by type: concept, condition, action, primitive, feature",
     ),
     namespace: str | None = Query(default=None, description="Filter by namespace"),
     limit: int = Query(default=20, ge=1, le=100),

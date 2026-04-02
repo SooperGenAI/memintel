@@ -161,25 +161,21 @@ class TestRequestValidation:
         })
         assert r.status_code == 422
 
-    def test_invalid_task_status_enum_returns_422(self, app_client):
+    def test_invalid_task_status_enum_returns_422(self, app_client, api_key_headers):
         """Test 8: GET /tasks?status=not_a_real_status → 422."""
         client, _ = app_client
-        r = client.get("/tasks?status=not_a_real_status")
+        r = client.get("/tasks?status=not_a_real_status", headers=api_key_headers)
         assert r.status_code == 422
 
-    def test_invalid_definition_type_not_validated(self, app_client):
-        """Test 9: GET /registry/definitions?definition_type=bogus → 200 empty list.
+    def test_invalid_definition_type_returns_422(self, app_client):
+        """Test 9: GET /registry/definitions?definition_type=bogus → 422 (BUG-C2 fix).
 
-        BUG-C2: definition_type is a plain str query param, not a validated enum.
-        Passing an invalid type returns 200 with an empty result set instead of 422.
-        This is a silent contract gap — callers receive no error for typos.
+        After FIX 2, definition_type is a validated Literal enum.
+        Invalid values now return 422 instead of silently returning an empty list.
         """
         client, _ = app_client
         r = client.get("/registry/definitions?definition_type=totally_bogus_type")
-        # Documents actual behaviour: 200 with empty items, not 422
-        assert r.status_code == 200
-        body = r.json()
-        assert body["items"] == []
+        assert r.status_code == 422
 
     def test_missing_required_query_param_returns_422(self, app_client):
         """Test 9b: GET /actions without required 'namespace' query param → 422."""
@@ -268,10 +264,10 @@ class TestResponseShapes:
 
     # ── Tasks ─────────────────────────────────────────────────────────────────
 
-    def test_list_tasks_returns_task_list_shape(self, app_client):
+    def test_list_tasks_returns_task_list_shape(self, app_client, api_key_headers):
         """Test 14: GET /tasks → 200 TaskList shape (items, has_more, next_cursor)."""
         client, _ = app_client
-        r = client.get("/tasks")
+        r = client.get("/tasks", headers=api_key_headers)
         assert r.status_code == 200
         body = r.json()
         assert "items" in body
@@ -446,20 +442,22 @@ class TestErrorShapes:
         assert isinstance(body["error"]["message"], str)
         assert len(body["error"]["message"]) > 0
 
-    def test_401_gap_get_tasks_no_auth_returns_200(self, app_client):
-        """Test 23: GET /tasks without any auth header → 200, NOT 401.
+    def test_get_tasks_without_api_key_returns_401(self, app_client):
+        """Test 23: GET /tasks without X-Api-Key header → 401 (BUG-C1 fix).
 
-        BUG-C1 (security gap): GET /tasks has no authentication requirement.
-        Unauthenticated callers can enumerate all tasks.  The expected contract
-        would be 401, but the actual behaviour is 200.
+        FIX 1: GET /tasks now requires the X-Api-Key header when
+        app.state.api_key is configured. Missing or wrong key → HTTP 401
+        with {error: {type: auth_error}} body.
         """
         client, _ = app_client
-        # No Authorization header, no X-Elevated-Key
+        # No X-Api-Key header
         r = client.get("/tasks")
-        assert r.status_code == 200, (
-            "BUG-C1: GET /tasks should require authentication but returns "
-            f"{r.status_code} — security gap documented"
+        assert r.status_code == 401, (
+            f"Expected 401 after BUG-C1 fix, got {r.status_code}"
         )
+        body = r.json()
+        assert "error" in body
+        assert body["error"]["type"] == "auth_error"
 
     def test_403_error_has_canonical_shape(self, app_client):
         """Test 24: missing elevated key on guarded route → 403 {error: {type=auth_error}}."""
@@ -503,14 +501,14 @@ class TestErrorShapes:
 class TestPagination:
     """Tests 26-27: pagination metadata is correct and cursor-based."""
 
-    def test_list_tasks_cursor_pagination_fields(self, app_client):
+    def test_list_tasks_cursor_pagination_fields(self, app_client, api_key_headers):
         """Test 26: GET /tasks supports cursor-based pagination.
 
         The spec describes cursor (task_id of last item), not offset.
         With an empty DB: has_more=False and next_cursor=None.
         """
         client, _ = app_client
-        r = client.get("/tasks?limit=5")
+        r = client.get("/tasks?limit=5", headers=api_key_headers)
         assert r.status_code == 200
         body = r.json()
         assert "items" in body
@@ -613,3 +611,81 @@ class TestDeterminism:
         r2 = client.post("/evaluate/full", json=body)
         assert r1.status_code == r2.status_code
         assert r1.json() == r2.json()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# FIX VERIFICATION TESTS
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestFixes:
+    """Explicit regression tests for BUG-C1, BUG-C2, and BUG-C4 fixes."""
+
+    def test_fix1_get_tasks_without_api_key_returns_401(self, app_client):
+        """FIX 1 (BUG-C1): GET /tasks without X-Api-Key → 401 auth_error.
+
+        Before fix: GET /tasks had no auth — returned 200 for any caller.
+        After fix:  require_api_key dependency enforces X-Api-Key header.
+        When api_key is configured on app.state, absent or wrong key → 401.
+        """
+        client, _ = app_client
+        r = client.get("/tasks")   # no X-Api-Key header
+        assert r.status_code == 401, (
+            f"Expected 401 from require_api_key, got {r.status_code}: {r.text}"
+        )
+        body = r.json()
+        assert "error" in body
+        assert body["error"]["type"] == "auth_error"
+
+    def test_fix1_get_tasks_with_api_key_returns_200(self, app_client, api_key_headers):
+        """FIX 1 (BUG-C1): GET /tasks with correct X-Api-Key → 200.
+
+        The fix must not block legitimate callers who supply the key.
+        """
+        client, _ = app_client
+        r = client.get("/tasks", headers=api_key_headers)
+        assert r.status_code == 200
+
+    def test_fix2_invalid_definition_type_returns_422(self, app_client):
+        """FIX 2 (BUG-C2): GET /registry/definitions?definition_type=bad → 422.
+
+        Before fix: definition_type was str — invalid values silently returned
+        200 with an empty list.
+        After fix: definition_type is a validated Literal enum — invalid values
+        return HTTP 422 immediately.
+        """
+        client, _ = app_client
+        r = client.get("/registry/definitions?definition_type=not_a_real_type")
+        assert r.status_code == 422, (
+            f"Expected 422 from Literal validation, got {r.status_code}: {r.text}"
+        )
+
+    def test_fix2_valid_definition_type_still_returns_200(self, app_client):
+        """FIX 2 (BUG-C2): valid definition_type values still return 200."""
+        client, _ = app_client
+        for valid_type in ("concept", "condition", "action", "primitive", "feature"):
+            r = client.get(f"/registry/definitions?definition_type={valid_type}")
+            assert r.status_code == 200, (
+                f"definition_type='{valid_type}' should return 200, got {r.status_code}"
+            )
+
+    def test_fix3_invalid_body_with_unloaded_guardrails_returns_422_not_500(
+        self, app_client
+    ):
+        """FIX 3 (BUG-C4): POST /tasks invalid body + None guardrails_store → 422.
+
+        Before fix: get_task_authoring_service called guardrails_store.get_guardrails()
+        even when the store was unloaded, raising RuntimeError before FastAPI's body
+        validation ran — turning valid 422 validation errors into HTTP 500.
+
+        After fix: is_loaded() guard skips get_guardrails() when store is None/unloaded,
+        so dependency resolution completes cleanly and FastAPI validates the body.
+
+        The contract test app sets guardrails_store=None (simulating the unloaded case).
+        """
+        client, _ = app_client
+        # Missing required fields: intent, entity_scope, delivery
+        r = client.post("/tasks", json={"dry_run": False})
+        assert r.status_code != 500, (
+            "POST /tasks with unloaded guardrails must never return 500"
+        )
+        assert r.status_code == 422

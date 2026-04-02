@@ -40,6 +40,7 @@ import structlog
 import asyncpg
 from fastapi import APIRouter, Depends, Query, Request
 
+from app.api.deps import require_api_key
 from app.models.errors import NotFoundError
 from app.models.task import (
     CreateTaskRequest,
@@ -77,7 +78,15 @@ async def get_task_authoring_service(
     task_store = TaskStore(pool)
     definition_registry = DefinitionRegistry(store=DefinitionStore(pool))
     guardrails_store = getattr(request.app.state, "guardrails_store", None)
-    guardrails = guardrails_store.get_guardrails() if guardrails_store else None
+    # Guard: only call get_guardrails() when the store is loaded.
+    # An unloaded GuardrailsStore raises RuntimeError, which would crash
+    # dependency resolution before FastAPI validates the request body,
+    # turning valid 422s into 500s (BUG-C4).
+    guardrails = (
+        guardrails_store.get_guardrails()
+        if guardrails_store is not None and guardrails_store.is_loaded()
+        else None
+    )
     return TaskAuthoringService(
         task_store=task_store,
         definition_registry=definition_registry,
@@ -146,6 +155,7 @@ async def list_tasks(
         description="Pagination cursor — task_id of the last item seen",
     ),
     store: TaskStore = Depends(get_task_store),
+    _: None = Depends(require_api_key),
 ) -> TaskList:
     """
     Return a paginated list of tasks for the current workspace.
@@ -153,6 +163,9 @@ async def list_tasks(
     Deleted tasks are excluded by default. Pass status='deleted' to list only
     deleted tasks. Cursor-based pagination: pass the returned next_cursor as
     the cursor query parameter on the next request.
+
+    Requires X-Api-Key header when api_key is configured at startup.
+    HTTP 401 — API key missing or invalid.
     """
     return await store.list(status=status, limit=limit, cursor=cursor)
 

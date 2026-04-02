@@ -61,6 +61,7 @@ TEST_DATABASE_URL: str = os.environ.get(
 )
 
 ELEVATED_KEY = "contract-test-elevated-key"
+API_KEY = "contract-test-api-key"
 
 _ALL_TABLES: tuple[str, ...] = (
     "decisions",
@@ -209,6 +210,7 @@ def _make_test_app() -> FastAPI:
 
         app.state.db = pool
         app.state.elevated_key = ELEVATED_KEY
+        app.state.api_key = API_KEY
         # Set to None so routes use the null-check guard:
         #   guardrails_store = getattr(app.state, "guardrails_store", None)
         #   guardrails = guardrails_store.get_guardrails() if guardrails_store else None
@@ -270,3 +272,9 @@ def app_client(_database_setup):
 def elevated_headers() -> dict[str, str]:
     """HTTP headers carrying the contract-test elevated key."""
     return {"X-Elevated-Key": ELEVATED_KEY}
+
+
+@pytest.fixture
+def api_key_headers() -> dict[str, str]:
+    """HTTP headers carrying the contract-test API key for authenticated read routes."""
+    return {"X-Api-Key": API_KEY}

@@ -26,6 +26,38 @@ from fastapi import Header, HTTPException, Request
 from app.models.errors import ErrorDetail, ErrorResponse, ErrorType
 
 
+async def require_api_key(
+    request: Request,
+    x_api_key: str | None = Header(default=None),
+) -> None:
+    """
+    FastAPI dependency — enforces API key authentication for non-elevated routes.
+
+    Reads the expected key from app.state.api_key (loaded at startup from the
+    MEMINTEL_API_KEY environment variable).  When app.state.api_key is not
+    configured (None), the check is skipped — permissive mode for development
+    environments that have not set up API key auth.
+
+    If the header is absent or does not match, returns HTTP 401 with an
+    ErrorResponse body.
+    """
+    configured: str | None = getattr(request.app.state, "api_key", None)
+    if configured is None:
+        # Not configured — allow all requests through (development / test mode).
+        return
+    if not x_api_key or x_api_key != configured:
+        raise HTTPException(
+            status_code=401,
+            detail=ErrorResponse(
+                error=ErrorDetail(
+                    type=ErrorType.AUTH_ERROR,
+                    message="This endpoint requires a valid API key. "
+                            "Supply a valid X-Api-Key header.",
+                )
+            ).model_dump(mode="json"),
+        )
+
+
 async def require_elevated_key(
     request: Request,
     x_elevated_key: str | None = Header(default=None),
