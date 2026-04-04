@@ -13,6 +13,7 @@ Endpoints (paths relative to the /registry prefix added by main.py)
   POST   /registry/definitions/{id}/deprecate      deprecate          — mark deprecated
   POST   /registry/definitions/{id}/promote        promote            — namespace promote
   POST   /registry/definitions/similar             findSimilar        — semantic search
+  POST   /registry/definitions/validate            validateDefinition — dry-run validation
 
   GET    /registry/search                          searchDefinitions  — keyword search
 
@@ -64,13 +65,16 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field, field_validator
 
 from app.api.deps import require_api_key, require_elevated_key
+from app.compiler.validator import Validator
 from app.models.concept import (
+    ConceptDefinition,
     DefinitionResponse,
     LineageResult,
     SearchResult,
     SemanticDiffResult,
     VersionSummary,
 )
+from app.models.errors import ErrorType, MemintelError, ValidationErrorItem
 from app.persistence.db import get_db
 from app.services.registry import RegistryService
 
@@ -155,6 +159,11 @@ class DefinitionsBatchResult(BaseModel):
     errors: list[dict[str, Any]]   # [{definition_id, version, error}]
 
 
+class ValidateDefinitionResult(BaseModel):
+    valid: bool
+    errors: list[ValidationErrorItem]
+
+
 # ── Service dependency ─────────────────────────────────────────────────────────
 
 async def get_registry_service(
@@ -196,6 +205,60 @@ async def find_similar(
         version=req.version,
     )
     return await service.find_similar(req)
+
+
+# ── POST /registry/definitions/validate ───────────────────────────────────────
+# Registered before /definitions/{id}/* routes to prevent path capture.
+
+@router.post(
+    "/definitions/validate",
+    summary="Dry-run validate a definition spec",
+    response_model=ValidateDefinitionResult,
+    status_code=200,
+)
+async def validate_definition(
+    req: RegisterDefinitionRequest,
+    _: None = Depends(require_api_key),
+) -> ValidateDefinitionResult:
+    """
+    Validate a definition spec without persisting it.
+
+    For concept definitions the full six-phase compiler validation is run
+    (schema, operators, types, strategies, actions, graph).  For all other
+    definition types the endpoint performs Pydantic schema validation only
+    and returns valid=True when the body parses successfully.
+
+    Returns ``{ "valid": true, "errors": [] }`` when the spec is valid.
+    Returns ``{ "valid": false, "errors": [...] }`` listing every violation.
+
+    Does NOT write to the registry — safe to call before registration.
+
+    HTTP 400 — request body fails Pydantic validation (malformed JSON shape).
+    """
+    log.info(
+        "validate_definition_request",
+        definition_id=req.definition_id,
+        version=req.version,
+        definition_type=req.definition_type,
+    )
+
+    if req.definition_type != "concept":
+        # Non-concept types have no compiler validation path yet.
+        return ValidateDefinitionResult(valid=True, errors=[])
+
+    # Parse raw body dict into ConceptDefinition.
+    try:
+        definition = ConceptDefinition(**req.body)
+    except Exception as exc:
+        error = ValidationErrorItem(
+            type=ErrorType.SYNTAX_ERROR,
+            message=f"Definition body could not be parsed as a concept: {exc}",
+            location="body",
+        )
+        return ValidateDefinitionResult(valid=False, errors=[error])
+
+    errors = Validator().validate(definition)
+    return ValidateDefinitionResult(valid=len(errors) == 0, errors=errors)
 
 
 # ── GET /registry/search ───────────────────────────────────────────────────────
