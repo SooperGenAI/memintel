@@ -140,7 +140,7 @@ _TASK_REPAYMENT = {
 
 _TASK_OVERDUE = {
     "concept": {
-        "concept_id":    "loan.days_overdue_concept",
+        "concept_id":    "loan.days_overdue",
         "version":       "v1",
         "namespace":     "org",
         "output_type":   "float",
@@ -160,7 +160,7 @@ _TASK_OVERDUE = {
     "condition": {
         "condition_id":    "loan.overdue_condition",
         "version":         "v1",
-        "concept_id":      "loan.days_overdue_concept",
+        "concept_id":      "loan.days_overdue",
         "concept_version": "v1",
         "namespace":       "org",
         "strategy": {
@@ -176,6 +176,92 @@ _TASK_OVERDUE = {
         "trigger": {
             "fire_on":           "true",
             "condition_id":      "loan.overdue_condition",
+            "condition_version": "v1",
+        },
+    },
+}
+
+_TASK_CREDIT = {
+    "concept": {
+        "concept_id":  "loan.credit_score",
+        "version":     "v1",
+        "namespace":   "org",
+        "output_type": "float",
+        "description": "Loan borrower credit score",
+        "primitives": {
+            "loan.credit_score": {"type": "float", "missing_data_policy": "zero"},
+        },
+        "features": {
+            "output": {
+                "op":     "z_score_op",
+                "inputs": {"input": "loan.credit_score"},
+                "params": {},
+            }
+        },
+        "output_feature": "output",
+    },
+    "condition": {
+        "condition_id":    "loan.credit_below_threshold",
+        "version":         "v1",
+        "concept_id":      "loan.credit_score",
+        "concept_version": "v1",
+        "namespace":       "org",
+        "strategy": {
+            "type":   "threshold",
+            "params": {"direction": "below", "value": 650},
+        },
+    },
+    "action": {
+        "action_id": "loan.credit_alert",
+        "version":   "v1",
+        "namespace": "org",
+        "config": {"type": "webhook", "endpoint": "https://loan.example.com/credit"},
+        "trigger": {
+            "fire_on":           "true",
+            "condition_id":      "loan.credit_below_threshold",
+            "condition_version": "v1",
+        },
+    },
+}
+
+_TASK_VELOCITY = {
+    "concept": {
+        "concept_id":  "loan.payment_velocity",
+        "version":     "v1",
+        "namespace":   "org",
+        "output_type": "float",
+        "description": "Rate of change in loan payment amounts over 30 days",
+        "primitives": {
+            "loan.payment_velocity": {"type": "float", "missing_data_policy": "zero"},
+        },
+        "features": {
+            "output": {
+                "op":     "z_score_op",
+                "inputs": {"input": "loan.payment_velocity"},
+                "params": {},
+            }
+        },
+        "output_feature": "output",
+    },
+    "condition": {
+        "condition_id":    "loan.velocity_below_threshold",
+        "version":         "v1",
+        "concept_id":      "loan.payment_velocity",
+        "concept_version": "v1",
+        "namespace":       "org",
+        "strategy": {
+            "type":   "threshold",
+            "params": {"direction": "below", "value": 0.0},
+        },
+    },
+    "action": {
+        "action_id": "loan.velocity_alert",
+        "version":   "v1",
+        "namespace": "org",
+        "config": {"type": "webhook", "endpoint": "https://loan.example.com/velocity"},
+        "trigger": {
+            "fire_on":           "true",
+            "condition_id":      "loan.velocity_below_threshold",
             "condition_version": "v1",
         },
     },
@@ -228,6 +314,9 @@ _TASK_GENERIC = {
 _TASK_MAP: dict[str, dict] = {
     "repayment": _TASK_REPAYMENT,
     "overdue":   _TASK_OVERDUE,
+    "past due":  _TASK_OVERDUE,
+    "credit":    _TASK_CREDIT,
+    "velocity":  _TASK_VELOCITY,
 }
 
 
