@@ -26,7 +26,12 @@ loan_task_request    — CreateTaskRequest for an overdue loan alert
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
+
+if TYPE_CHECKING:
+    import httpx
 
 from app.llm.base import LLMClientBase
 from app.models.concept_compile import CompileConceptRequest
@@ -99,10 +104,10 @@ _TASK_REPAYMENT = {
         },
         "features": {
             "output": {
-                "op": "ratio_op",
+                "op": "divide",
                 "inputs": {
-                    "numerator":   "loan.payments_on_time",
-                    "denominator": "loan.payments_due",
+                    "a": "loan.payments_on_time",
+                    "b": "loan.payments_due",
                 },
                 "params": {},
             }
@@ -145,7 +150,7 @@ _TASK_OVERDUE = {
         },
         "features": {
             "output": {
-                "op":     "identity_op",
+                "op":     "z_score_op",
                 "inputs": {"input": "loan.days_overdue"},
                 "params": {},
             }
@@ -188,7 +193,7 @@ _TASK_GENERIC = {
         },
         "features": {
             "output": {
-                "op":     "identity_op",
+                "op":     "z_score_op",
                 "inputs": {"input": "mock.signal_a"},
                 "params": {},
             }
@@ -287,6 +292,45 @@ LOAN_PRIMITIVES: dict[str, float] = {
     "loan.outstanding_balance": 12_500.0,
     "loan.credit_score":        620.0,
 }
+
+
+# ── Shared async helpers (used by test_v7_cross_functional.py) ────────────────
+
+async def compile_and_register(
+    client: "httpx.AsyncClient",
+    identifier: str,
+    description: str,
+    output_type: str,
+    signal_names: list[str],
+) -> tuple[str, str]:
+    """
+    Run POST /concepts/compile then POST /concepts/register.
+
+    Returns (concept_id, compile_token).  Asserts HTTP 201 at each step so
+    a failing assertion fails fast at the call site in the test.
+    """
+    compile_resp = await client.post("/concepts/compile", json={
+        "identifier": identifier,
+        "description": description,
+        "output_type": output_type,
+        "signal_names": signal_names,
+        "return_reasoning": False,
+        "stream": False,
+    })
+    assert compile_resp.status_code == 201, (
+        f"compile failed ({compile_resp.status_code}): {compile_resp.text}"
+    )
+    token = compile_resp.json()["compile_token"]
+
+    register_resp = await client.post("/concepts/register", json={
+        "compile_token": token,
+        "identifier": identifier,
+    })
+    assert register_resp.status_code == 201, (
+        f"register failed ({register_resp.status_code}): {register_resp.text}"
+    )
+    concept_id = register_resp.json()["concept_id"]
+    return concept_id, token
 
 
 # ── Pytest fixtures ────────────────────────────────────────────────────────────
