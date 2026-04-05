@@ -41,6 +41,7 @@ from app.api.routes import (
     actions,
     agents,
     compile,
+    concepts,
     conditions,
     context,
     decisions,
@@ -324,6 +325,7 @@ app.include_router(execute.router,          prefix="/execute",    tags=["Executi
 app.include_router(compile.router,          prefix="/compile",    tags=["Compiler"])
 app.include_router(registry.router,         prefix="/registry",   tags=["Registry"])
 app.include_router(agents.router,           prefix="/agents",     tags=["Agents"])
+app.include_router(concepts.router,                               tags=["Concepts"])
 app.include_router(tasks.router,                                  tags=["Tasks"])
 app.include_router(conditions.router,                             tags=["Conditions"])
 app.include_router(decisions.router,                              tags=["Decisions"])

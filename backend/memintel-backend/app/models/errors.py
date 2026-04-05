@@ -75,6 +75,10 @@ class ErrorType(str, Enum):
     COMPILE_TOKEN_NOT_FOUND      = "compile_token_not_found"       # Token not found or malformed
     COMPILE_TOKEN_CONSUMED       = "compile_token_consumed"        # Token already used
 
+    # ── V7 — Concept compilation pipeline ─────────────────────────────────────
+    COMPILATION_ERROR = "compilation_error"  # CoR pipeline step failed → HTTP 422
+    TYPE_MISMATCH     = "type_mismatch"      # output_type incompatible with formula → HTTP 422
+
 
 # ── HTTP status code mapping ──────────────────────────────────────────────────
 
@@ -103,6 +107,10 @@ _HTTP_STATUS: dict[ErrorType, int] = {
     ErrorType.COMPILE_TOKEN_EXPIRED:        400,
     ErrorType.COMPILE_TOKEN_NOT_FOUND:      404,
     ErrorType.COMPILE_TOKEN_CONSUMED:       409,
+
+    # V7 — Concept compilation pipeline
+    ErrorType.COMPILATION_ERROR: 422,
+    ErrorType.TYPE_MISMATCH:     422,
 }
 
 
@@ -468,6 +476,49 @@ class CompileTokenConsumedError(MemintelError):
     ) -> None:
         super().__init__(
             ErrorType.COMPILE_TOKEN_CONSUMED,
+            message,
+            suggestion=suggestion,
+        )
+
+
+class CompilationError(MemintelError):
+    """
+    CoR pipeline step failed → HTTP 422.
+
+    Raised when a CoR step (Intent Parsing, Signal Identification,
+    DAG Construction, or Type Validation) cannot be completed.
+    failed_at_step is the 1-based step index where failure occurred.
+    """
+    def __init__(
+        self,
+        message: str,
+        *,
+        failed_at_step: int | None = None,
+        suggestion: str | None = None,
+    ) -> None:
+        super().__init__(
+            ErrorType.COMPILATION_ERROR,
+            message,
+            suggestion=suggestion,
+        )
+        self.failed_at_step = failed_at_step
+
+
+class TypeMismatchError(MemintelError):
+    """
+    output_type is incompatible with the compiled formula → HTTP 422.
+
+    Raised at Step 4 (Type Validation) when the requested output_type
+    cannot be produced by the formula strategy selected in Step 3.
+    """
+    def __init__(
+        self,
+        message: str = "output_type is incompatible with the compiled formula.",
+        *,
+        suggestion: str | None = None,
+    ) -> None:
+        super().__init__(
+            ErrorType.TYPE_MISMATCH,
             message,
             suggestion=suggestion,
         )
