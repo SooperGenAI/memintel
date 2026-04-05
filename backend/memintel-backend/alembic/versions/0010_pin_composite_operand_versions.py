@@ -36,16 +36,16 @@ def upgrade() -> None:
     op.execute("""
         DO $$
         DECLARE
-            rec     RECORD;
-            body    JSONB;
-            strat   JSONB;
-            params  JSONB;
-            raw_ops JSONB;
-            op_elem JSONB;
-            op_id   TEXT;
-            op_ver  TEXT;
-            pinned  JSONB;
-            i       INT;
+            rec      RECORD;
+            def_body JSONB;
+            strat    JSONB;
+            params   JSONB;
+            raw_ops  JSONB;
+            op_elem  JSONB;
+            op_id    TEXT;
+            op_ver   TEXT;
+            pinned   JSONB;
+            i        INT;
         BEGIN
             FOR rec IN
                 SELECT definition_id, version, body AS raw_body
@@ -53,10 +53,10 @@ def upgrade() -> None:
                 WHERE definition_type = 'condition'
                   AND body -> 'strategy' ->> 'type' = 'composite'
             LOOP
-                body   := rec.raw_body;
-                strat  := body -> 'strategy';
-                params := strat -> 'params';
-                raw_ops := params -> 'operands';
+                def_body := rec.raw_body;
+                strat    := def_body -> 'strategy';
+                params   := strat -> 'params';
+                raw_ops  := params -> 'operands';
 
                 -- Only migrate rows whose operands are plain strings (not already OperandRef dicts).
                 IF raw_ops IS NULL OR jsonb_typeof(raw_ops) <> 'array' THEN
@@ -101,7 +101,7 @@ def upgrade() -> None:
 
                 -- Write back the updated body.
                 UPDATE definitions
-                SET body = body
+                SET body = def_body
                         || jsonb_build_object(
                                'strategy',
                                strat || jsonb_build_object(
@@ -122,14 +122,14 @@ def downgrade() -> None:
     op.execute("""
         DO $$
         DECLARE
-            rec     RECORD;
-            body    JSONB;
-            strat   JSONB;
-            params  JSONB;
-            raw_ops JSONB;
-            op_elem JSONB;
-            flat    JSONB;
-            i       INT;
+            rec      RECORD;
+            def_body JSONB;
+            strat    JSONB;
+            params   JSONB;
+            raw_ops  JSONB;
+            op_elem  JSONB;
+            flat     JSONB;
+            i        INT;
         BEGIN
             FOR rec IN
                 SELECT definition_id, version, body AS raw_body
@@ -137,10 +137,10 @@ def downgrade() -> None:
                 WHERE definition_type = 'condition'
                   AND body -> 'strategy' ->> 'type' = 'composite'
             LOOP
-                body   := rec.raw_body;
-                strat  := body -> 'strategy';
-                params := strat -> 'params';
-                raw_ops := params -> 'operands';
+                def_body := rec.raw_body;
+                strat    := def_body -> 'strategy';
+                params   := strat -> 'params';
+                raw_ops  := params -> 'operands';
 
                 IF raw_ops IS NULL OR jsonb_typeof(raw_ops) <> 'array' THEN
                     CONTINUE;
@@ -158,7 +158,7 @@ def downgrade() -> None:
                 END LOOP;
 
                 UPDATE definitions
-                SET body = body
+                SET body = def_body
                         || jsonb_build_object(
                                'strategy',
                                strat || jsonb_build_object(

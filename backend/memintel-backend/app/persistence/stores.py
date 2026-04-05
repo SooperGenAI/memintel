@@ -38,6 +38,7 @@ Available dependencies
   get_definition_store()       → DefinitionStore
   get_feedback_store()         → FeedbackStore
   get_calibration_token_store() → CalibrationTokenStore
+  get_compile_token_store()    → CompileTokenStore
   get_graph_store()            → GraphStore
   get_job_store()              → JobStore
 """
@@ -49,6 +50,7 @@ from fastapi import Depends
 from app.persistence.db import get_db
 from app.stores import (
     CalibrationTokenStore,
+    CompileTokenStore,
     ContextStore,
     DefinitionStore,
     FeedbackStore,
@@ -98,6 +100,13 @@ async def get_job_store(
 ) -> JobStore:
     """FastAPI dependency — returns a JobStore backed by the shared pool."""
     return JobStore(pool)
+
+
+async def get_compile_token_store(
+    pool: asyncpg.Pool = Depends(get_db),
+) -> CompileTokenStore:
+    """FastAPI dependency — returns a CompileTokenStore backed by the shared pool."""
+    return CompileTokenStore(pool)
 
 
 async def get_context_store(

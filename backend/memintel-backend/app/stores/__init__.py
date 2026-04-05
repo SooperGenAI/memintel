@@ -11,6 +11,7 @@ from app.stores.task import TaskStore
 from app.stores.definition import DefinitionStore
 from app.stores.feedback import FeedbackStore
 from app.stores.calibration_token import CalibrationTokenStore
+from app.stores.compile_token import CompileTokenStore
 from app.stores.graph import GraphStore
 from app.stores.job import JobStore
 from app.stores.context import ContextStore
@@ -21,6 +22,7 @@ __all__ = [
     "DefinitionStore",
     "FeedbackStore",
     "CalibrationTokenStore",
+    "CompileTokenStore",
     "GraphStore",
     "JobStore",
     "ContextStore",
