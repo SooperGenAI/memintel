@@ -127,6 +127,7 @@ def _make_token(
     identifier: str = "loan.repayment_ratio",
     expired: bool = False,
     used: bool = False,
+    output_type: str = "float",
 ) -> CompileToken:
     """Build a minimal CompileToken for testing."""
     now = datetime.now(tz=timezone.utc)
@@ -140,6 +141,7 @@ def _make_token(
         token_string=secrets.token_urlsafe(32),
         identifier=identifier,
         ir_hash="sha256_" + secrets.token_hex(16),
+        output_type=output_type,
         expires_at=expires_at,
         used=used,
         created_at=now,

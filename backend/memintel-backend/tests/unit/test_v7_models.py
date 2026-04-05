@@ -237,6 +237,7 @@ class TestCompileToken:
             token_string="opaque_token_abc",
             identifier="loan.repayment_ratio",
             ir_hash="sha256abcdef",
+            output_type="float",
             expires_at=_utcnow(),
             created_at=_utcnow(),
         )
@@ -248,6 +249,7 @@ class TestCompileToken:
             token_string="opaque_token_xyz",
             identifier="loan.repayment_ratio",
             ir_hash="sha256abcdef",
+            output_type="float",
             expires_at=_utcnow(),
             used=True,
             created_at=_utcnow(),

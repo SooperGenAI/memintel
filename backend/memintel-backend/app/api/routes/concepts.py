@@ -22,10 +22,29 @@ HTTP 201 — compilation succeeded.
 HTTP 422 — compilation_error (CoR step failed) or type_mismatch.
 HTTP 500 — internal_error.
 
+POST /concepts/register
+───────────────────────
+Phase 2 of two-phase concept registration. Consumes the compile_token
+(atomic exactly-once redemption) and registers the concept permanently
+in the DefinitionStore. Returns a stable concept_id.
+
+The identifier in the request MUST match the identifier locked at compile
+time. Any mismatch is rejected (HTTP 422) before any DB write.
+
+Same (identifier, ir_hash) registered twice → HTTP 201 with same concept_id
+(idempotent). Same identifier + different ir_hash → HTTP 409 (conflict).
+
+HTTP 201 — concept registered (or idempotent re-registration).
+HTTP 400 — compile_token_expired (TTL exceeded).
+HTTP 404 — compile_token_not_found.
+HTTP 409 — compile_token_consumed OR identifier_conflict.
+HTTP 422 — identifier_mismatch.
+HTTP 500 — internal_error.
+
 Error handling
 ──────────────
-MemintelError subclasses (CompilationError, TypeMismatchError) are caught
-globally by the exception handler in main.py — this route does not catch them.
+MemintelError subclasses are caught globally by the exception handler in
+main.py — routes do not catch them.
 """
 from __future__ import annotations
 
@@ -35,16 +54,22 @@ import asyncpg
 from fastapi import APIRouter, Depends
 
 from app.api.deps import require_api_key
-from app.models.concept_compile import CompileConceptRequest, CompileConceptResponse
+from app.models.concept_compile import (
+    CompileConceptRequest,
+    CompileConceptResponse,
+    RegisterConceptRequest,
+    RegisterConceptResponse,
+)
 from app.persistence.db import get_db
 from app.services.concept_compiler import ConceptCompilerService
+from app.services.concept_registration import ConceptRegistrationService
 
 log = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/concepts", tags=["Concepts"])
 
 
-# ── Service dependency ─────────────────────────────────────────────────────────
+# ── Service dependencies ───────────────────────────────────────────────────────
 
 async def get_concept_compiler_service() -> ConceptCompilerService:
     """
@@ -54,6 +79,17 @@ async def get_concept_compiler_service() -> ConceptCompilerService:
     The pool is passed directly to compile() rather than stored on the service.
     """
     return ConceptCompilerService()
+
+
+async def get_concept_registration_service() -> ConceptRegistrationService:
+    """
+    FastAPI dependency — returns a ConceptRegistrationService.
+
+    Store instances are created inside register() using the pool passed at
+    call time (not stored on the service) to stay consistent with the
+    compile() pattern.
+    """
+    return ConceptRegistrationService()
 
 
 # ── POST /concepts/compile ────────────────────────────────────────────────────
@@ -100,3 +136,45 @@ async def compile_concept(
         return_reasoning=req.return_reasoning,
     )
     return await service.compile(req, pool)
+
+
+# ── POST /concepts/register ───────────────────────────────────────────────────
+
+@router.post(
+    "/register",
+    summary="Register a compiled concept (Phase 2 of two-phase flow)",
+    response_model=RegisterConceptResponse,
+    status_code=201,
+)
+async def register_concept(
+    req: RegisterConceptRequest,
+    service: ConceptRegistrationService = Depends(get_concept_registration_service),
+    pool: asyncpg.Pool = Depends(get_db),
+    _: None = Depends(require_api_key),
+) -> RegisterConceptResponse:
+    """
+    Consume a compile_token and permanently register the concept.
+
+    Phase 2 of two-phase concept registration:
+      1. POST /concepts/compile   → returns compile_token (M-3)
+      2. POST /concepts/register  → consumes compile_token, returns concept_id (this endpoint)
+
+    The compile_token is atomically marked used before any write occurs.
+    The identifier in the request MUST match the identifier locked at compile
+    time — any mismatch is rejected before any DB write is attempted.
+
+    Idempotent: two calls with the same (identifier, ir_hash) both succeed
+    with HTTP 201 and return the same concept_id. No duplicate row is created.
+
+    HTTP 201 — concept registered (or idempotent re-registration).
+    HTTP 400 — compile_token_expired (TTL exceeded).
+    HTTP 404 — compile_token_not_found.
+    HTTP 409 — compile_token_consumed OR identifier_conflict.
+    HTTP 422 — identifier_mismatch.
+    HTTP 500 — internal_error.
+    """
+    log.info(
+        "register_concept_request",
+        identifier=req.identifier,
+    )
+    return await service.register(req, pool)

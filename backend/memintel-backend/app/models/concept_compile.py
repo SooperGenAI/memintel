@@ -183,6 +183,7 @@ class CompileToken(BaseModel):
     token_string: str      # opaque token returned to the caller
     identifier:   str      # locked at compile time
     ir_hash:      str      # SHA-256 of the compiled concept IR
+    output_type:  str      # declared at compile time; carried forward to Phase 2
     expires_at:   datetime
     used:         bool = False
     created_at:   datetime

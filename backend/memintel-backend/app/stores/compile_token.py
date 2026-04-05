@@ -42,6 +42,7 @@ token_id      token_id      (UUID PK — internal)
 token_string  token_string  (opaque token returned to caller)
 identifier    identifier    (locked at compile time)
 ir_hash       ir_hash       (SHA-256 of compiled concept IR)
+output_type   output_type   (declared at compile time; carried to Phase 2)
 expires_at    expires_at
 used          used
 created_at    created_at
@@ -86,15 +87,16 @@ class CompileTokenStore:
             row = await self._pool.fetchrow(
                 """
                 INSERT INTO compile_tokens (
-                    token_id, token_string, identifier, ir_hash, expires_at
+                    token_id, token_string, identifier, ir_hash, output_type, expires_at
                 )
-                VALUES ($1, $2, $3, $4, $5)
+                VALUES ($1, $2, $3, $4, $5, $6)
                 RETURNING *
                 """,
                 token.token_id,
                 token.token_string,
                 token.identifier,
                 token.ir_hash,
+                token.output_type,
                 token.expires_at,
             )
         except asyncpg.UniqueViolationError as exc:
@@ -209,6 +211,7 @@ def _row_to_token(row: asyncpg.Record) -> CompileToken:
         token_string=row["token_string"],
         identifier=row["identifier"],
         ir_hash=row["ir_hash"],
+        output_type=row["output_type"],
         expires_at=row["expires_at"],
         used=row["used"],
         created_at=row["created_at"],

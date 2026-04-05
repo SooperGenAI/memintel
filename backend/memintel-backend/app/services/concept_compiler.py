@@ -141,6 +141,7 @@ class ConceptCompilerService:
             token_string=token_string,
             identifier=request.identifier,
             ir_hash=ir_hash,
+            output_type=request.output_type,
             expires_at=expires_at,
             used=False,
             created_at=now,

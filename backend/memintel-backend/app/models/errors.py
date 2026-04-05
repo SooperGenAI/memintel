@@ -76,8 +76,10 @@ class ErrorType(str, Enum):
     COMPILE_TOKEN_CONSUMED       = "compile_token_consumed"        # Token already used
 
     # ── V7 — Concept compilation pipeline ─────────────────────────────────────
-    COMPILATION_ERROR = "compilation_error"  # CoR pipeline step failed → HTTP 422
-    TYPE_MISMATCH     = "type_mismatch"      # output_type incompatible with formula → HTTP 422
+    COMPILATION_ERROR   = "compilation_error"    # CoR pipeline step failed → HTTP 422
+    TYPE_MISMATCH       = "type_mismatch"        # output_type incompatible with formula → HTTP 422
+    IDENTIFIER_MISMATCH = "identifier_mismatch"  # token identifier ≠ request identifier → HTTP 422
+    IDENTIFIER_CONFLICT = "identifier_conflict"  # identifier exists with different formula → HTTP 409
 
 
 # ── HTTP status code mapping ──────────────────────────────────────────────────
@@ -109,8 +111,10 @@ _HTTP_STATUS: dict[ErrorType, int] = {
     ErrorType.COMPILE_TOKEN_CONSUMED:       409,
 
     # V7 — Concept compilation pipeline
-    ErrorType.COMPILATION_ERROR: 422,
-    ErrorType.TYPE_MISMATCH:     422,
+    ErrorType.COMPILATION_ERROR:   422,
+    ErrorType.TYPE_MISMATCH:       422,
+    ErrorType.IDENTIFIER_MISMATCH: 422,
+    ErrorType.IDENTIFIER_CONFLICT: 409,
 }
 
 
@@ -519,6 +523,51 @@ class TypeMismatchError(MemintelError):
     ) -> None:
         super().__init__(
             ErrorType.TYPE_MISMATCH,
+            message,
+            suggestion=suggestion,
+        )
+
+
+class IdentifierMismatchError(MemintelError):
+    """
+    Request identifier differs from the compile_token's locked identifier → HTTP 422.
+
+    The identifier is locked at compile time (POST /concepts/compile).
+    POST /concepts/register MUST supply the same identifier — any mismatch
+    is rejected immediately, before any DB write occurs.
+    """
+    def __init__(
+        self,
+        message: str = "identifier does not match the compile_token.",
+        *,
+        suggestion: str | None = "Use the identifier that was specified at compile time.",
+    ) -> None:
+        super().__init__(
+            ErrorType.IDENTIFIER_MISMATCH,
+            message,
+            suggestion=suggestion,
+        )
+
+
+class IdentifierConflictError(MemintelError):
+    """
+    Identifier already registered with a different compiled formula → HTTP 409.
+
+    Raised when POST /concepts/register encounters an existing definition
+    for the same identifier but with a different ir_hash (different formula).
+    Idempotent re-registration (same identifier + same ir_hash) is NOT an
+    error — it returns the existing concept_id with HTTP 201.
+    """
+    def __init__(
+        self,
+        message: str = "identifier is already registered with a different formula.",
+        *,
+        suggestion: str | None = (
+            "Use a different identifier, or re-compile with the same definition body."
+        ),
+    ) -> None:
+        super().__init__(
+            ErrorType.IDENTIFIER_CONFLICT,
             message,
             suggestion=suggestion,
         )

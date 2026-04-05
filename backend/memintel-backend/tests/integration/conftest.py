@@ -55,6 +55,7 @@ _ALL_TABLES: tuple[str, ...] = (
     "guardrails_versions",  # migration 0003
     "tasks",
     "definitions",
+    "compile_tokens",       # migration 0011 — V7 two-phase compile + register
 )
 
 
