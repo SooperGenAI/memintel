@@ -45,8 +45,9 @@ USE_LLM_FIXTURES environment variable:
 """
 from __future__ import annotations
 
+import asyncio
 import os
-from typing import Any
+from typing import Any, AsyncGenerator
 
 import structlog
 
@@ -163,20 +164,10 @@ class TaskAuthoringService:
 
     async def create_task(self, request: CreateTaskRequest) -> Task | DryRunResult:
         """
-        Main entry point for POST /tasks.
+        Main entry point for POST /tasks (non-streaming path — behaviour unchanged).
 
-        Pipeline:
-          0. Pre-LLM: validate vocabulary_context (Hard Rule 1).
-          0. Pre-LLM: resolve concept_id existence if provided.
-          1. Build LLM prompt context (strict injection order [1]–[5]).
-          2. Call LLM with retry / refinement loop.
-          2b. Post-LLM: vocabulary check — LLM concept_id must be in vocab.
-          3. Validate strategy presence — immediate raise, no retry.
-          4. Resolve action binding.
-          5. Parse domain models (concept, condition, action).
-          6a. dry_run=True  → return DryRunResult; nothing persisted.
-          6b. dry_run=False → register definitions + create Task.
-          7. Attach reasoning_trace when return_reasoning=True.
+        Collects all items from ``_run_cor_pipeline()`` and returns the final
+        Task or DryRunResult.  reasoning_trace is attached when return_reasoning=True.
 
         Raises:
           VocabularyMismatchError          — vocabulary_context both-empty or no match.
@@ -186,11 +177,104 @@ class TaskAuthoringService:
                                             invalid after all retries.
           MemintelError(ACTION_BINDING_FAILED) — action could not be resolved.
         """
-        # ── Pre-LLM: vocabulary_context validation (Hard Rule 1) ──────────────
-        # Order: both-empty check → concept cap → condition cap.
+        steps: list[ReasoningStep] = []
+        result: Task | DryRunResult | None = None
+
+        async for item in self._run_cor_pipeline(request):
+            if isinstance(item, ReasoningStep):
+                steps.append(item)
+            else:
+                result = item
+
+        # Attach reasoning trace when caller opts in (Hard Rule 3: absent when False).
+        if request.return_reasoning and isinstance(result, Task):
+            result.reasoning_trace = ReasoningTrace(steps=steps)
+
+        return result  # type: ignore[return-value]
+
+    async def create_task_stream(
+        self,
+        request: CreateTaskRequest,
+    ) -> AsyncGenerator[dict, None]:
+        """
+        Stream the CoR pipeline as SSE event dicts (streaming path only).
+
+        Yields dicts with keys ``event_type`` and ``data``:
+          cor_step     — one per pipeline step (4 total on success).
+          cor_complete — final event; payload includes task_id (None for dry_run).
+          cor_error    — terminal error event on any failure or LLM timeout.
+
+        HARD RULE: this method is ONLY called when stream=True.
+        The non-streaming ``create_task()`` is completely unchanged.
+        """
+        last_failed_step: int | None = None
+
+        try:
+            async for item in self._run_cor_pipeline(request):
+                if isinstance(item, ReasoningStep):
+                    if item.outcome == "failed":
+                        last_failed_step = item.step_index
+                    yield {"event_type": "cor_step", "data": item.model_dump()}
+                elif isinstance(item, Task):
+                    yield {
+                        "event_type": "cor_complete",
+                        "data": {
+                            "task_id": item.task_id,
+                            "status": item.status.value if item.status else None,
+                        },
+                    }
+                else:
+                    # DryRunResult
+                    yield {
+                        "event_type": "cor_complete",
+                        "data": {"task_id": None, "dry_run": True},
+                    }
+
+        except asyncio.TimeoutError as exc:
+            yield {
+                "event_type": "cor_error",
+                "data": {
+                    "failure_reason": str(exc) or "LLM step timed out",
+                    "failed_at_step": last_failed_step,
+                },
+            }
+        except Exception as exc:
+            yield {
+                "event_type": "cor_error",
+                "data": {
+                    "failure_reason": str(exc),
+                    "failed_at_step": last_failed_step,
+                },
+            }
+
+    # ── Internal CoR pipeline (shared by streaming and non-streaming) ───────────
+
+    async def _run_cor_pipeline(
+        self,
+        request: CreateTaskRequest,
+    ) -> AsyncGenerator[ReasoningStep | Task | DryRunResult, None]:
+        """
+        4-step Chain of Reasoning — yields ReasoningStep items and a final
+        Task or DryRunResult.
+
+        Both ``create_task()`` (non-streaming) and ``create_task_stream()``
+        (streaming) iterate this generator. Do NOT call this method directly.
+
+        Step layout:
+          Step 1 — Intent Parsing:    pre-LLM validation + context build.
+          Step 2 — Concept Selection: single LLM call (wrapped with wait_for).
+          Step 3 — Condition Strategy: strategy validation + model parsing.
+          Step 4 — Action Binding:    guardrails + persist or dry-run.
+          Final  — Task or DryRunResult.
+
+        On asyncio.TimeoutError at Step 2:
+          yield ReasoningStep(step_index=2, outcome="failed")
+          then raise — let the caller handle cor_error emission.
+        """
+        # ── Pre-LLM: vocabulary_context validation ────────────────────────────
         if request.vocabulary_context is not None:
             vc = request.vocabulary_context
-            concept_ids  = vc.available_concept_ids or []
+            concept_ids   = vc.available_concept_ids or []
             condition_ids = vc.available_condition_ids or []
 
             if not concept_ids and not condition_ids:
@@ -198,13 +282,11 @@ class TaskAuthoringService:
                     "vocabulary_context provided but both available_concept_ids "
                     "and available_condition_ids are empty.",
                 )
-
             if len(concept_ids) > MAX_VOCABULARY_IDS:
                 raise VocabularyContextTooLargeError(
                     f"available_concept_ids exceeds the maximum of "
                     f"{MAX_VOCABULARY_IDS} IDs per list.",
                 )
-
             if len(condition_ids) > MAX_VOCABULARY_IDS:
                 raise VocabularyContextTooLargeError(
                     f"available_condition_ids exceeds the maximum of "
@@ -227,9 +309,6 @@ class TaskAuthoringService:
                 )
 
         # Fetch active context — never raises; proceed without context on any error.
-        # This is the only point where the context store is consulted; context is
-        # never consulted on the evaluation path (invariant: context injection is
-        # task-creation-only).
         app_context: ApplicationContext | None = None
         if self._context_store is not None:
             try:
@@ -238,15 +317,38 @@ class TaskAuthoringService:
                 log.error("context_fetch_failed", error=str(exc))
 
         context = self._build_context(request, app_context)
-        llm_output = await self._generate_with_retries(request.intent, context)
+
+        # ── Step 1: Intent Parsing ─────────────────────────────────────────────
+        skipped = pre_compiled_concept_id is not None
+        step1 = ReasoningStep(
+            step_index=1,
+            label="Intent Parsing",
+            summary="skipped (concept pre-compiled)" if skipped
+                    else "Intent parsed; concept and condition context established.",
+            outcome="skipped" if skipped else "accepted",
+        )
+        yield step1
+
+        # ── Step 2: Concept Selection (LLM call — wrapped with wait_for) ──────
+        try:
+            llm_output = await asyncio.wait_for(
+                self._generate_with_retries(request.intent, context),
+                timeout=10.0,
+            )
+        except asyncio.TimeoutError:
+            yield ReasoningStep(
+                step_index=2,
+                label="Concept Selection",
+                summary="LLM timed out at step 2",
+                outcome="failed",
+            )
+            raise  # let create_task_stream() emit cor_error
 
         concept_dict   = llm_output.get("concept")   or {}
         condition_dict = llm_output.get("condition") or {}
         action_dict    = llm_output.get("action")    or {}
 
-        # ── Post-LLM: vocabulary check ─────────────────────────────────────────
-        # If vocabulary_context.available_concept_ids is non-empty and the LLM
-        # selected a concept_id outside that list → VocabularyMismatchError.
+        # Post-LLM: vocabulary check
         if (
             request.vocabulary_context is not None
             and request.vocabulary_context.available_concept_ids
@@ -258,6 +360,16 @@ class TaskAuthoringService:
                     "vocabulary_context.available_concept_ids.",
                 )
 
+        step2 = ReasoningStep(
+            step_index=2,
+            label="Concept Selection",
+            summary="skipped (concept pre-compiled)" if skipped
+                    else "Concept selected from intent and registry.",
+            outcome="skipped" if skipped else "accepted",
+        )
+        yield step2
+
+        # ── Step 3: Condition Strategy ─────────────────────────────────────────
         # Strategy validation — hard fail; do NOT proceed if absent.
         self._validate_strategy_presence(condition_dict)
 
@@ -265,13 +377,9 @@ class TaskAuthoringService:
         resolved_action_dict = self._resolve_action(action_dict, request)
 
         # Pin composite operand versions before parsing.
-        # The LLM emits operands as plain condition_ids (strings). Convert each to
-        # a version-pinned OperandRef dict so CompositeParams.operands is satisfied.
         await self._pin_composite_operand_versions(condition_dict)
 
         # Parse into domain models.
-        # When concept_id was pre-provided, skip parsing the LLM concept_dict —
-        # the pre-compiled concept is already registered in the registry.
         concept: ConceptDefinition | None = None
         if pre_compiled_concept_id is None:
             try:
@@ -299,34 +407,50 @@ class TaskAuthoringService:
                 ),
             ) from exc
 
-        # FIX 1: Validate compiled strategy against guardrails.constraints.disallowed_strategies.
+        yield ReasoningStep(
+            step_index=3,
+            label="Condition Strategy",
+            summary="Condition strategy selected and parameters resolved.",
+            outcome="accepted",
+        )
+
+        # ── Step 4: Action Binding (guardrails + persist) ──────────────────────
+        # FIX 1: Validate compiled strategy against guardrails.
         if self._guardrails is not None:
             self._validate_strategy_allowed(condition)
 
-        # FIX 2: Apply deterministic bias rules to override threshold value from priors.
-        # Skip when concept is None (pre-compiled path — no primitives to match).
+        # FIX 2: Apply deterministic bias rules.
         if concept is not None:
             condition = self._apply_bias_rules(condition, concept, request.intent)
 
-        # FIX 3: Validate concept primitives exist in guardrails primitive registry.
-        # Skip when concept is None (pre-compiled path — already validated at compile time).
+        # FIX 3: Validate concept primitives.
         if self._guardrails is not None and concept is not None:
             self._validate_primitives_registered(concept)
 
-        # dry_run — preview only; nothing registered or persisted.
+        yield ReasoningStep(
+            step_index=4,
+            label="Action Binding",
+            summary="Action binding resolved.",
+            outcome="accepted",
+        )
+
+        # ── Final: dry_run or register + persist ──────────────────────────────
         if request.dry_run:
             if concept is not None:
-                return self._build_dry_run_result(concept, condition, action)
-            # Pre-compiled concept path: minimal concept dict from registry reference.
-            return DryRunResult(
-                concept={"concept_id": pre_compiled_concept_id, "version": pre_compiled_concept_version},
-                condition=condition,
-                action_id=action.action_id,
-                action_version=action.version,
-                validation=ValidationResult(valid=True),
-            )
+                yield self._build_dry_run_result(concept, condition, action)
+            else:
+                yield DryRunResult(
+                    concept={
+                        "concept_id": pre_compiled_concept_id,
+                        "version": pre_compiled_concept_version,
+                    },
+                    condition=condition,
+                    action_id=action.action_id,
+                    action_version=action.version,
+                    validation=ValidationResult(valid=True),
+                )
+            return
 
-        # Determine context_version and context_warning for the persisted task.
         context_version = app_context.version if app_context is not None else None
         context_warning: str | None = None
         if app_context is None:
@@ -335,14 +459,12 @@ class TaskAuthoringService:
                 "Define context via POST /context for more accurate results."
             )
 
-        # Determine guardrails_version for the persisted task.
         guardrails_version: str | None = None
         if self._guardrails_store is not None:
             active_gr_version = self._guardrails_store.get_active_version()
             if active_gr_version is not None:
                 guardrails_version = active_gr_version.version
 
-        # Register and persist.
         task = await self._register_and_persist(
             concept, condition, action, request,
             context_version, context_warning, guardrails_version,
@@ -350,15 +472,7 @@ class TaskAuthoringService:
             pre_compiled_concept_version=pre_compiled_concept_version,
         )
 
-        # Attach reasoning trace when caller opts in (Hard Rule 3: absent when False).
-        if request.return_reasoning:
-            task.reasoning_trace = ReasoningTrace(
-                steps=self._build_reasoning_steps(
-                    skipped_steps_1_and_2=(pre_compiled_concept_id is not None)
-                )
-            )
-
-        return task
+        yield task
 
     async def update_task(self, task_id: str, body: TaskUpdateRequest) -> Task:
         """

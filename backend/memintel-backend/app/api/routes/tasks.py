@@ -40,9 +40,10 @@ import structlog
 import asyncpg
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.api.deps import require_api_key
+from app.api.routes.utils import sse_generator
 from app.models.errors import NotFoundError
 from app.models.task import (
     CreateTaskRequest,
@@ -131,7 +132,20 @@ async def create_task(
         "create_task_request",
         intent_length=len(req.intent),
         dry_run=req.dry_run,
+        stream=req.stream,
     )
+
+    if req.stream:
+        stream = service.create_task_stream(req)
+        return StreamingResponse(
+            sse_generator(stream),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
     result = await service.create_task(req)
     return JSONResponse(
         content=jsonable_encoder(result, exclude_none=True),

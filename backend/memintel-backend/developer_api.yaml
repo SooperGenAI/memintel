@@ -1,0 +1,690 @@
+openapi: "3.0.3"
+info:
+  title: Memintel Developer API
+  version: "7.0"
+  description: |
+    Memintel V7 REST API — task authoring, concept compilation,
+    and two-phase concept registration with optional SSE streaming.
+
+    ## SSE Streaming
+
+    POST /tasks and POST /concepts/compile support opt-in Server-Sent Events
+    (SSE) streaming via the `stream` field in the request body.
+
+    When `stream=true`, the response is `text/event-stream`. Each event follows
+    RFC 8895 wire format:
+
+    ```
+    event: <event_type>
+    data: <json_payload>
+
+    ```
+
+    Event types: `cor_step`, `cor_complete`, `cor_error`.
+
+servers:
+  - url: http://localhost:8000
+    description: Local development server
+
+# ── Security ──────────────────────────────────────────────────────────────────
+
+security:
+  - ApiKeyAuth: []
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+
+  # ── Schemas ─────────────────────────────────────────────────────────────────
+
+  schemas:
+
+    # V7 reasoning trace
+
+    ReasoningStep:
+      type: object
+      description: A single step in the Chain of Reasoning (CoR) trace.
+      required: [step_index, label, summary, outcome]
+      properties:
+        step_index:
+          type: integer
+          description: 1-based step index.
+        label:
+          type: string
+          description: Human-readable step name.
+        summary:
+          type: string
+          description: Description of what the step produced.
+        candidates:
+          type: array
+          items:
+            type: string
+          nullable: true
+          description: Alternatives considered at this step.
+        outcome:
+          type: string
+          enum: [accepted, skipped, failed]
+
+    ReasoningTrace:
+      type: object
+      description: Full Chain of Reasoning trace for a pipeline run.
+      required: [steps]
+      properties:
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReasoningStep'
+        compilation_duration_ms:
+          type: integer
+          nullable: true
+
+    # V7 vocabulary context
+
+    VocabularyContext:
+      type: object
+      description: Bounded set of concept/condition IDs for the LLM to choose from.
+      properties:
+        available_concept_ids:
+          type: array
+          items:
+            type: string
+          description: Concept IDs the LLM may select from.
+        available_condition_ids:
+          type: array
+          items:
+            type: string
+          description: Condition IDs the LLM may select from.
+
+    # Task models
+
+    DeliveryConfig:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [webhook, notification, email, workflow]
+        endpoint:
+          type: string
+          nullable: true
+        channel:
+          type: string
+          nullable: true
+        workflow_id:
+          type: string
+          nullable: true
+
+    ConstraintsConfig:
+      type: object
+      properties:
+        sensitivity:
+          type: string
+          enum: [low, medium, high]
+          nullable: true
+        namespace:
+          type: string
+          enum: [personal, team, org, global]
+          nullable: true
+
+    TaskRequest:
+      type: object
+      required: [intent, entity_scope, delivery]
+      properties:
+        intent:
+          type: string
+          description: Natural-language description of what this task should monitor.
+        entity_scope:
+          type: string
+          description: The entity or group this task evaluates.
+        delivery:
+          $ref: '#/components/schemas/DeliveryConfig'
+        constraints:
+          $ref: '#/components/schemas/ConstraintsConfig'
+          nullable: true
+        dry_run:
+          type: boolean
+          default: false
+          description: Preview definitions without persisting.
+        concept_id:
+          type: string
+          nullable: true
+          description: Bind to a pre-compiled concept from POST /concepts/register.
+        vocabulary_context:
+          $ref: '#/components/schemas/VocabularyContext'
+          nullable: true
+          description: Bound concept/condition IDs for CoR Step 2.
+        stream:
+          type: boolean
+          default: false
+          description: >
+            When true, response is text/event-stream with cor_step /
+            cor_complete / cor_error events.
+        return_reasoning:
+          type: boolean
+          default: false
+          description: Include reasoning_trace in the response when true.
+
+    Task:
+      type: object
+      required: [intent, concept_id, concept_version, condition_id,
+                 condition_version, action_id, action_version,
+                 entity_scope, delivery, status]
+      properties:
+        task_id:
+          type: string
+          nullable: true
+        intent:
+          type: string
+        concept_id:
+          type: string
+        concept_version:
+          type: string
+        condition_id:
+          type: string
+        condition_version:
+          type: string
+        action_id:
+          type: string
+        action_version:
+          type: string
+        entity_scope:
+          type: string
+        delivery:
+          $ref: '#/components/schemas/DeliveryConfig'
+        status:
+          type: string
+          enum: [active, paused, deleted, preview]
+        created_at:
+          type: string
+          format: date-time
+          nullable: true
+        last_triggered_at:
+          type: string
+          format: date-time
+          nullable: true
+        context_version:
+          type: string
+          nullable: true
+        context_warning:
+          type: string
+          nullable: true
+        guardrails_version:
+          type: string
+          nullable: true
+        reasoning_trace:
+          $ref: '#/components/schemas/ReasoningTrace'
+          nullable: true
+
+    DryRunResult:
+      type: object
+      properties:
+        concept:
+          type: object
+        condition:
+          type: object
+        action_id:
+          type: string
+        action_version:
+          type: string
+        validation:
+          type: object
+        reasoning_trace:
+          $ref: '#/components/schemas/ReasoningTrace'
+          nullable: true
+
+    TaskUpdateRequest:
+      type: object
+      description: At least one field must be provided.
+      properties:
+        condition_version:
+          type: string
+          nullable: true
+        delivery:
+          $ref: '#/components/schemas/DeliveryConfig'
+          nullable: true
+        entity_scope:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [active, paused]
+          nullable: true
+
+    TaskList:
+      type: object
+      required: [items, has_more, total_count]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Task'
+        has_more:
+          type: boolean
+        next_cursor:
+          type: string
+          nullable: true
+        total_count:
+          type: integer
+
+    # Concept compile models
+
+    SignalBinding:
+      type: object
+      required: [signal_name, role]
+      properties:
+        signal_name:
+          type: string
+        role:
+          type: string
+
+    CompiledConcept:
+      type: object
+      required: [identifier, output_type, formula_summary, signal_bindings]
+      properties:
+        identifier:
+          type: string
+        output_type:
+          type: string
+        formula_summary:
+          type: string
+        signal_bindings:
+          type: array
+          items:
+            $ref: '#/components/schemas/SignalBinding'
+
+    CompileConceptRequest:
+      type: object
+      required: [identifier, description, output_type, signal_names]
+      properties:
+        identifier:
+          type: string
+          description: Unique name for the concept (locked at compile time).
+        description:
+          type: string
+          description: Plain-English definition of what the concept measures.
+        output_type:
+          type: string
+          description: Memintel type string (e.g. "float", "boolean").
+        signal_names:
+          type: array
+          items:
+            type: string
+          description: >
+            Opaque signal names from the caller's domain. Never validated
+            against any internal registry.
+        return_reasoning:
+          type: boolean
+          default: false
+        stream:
+          type: boolean
+          default: false
+          description: >
+            When true, response is text/event-stream. The synchronous JSON
+            path is used when false (default).
+
+    CompileConceptResult:
+      type: object
+      required: [compile_token, compiled_concept, expires_at]
+      properties:
+        compile_token:
+          type: string
+          description: Single-use token required by POST /concepts/register.
+        compiled_concept:
+          $ref: '#/components/schemas/CompiledConcept'
+        reasoning_trace:
+          $ref: '#/components/schemas/ReasoningTrace'
+          nullable: true
+        expires_at:
+          type: string
+          format: date-time
+
+    RegisterConceptRequest:
+      type: object
+      required: [compile_token, identifier]
+      properties:
+        compile_token:
+          type: string
+          description: Single-use token from POST /concepts/compile.
+        identifier:
+          type: string
+          description: Must match the identifier locked at compile time.
+
+    RegisteredConcept:
+      type: object
+      required: [concept_id, identifier, version, output_type, registered_at]
+      properties:
+        concept_id:
+          type: string
+        identifier:
+          type: string
+        version:
+          type: string
+        output_type:
+          type: string
+        registered_at:
+          type: string
+          format: date-time
+
+    # SSE event payloads
+
+    CorStepEvent:
+      type: object
+      description: "Payload of an SSE 'event: cor_step' event."
+      required: [step_index, label, summary, outcome]
+      properties:
+        step_index:
+          type: integer
+          description: 1-based step index (1–4).
+        label:
+          type: string
+        summary:
+          type: string
+        candidates:
+          type: array
+          items:
+            type: string
+          nullable: true
+        outcome:
+          type: string
+
+    CorCompleteEvent:
+      type: object
+      description: >
+        Terminal SSE `event: cor_complete` event. Exactly one is emitted
+        per stream on success, always as the last event.
+      properties:
+        task_id:
+          type: string
+          nullable: true
+          description: Set for POST /tasks; null for dry_run.
+        compile_token:
+          type: string
+          nullable: true
+          description: Set for POST /concepts/compile.
+        concept_id:
+          type: string
+          nullable: true
+          description: Set for POST /concepts/register (future).
+        status:
+          type: string
+          nullable: true
+
+    CorErrorEvent:
+      type: object
+      description: >
+        Terminal SSE `event: cor_error` event. Emitted when CoR fails.
+        The stream closes immediately after this event.
+
+        Memintel MUST emit cor_error within 10 seconds of any step failure.
+      required: [failure_reason]
+      properties:
+        failure_reason:
+          type: string
+        failed_at_step:
+          type: integer
+          nullable: true
+        suggestion:
+          type: string
+          nullable: true
+
+    # Error response
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [type, message]
+          properties:
+            type:
+              type: string
+            message:
+              type: string
+            location:
+              type: string
+              nullable: true
+            suggestion:
+              type: string
+              nullable: true
+            failed_at_step:
+              type: integer
+              nullable: true
+
+# ── Paths ──────────────────────────────────────────────────────────────────────
+
+paths:
+
+  /tasks:
+    post:
+      operationId: createTask
+      summary: Create a task from natural language intent
+      tags: [Tasks]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskRequest'
+      responses:
+        '200':
+          description: >
+            Task created (or dry-run preview). When stream=false, returns JSON.
+            When stream=true, returns text/event-stream with cor_step /
+            cor_complete / cor_error events.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/Task'
+                  - $ref: '#/components/schemas/DryRunResult'
+            text/event-stream:
+              schema:
+                type: string
+                description: >
+                  SSE stream. Events: cor_step (×4), then cor_complete or
+                  cor_error.
+        '400':
+          description: Invalid request body.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Intent could not be resolved (semantic error).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    get:
+      operationId: listTasks
+      summary: List tasks (paginated)
+      tags: [Tasks]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, paused, deleted]
+          required: false
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+        - name: cursor
+          in: query
+          schema:
+            type: string
+          required: false
+      responses:
+        '200':
+          description: Paginated list of tasks.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskList'
+
+  /tasks/{task_id}:
+    get:
+      operationId: getTask
+      summary: Get task details
+      tags: [Tasks]
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Task found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '404':
+          description: Task not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    patch:
+      operationId: updateTask
+      summary: Update a task's operational settings
+      tags: [Tasks]
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskUpdateRequest'
+      responses:
+        '200':
+          description: Task updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '404':
+          description: Task or condition version not found.
+        '409':
+          description: Task already deleted (conflict).
+
+    delete:
+      operationId: deleteTask
+      summary: Soft-delete a task
+      tags: [Tasks]
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Task soft-deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '404':
+          description: Task not found or already deleted.
+
+  /concepts/compile:
+    post:
+      operationId: compileConcept
+      summary: Compile a concept via 4-step CoR pipeline (Phase 1)
+      tags: [Concepts]
+      description: |
+        Run the 4-step Chain of Reasoning (Intent Parsing, Signal Identification,
+        DAG Construction, Type Validation) to produce a `compile_token` and
+        `compiled_concept` summary.
+
+        Phase 1 of two-phase concept registration:
+        1. POST /concepts/compile → returns `compile_token` (this endpoint)
+        2. POST /concepts/register → consumes `compile_token`, returns `concept_id`
+
+        When `stream=true`, the response is `text/event-stream` with 4 `cor_step`
+        events followed by one `cor_complete` event containing the `compile_token`.
+
+        `signal_names` are opaque semantic hints — never validated against any
+        internal registry.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompileConceptRequest'
+      responses:
+        '201':
+          description: >
+            Compilation succeeded. When stream=false, returns JSON.
+            When stream=true, returns text/event-stream.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompileConceptResult'
+            text/event-stream:
+              schema:
+                type: string
+                description: >
+                  SSE stream. Events: cor_step (×4), then cor_complete
+                  (containing compile_token) or cor_error.
+        '422':
+          description: compilation_error or type_mismatch.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal error.
+
+  /concepts/register:
+    post:
+      operationId: registerConcept
+      summary: Register a compiled concept (Phase 2)
+      tags: [Concepts]
+      description: |
+        Consume a `compile_token` and permanently register the concept,
+        returning a stable `concept_id`.
+
+        The `identifier` in the request MUST match the identifier used at
+        compile time — mismatch → HTTP 422.
+
+        Idempotent: two calls with the same (identifier, ir_hash) both return
+        HTTP 201 with the SAME `concept_id`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterConceptRequest'
+      responses:
+        '201':
+          description: Concept registered (or idempotent re-registration).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisteredConcept'
+        '400':
+          description: compile_token_expired (TTL exceeded).
+        '404':
+          description: compile_token_not_found.
+        '409':
+          description: compile_token_consumed OR identifier_conflict.
+        '422':
+          description: identifier_mismatch.

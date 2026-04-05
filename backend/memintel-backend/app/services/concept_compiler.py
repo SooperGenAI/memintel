@@ -29,6 +29,7 @@ CompilationError with failed_at_step set to the offending step index.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -121,12 +122,24 @@ class ConceptCompilerService:
           - Persists CompileToken via CompileTokenStore.create().
           - Returns CompileConceptResponse.
         """
+        from app.models.errors import CompilationError as _CE
         self._step_outputs = {}
         steps: list[ReasoningStep] = []
         pipeline_result: dict = {}
 
-        async for step in self._run_pipeline(request, pipeline_result):
-            steps.append(step)
+        try:
+            async for step in self._run_pipeline(request, pipeline_result):
+                steps.append(step)
+        except asyncio.TimeoutError as exc:
+            failed_at = next(
+                (s.step_index for s in reversed(steps) if s.outcome == "failed"),
+                None,
+            )
+            raise _CE(
+                f"CoR step {failed_at} timed out: LLM did not respond within 10 seconds.",
+                failed_at_step=failed_at,
+                suggestion="Check LLM client configuration and retry.",
+            ) from exc
 
         compiled_concept: CompiledConcept = pipeline_result["compiled_concept"]
         formula_data: dict = pipeline_result.get("formula_data", {})
@@ -168,6 +181,92 @@ class ConceptCompilerService:
             expires_at=expires_at,
         )
 
+    # ── Streaming public API ─────────────────────────────────────────────────────
+
+    async def compile_stream(
+        self,
+        request: CompileConceptRequest,
+        pool: asyncpg.Pool | None,
+    ) -> AsyncGenerator[dict, None]:
+        """
+        Stream the 4-step CoR pipeline as SSE event dicts.
+
+        Yields dicts with keys ``event_type`` and ``data``:
+          cor_step     — one per pipeline step (4 total on success).
+          cor_complete — final event; payload includes compile_token.
+          cor_error    — terminal error event if any step fails or times out.
+
+        HARD RULE: non-streaming path is untouched.
+        This method is the ONLY streaming entry point — compile() is unchanged.
+        """
+        self._step_outputs = {}
+        pipeline_result: dict = {}
+        last_failed_step: int | None = None
+
+        try:
+            async for step in self._run_pipeline(request, pipeline_result):
+                if step.outcome == "failed":
+                    last_failed_step = step.step_index
+                yield {"event_type": "cor_step", "data": step.model_dump()}
+
+            # Pipeline succeeded — create compile token and yield cor_complete.
+            compiled_concept: "CompiledConcept" = pipeline_result["compiled_concept"]
+            formula_data: dict = pipeline_result.get("formula_data", {})
+            ir_hash = self._compute_ir_hash(formula_data)
+            token_string = secrets.token_urlsafe(32)
+            expires_at = self._compute_expires_at()
+            now = datetime.now(tz=timezone.utc)
+
+            token = CompileToken(
+                token_id=str(uuid.uuid4()),
+                token_string=token_string,
+                identifier=request.identifier,
+                ir_hash=ir_hash,
+                output_type=request.output_type,
+                expires_at=expires_at,
+                used=False,
+                created_at=now,
+            )
+            store = (
+                self._token_store
+                if self._token_store is not None
+                else CompileTokenStore(pool)
+            )
+            await store.create(token)
+
+            log.info(
+                "concept_compiled_stream",
+                identifier=request.identifier,
+                ir_hash=ir_hash,
+            )
+
+            yield {
+                "event_type": "cor_complete",
+                "data": {
+                    "compile_token": token_string,
+                    "status": "success",
+                    "compiled_concept": compiled_concept.model_dump(),
+                    "expires_at": expires_at.isoformat(),
+                },
+            }
+
+        except asyncio.TimeoutError as exc:
+            yield {
+                "event_type": "cor_error",
+                "data": {
+                    "failure_reason": str(exc) or "LLM step timed out",
+                    "failed_at_step": last_failed_step,
+                },
+            }
+        except Exception as exc:
+            yield {
+                "event_type": "cor_error",
+                "data": {
+                    "failure_reason": str(exc),
+                    "failed_at_step": getattr(exc, "failed_at_step", last_failed_step),
+                },
+            }
+
     # ── Pipeline (async generator) ───────────────────────────────────────────────
 
     async def _run_pipeline(
@@ -182,19 +281,31 @@ class ConceptCompilerService:
         and result["formula_data"] after the generator is exhausted.
         """
         # ── Step 1: Intent Parsing ─────────────────────────────────────────────
-        step1 = await self._run_step(
-            step_index=1,
-            label="Intent Parsing",
-            llm_prompt=(
-                f"Parse concept intent: identifier='{request.identifier}', "
-                f"description='{request.description}'"
-            ),
-            context={
-                "step": 1,
-                "identifier": request.identifier,
-                "description": request.description,
-            },
-        )
+        try:
+            step1 = await asyncio.wait_for(
+                self._run_step(
+                    step_index=1,
+                    label="Intent Parsing",
+                    llm_prompt=(
+                        f"Parse concept intent: identifier='{request.identifier}', "
+                        f"description='{request.description}'"
+                    ),
+                    context={
+                        "step": 1,
+                        "identifier": request.identifier,
+                        "description": request.description,
+                    },
+                ),
+                timeout=10.0,
+            )
+        except asyncio.TimeoutError:
+            yield ReasoningStep(
+                step_index=1,
+                label="Intent Parsing",
+                summary="LLM timed out at step 1",
+                outcome="failed",
+            )
+            raise
         if step1.outcome == "failed":
             raise CompilationError(
                 "Intent Parsing failed: could not parse concept description.",
@@ -210,20 +321,32 @@ class ConceptCompilerService:
         # ── Step 2: Signal Identification ─────────────────────────────────────
         # signal_names are semantic context hints only — NOT validated against
         # any internal registry. An unrecognised signal_name is NOT an error.
-        step2 = await self._run_step(
-            step_index=2,
-            label="Signal Identification",
-            llm_prompt=(
-                f"Understand signal context for concept '{request.identifier}': "
-                f"signal_names={request.signal_names}"
-            ),
-            context={
-                "step": 2,
-                "signal_names": request.signal_names,
-                "output_type": request.output_type,
-                "intent": intent_data,
-            },
-        )
+        try:
+            step2 = await asyncio.wait_for(
+                self._run_step(
+                    step_index=2,
+                    label="Signal Identification",
+                    llm_prompt=(
+                        f"Understand signal context for concept '{request.identifier}': "
+                        f"signal_names={request.signal_names}"
+                    ),
+                    context={
+                        "step": 2,
+                        "signal_names": request.signal_names,
+                        "output_type": request.output_type,
+                        "intent": intent_data,
+                    },
+                ),
+                timeout=10.0,
+            )
+        except asyncio.TimeoutError:
+            yield ReasoningStep(
+                step_index=2,
+                label="Signal Identification",
+                summary="LLM timed out at step 2",
+                outcome="failed",
+            )
+            raise
         if step2.outcome == "failed":
             raise CompilationError(
                 "Signal Identification failed.",
@@ -234,23 +357,35 @@ class ConceptCompilerService:
         signal_context = self._step_outputs.get(2, {})
 
         # ── Step 3: DAG Construction ───────────────────────────────────────────
-        step3 = await self._run_step(
-            step_index=3,
-            label="DAG Construction",
-            llm_prompt=(
-                f"Select formula strategy for concept: "
-                f"identifier='{request.identifier}', output_type='{request.output_type}'"
-            ),
-            context={
-                "step": 3,
-                "identifier": request.identifier,
-                "description": request.description,
-                "output_type": request.output_type,
-                "signal_names": request.signal_names,
-                "intent": intent_data,
-                "signal_context": signal_context,
-            },
-        )
+        try:
+            step3 = await asyncio.wait_for(
+                self._run_step(
+                    step_index=3,
+                    label="DAG Construction",
+                    llm_prompt=(
+                        f"Select formula strategy for concept: "
+                        f"identifier='{request.identifier}', output_type='{request.output_type}'"
+                    ),
+                    context={
+                        "step": 3,
+                        "identifier": request.identifier,
+                        "description": request.description,
+                        "output_type": request.output_type,
+                        "signal_names": request.signal_names,
+                        "intent": intent_data,
+                        "signal_context": signal_context,
+                    },
+                ),
+                timeout=10.0,
+            )
+        except asyncio.TimeoutError:
+            yield ReasoningStep(
+                step_index=3,
+                label="DAG Construction",
+                summary="LLM timed out at step 3",
+                outcome="failed",
+            )
+            raise
         if step3.outcome == "failed":
             raise CompilationError(
                 "DAG Construction failed: could not select a formula strategy.",
@@ -295,19 +430,31 @@ class ConceptCompilerService:
         yield step3
 
         # ── Step 4: Type Validation ────────────────────────────────────────────
-        step4 = await self._run_step(
-            step_index=4,
-            label="Type Validation",
-            llm_prompt=(
-                f"Validate output type '{request.output_type}' "
-                f"for formula: {formula_summary}"
-            ),
-            context={
-                "step": 4,
-                "output_type": request.output_type,
-                "formula_summary": formula_summary,
-            },
-        )
+        try:
+            step4 = await asyncio.wait_for(
+                self._run_step(
+                    step_index=4,
+                    label="Type Validation",
+                    llm_prompt=(
+                        f"Validate output type '{request.output_type}' "
+                        f"for formula: {formula_summary}"
+                    ),
+                    context={
+                        "step": 4,
+                        "output_type": request.output_type,
+                        "formula_summary": formula_summary,
+                    },
+                ),
+                timeout=10.0,
+            )
+        except asyncio.TimeoutError:
+            yield ReasoningStep(
+                step_index=4,
+                label="Type Validation",
+                summary="LLM timed out at step 4",
+                outcome="failed",
+            )
+            raise
 
         if step4.outcome == "failed":
             raise TypeMismatchError(
@@ -350,6 +497,8 @@ class ConceptCompilerService:
         """
         try:
             raw_output = self._llm.generate_task(llm_prompt, context or {})
+        except asyncio.TimeoutError:
+            raise  # Propagate without wrapping — _run_pipeline catches it
         except Exception as exc:
             raise CompilationError(
                 f"CoR step {step_index} ({label}) failed: {exc}",

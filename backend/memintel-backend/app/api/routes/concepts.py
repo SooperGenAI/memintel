@@ -52,8 +52,10 @@ import structlog
 import asyncpg
 
 from fastapi import APIRouter, Depends
+from fastapi.responses import StreamingResponse
 
 from app.api.deps import require_api_key
+from app.api.routes.utils import sse_generator
 from app.models.concept_compile import (
     CompileConceptRequest,
     CompileConceptResponse,
@@ -134,7 +136,20 @@ async def compile_concept(
         identifier=req.identifier,
         signal_count=len(req.signal_names),
         return_reasoning=req.return_reasoning,
+        stream=req.stream,
     )
+
+    if req.stream:
+        stream = service.compile_stream(req, pool)
+        return StreamingResponse(
+            sse_generator(stream),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
     return await service.compile(req, pool)
 
 
