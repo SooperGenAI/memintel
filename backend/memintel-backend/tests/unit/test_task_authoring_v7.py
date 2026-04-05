@@ -293,9 +293,10 @@ class TestVocabularyContextValidation:
         # Peek what ID will be generated (counter will be 1)
         mock_llm_instance._counter = 0
         expected_cid = "mock.concept_churn_0001"
+        expected_cond_id = "mock.cond_churn_0001"
         vc = VocabularyContext(
             available_concept_ids=[expected_cid] + [f"extra.{i}" for i in range(499)],
-            available_condition_ids=[f"cond.{i}" for i in range(500)],
+            available_condition_ids=[expected_cond_id] + [f"cond.{i}" for i in range(499)],
         )
         _, _, _, service = _make_service(mock_llm=mock_llm_instance)
         result = run(service.create_task(_req(vocabulary_context=vc)))
