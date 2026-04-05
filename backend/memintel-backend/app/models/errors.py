@@ -81,6 +81,9 @@ class ErrorType(str, Enum):
     IDENTIFIER_MISMATCH = "identifier_mismatch"  # token identifier ≠ request identifier → HTTP 422
     IDENTIFIER_CONFLICT = "identifier_conflict"  # identifier exists with different formula → HTTP 409
 
+    # ── V7 — Task authoring with pre-compiled concept ──────────────────────
+    CONCEPT_NOT_FOUND = "concept_not_found"      # concept_id not in registry → HTTP 404
+
 
 # ── HTTP status code mapping ──────────────────────────────────────────────────
 
@@ -115,6 +118,9 @@ _HTTP_STATUS: dict[ErrorType, int] = {
     ErrorType.TYPE_MISMATCH:       422,
     ErrorType.IDENTIFIER_MISMATCH: 422,
     ErrorType.IDENTIFIER_CONFLICT: 409,
+
+    # V7 — Task authoring with pre-compiled concept
+    ErrorType.CONCEPT_NOT_FOUND: 404,
 }
 
 
@@ -568,6 +574,29 @@ class IdentifierConflictError(MemintelError):
     ) -> None:
         super().__init__(
             ErrorType.IDENTIFIER_CONFLICT,
+            message,
+            suggestion=suggestion,
+        )
+
+
+class ConceptNotFoundError(MemintelError):
+    """
+    concept_id provided in CreateTaskRequest does not exist in the registry → HTTP 404.
+
+    Raised by TaskAuthoringService when concept_id is supplied but the registry
+    has no versions for that identifier. The caller must register the concept
+    first via POST /concepts/compile + POST /concepts/register.
+    """
+    def __init__(
+        self,
+        message: str = "concept not found in registry.",
+        *,
+        suggestion: str | None = (
+            "Register the concept via POST /concepts/compile and POST /concepts/register first."
+        ),
+    ) -> None:
+        super().__init__(
+            ErrorType.CONCEPT_NOT_FOUND,
             message,
             suggestion=suggestion,
         )

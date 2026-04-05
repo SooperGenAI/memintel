@@ -61,10 +61,25 @@ from app.models.condition import (
     ThresholdStrategy,
 )
 from app.models.context import ApplicationContext
-from app.models.errors import ErrorType, MemintelError, NotFoundError
+from app.models.concept import MAX_VOCABULARY_IDS, VocabularyContext
+from app.models.errors import (
+    ConceptNotFoundError,
+    ErrorType,
+    MemintelError,
+    NotFoundError,
+    VocabularyContextTooLargeError,
+    VocabularyMismatchError,
+)
 from app.models.guardrails import Guardrails
 from app.models.result import DryRunResult, ValidationResult
-from app.models.task import CreateTaskRequest, Task, TaskStatus, TaskUpdateRequest
+from app.models.task import (
+    CreateTaskRequest,
+    ReasoningStep,
+    ReasoningTrace,
+    Task,
+    TaskStatus,
+    TaskUpdateRequest,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -151,19 +166,66 @@ class TaskAuthoringService:
         Main entry point for POST /tasks.
 
         Pipeline:
+          0. Pre-LLM: validate vocabulary_context (Hard Rule 1).
+          0. Pre-LLM: resolve concept_id existence if provided.
           1. Build LLM prompt context (strict injection order [1]–[5]).
           2. Call LLM with retry / refinement loop.
+          2b. Post-LLM: vocabulary check — LLM concept_id must be in vocab.
           3. Validate strategy presence — immediate raise, no retry.
           4. Resolve action binding.
           5. Parse domain models (concept, condition, action).
           6a. dry_run=True  → return DryRunResult; nothing persisted.
           6b. dry_run=False → register definitions + create Task.
+          7. Attach reasoning_trace when return_reasoning=True.
 
         Raises:
-          MemintelError(SEMANTIC_ERROR)        — strategy absent, or LLM output
-                                                invalid after all retries.
+          VocabularyMismatchError          — vocabulary_context both-empty or no match.
+          VocabularyContextTooLargeError   — either list exceeds MAX_VOCABULARY_IDS.
+          ConceptNotFoundError             — concept_id not in registry.
+          MemintelError(SEMANTIC_ERROR)    — strategy absent, or LLM output
+                                            invalid after all retries.
           MemintelError(ACTION_BINDING_FAILED) — action could not be resolved.
         """
+        # ── Pre-LLM: vocabulary_context validation (Hard Rule 1) ──────────────
+        # Order: both-empty check → concept cap → condition cap.
+        if request.vocabulary_context is not None:
+            vc = request.vocabulary_context
+            concept_ids  = vc.available_concept_ids or []
+            condition_ids = vc.available_condition_ids or []
+
+            if not concept_ids and not condition_ids:
+                raise VocabularyMismatchError(
+                    "vocabulary_context provided but both available_concept_ids "
+                    "and available_condition_ids are empty.",
+                )
+
+            if len(concept_ids) > MAX_VOCABULARY_IDS:
+                raise VocabularyContextTooLargeError(
+                    f"available_concept_ids exceeds the maximum of "
+                    f"{MAX_VOCABULARY_IDS} IDs per list.",
+                )
+
+            if len(condition_ids) > MAX_VOCABULARY_IDS:
+                raise VocabularyContextTooLargeError(
+                    f"available_condition_ids exceeds the maximum of "
+                    f"{MAX_VOCABULARY_IDS} IDs per list.",
+                )
+
+        # ── Pre-LLM: concept_id existence check ───────────────────────────────
+        pre_compiled_concept_id: str | None = None
+        pre_compiled_concept_version: str | None = None
+        if request.concept_id is not None:
+            try:
+                version_list = await self._definition_registry.versions(
+                    request.concept_id
+                )
+                pre_compiled_concept_version = version_list.versions[0].version
+                pre_compiled_concept_id = request.concept_id
+            except NotFoundError:
+                raise ConceptNotFoundError(
+                    f"concept '{request.concept_id}' not found in registry.",
+                )
+
         # Fetch active context — never raises; proceed without context on any error.
         # This is the only point where the context store is consulted; context is
         # never consulted on the evaluation path (invariant: context injection is
@@ -182,6 +244,20 @@ class TaskAuthoringService:
         condition_dict = llm_output.get("condition") or {}
         action_dict    = llm_output.get("action")    or {}
 
+        # ── Post-LLM: vocabulary check ─────────────────────────────────────────
+        # If vocabulary_context.available_concept_ids is non-empty and the LLM
+        # selected a concept_id outside that list → VocabularyMismatchError.
+        if (
+            request.vocabulary_context is not None
+            and request.vocabulary_context.available_concept_ids
+        ):
+            generated_cid = concept_dict.get("concept_id", "")
+            if generated_cid not in request.vocabulary_context.available_concept_ids:
+                raise VocabularyMismatchError(
+                    f"LLM selected concept '{generated_cid}' which is not in "
+                    "vocabulary_context.available_concept_ids.",
+                )
+
         # Strategy validation — hard fail; do NOT proceed if absent.
         self._validate_strategy_presence(condition_dict)
 
@@ -194,8 +270,23 @@ class TaskAuthoringService:
         await self._pin_composite_operand_versions(condition_dict)
 
         # Parse into domain models.
+        # When concept_id was pre-provided, skip parsing the LLM concept_dict —
+        # the pre-compiled concept is already registered in the registry.
+        concept: ConceptDefinition | None = None
+        if pre_compiled_concept_id is None:
+            try:
+                concept = ConceptDefinition(**concept_dict)
+            except Exception as exc:
+                raise MemintelError(
+                    ErrorType.SEMANTIC_ERROR,
+                    f"LLM output could not be parsed into domain models: {exc}",
+                    suggestion=(
+                        "Check that the LLM output conforms to ConceptDefinition, "
+                        "ConditionDefinition, and ActionDefinition schemas."
+                    ),
+                ) from exc
+
         try:
-            concept   = ConceptDefinition(**concept_dict)
             condition = ConditionDefinition(**condition_dict)
             action    = ActionDefinition(**resolved_action_dict)
         except Exception as exc:
@@ -213,15 +304,27 @@ class TaskAuthoringService:
             self._validate_strategy_allowed(condition)
 
         # FIX 2: Apply deterministic bias rules to override threshold value from priors.
-        condition = self._apply_bias_rules(condition, concept, request.intent)
+        # Skip when concept is None (pre-compiled path — no primitives to match).
+        if concept is not None:
+            condition = self._apply_bias_rules(condition, concept, request.intent)
 
         # FIX 3: Validate concept primitives exist in guardrails primitive registry.
-        if self._guardrails is not None:
+        # Skip when concept is None (pre-compiled path — already validated at compile time).
+        if self._guardrails is not None and concept is not None:
             self._validate_primitives_registered(concept)
 
         # dry_run — preview only; nothing registered or persisted.
         if request.dry_run:
-            return self._build_dry_run_result(concept, condition, action)
+            if concept is not None:
+                return self._build_dry_run_result(concept, condition, action)
+            # Pre-compiled concept path: minimal concept dict from registry reference.
+            return DryRunResult(
+                concept={"concept_id": pre_compiled_concept_id, "version": pre_compiled_concept_version},
+                condition=condition,
+                action_id=action.action_id,
+                action_version=action.version,
+                validation=ValidationResult(valid=True),
+            )
 
         # Determine context_version and context_warning for the persisted task.
         context_version = app_context.version if app_context is not None else None
@@ -240,10 +343,22 @@ class TaskAuthoringService:
                 guardrails_version = active_gr_version.version
 
         # Register and persist.
-        return await self._register_and_persist(
+        task = await self._register_and_persist(
             concept, condition, action, request,
             context_version, context_warning, guardrails_version,
+            pre_compiled_concept_id=pre_compiled_concept_id,
+            pre_compiled_concept_version=pre_compiled_concept_version,
         )
+
+        # Attach reasoning trace when caller opts in (Hard Rule 3: absent when False).
+        if request.return_reasoning:
+            task.reasoning_trace = ReasoningTrace(
+                steps=self._build_reasoning_steps(
+                    skipped_steps_1_and_2=(pre_compiled_concept_id is not None)
+                )
+            )
+
+        return task
 
     async def update_task(self, task_id: str, body: TaskUpdateRequest) -> Task:
         """
@@ -475,6 +590,53 @@ class TaskAuthoringService:
                 "strategy.type and strategy.params.",
                 location="condition.strategy.params",
             )
+
+    # ── Reasoning trace builder ─────────────────────────────────────────────────
+
+    @staticmethod
+    def _build_reasoning_steps(skipped_steps_1_and_2: bool = False) -> list[ReasoningStep]:
+        """
+        Build the 4-step CoR reasoning trace as synthetic annotations.
+
+        The task authoring pipeline uses a single LLM call (not a step-by-step
+        generator), so steps are annotated post-hoc to represent the logical
+        CoR phases.
+
+        When skipped_steps_1_and_2=True (concept_id shortcut), Steps 1 and 2
+        are marked as outcome='skipped' with an explanatory summary.
+        """
+        if skipped_steps_1_and_2:
+            step1 = ReasoningStep(
+                step_index=1, label="Intent Parsing",
+                summary="skipped (concept pre-compiled)", outcome="skipped",
+            )
+            step2 = ReasoningStep(
+                step_index=2, label="Concept Selection",
+                summary="skipped (concept pre-compiled)", outcome="skipped",
+            )
+        else:
+            step1 = ReasoningStep(
+                step_index=1, label="Intent Parsing",
+                summary="Intent parsed; concept and condition context established.",
+                outcome="accepted",
+            )
+            step2 = ReasoningStep(
+                step_index=2, label="Concept Selection",
+                summary="Concept selected from intent and registry.",
+                outcome="accepted",
+            )
+
+        step3 = ReasoningStep(
+            step_index=3, label="Condition Strategy",
+            summary="Condition strategy selected and parameters resolved.",
+            outcome="accepted",
+        )
+        step4 = ReasoningStep(
+            step_index=4, label="Action Binding",
+            summary="Action binding resolved.",
+            outcome="accepted",
+        )
+        return [step1, step2, step3, step4]
 
     # ── Post-compilation guardrails enforcement ────────────────────────────────
 
@@ -778,6 +940,10 @@ class TaskAuthoringService:
                 exclude_none=True
             )
 
+        # vocabulary_context — forwarded to LLM so it can restrict concept selection.
+        if request.vocabulary_context is not None:
+            context["vocabulary_context"] = request.vocabulary_context.model_dump()
+
         return context
 
     # ── dry_run ─────────────────────────────────────────────────────────────────
@@ -805,13 +971,15 @@ class TaskAuthoringService:
 
     async def _register_and_persist(
         self,
-        concept: ConceptDefinition,
+        concept: ConceptDefinition | None,
         condition: ConditionDefinition,
         action: ActionDefinition,
         request: CreateTaskRequest,
         context_version: str | None = None,
         context_warning: str | None = None,
         guardrails_version: str | None = None,
+        pre_compiled_concept_id: str | None = None,
+        pre_compiled_concept_version: str | None = None,
     ) -> Task:
         """
         Register concept, condition, and action definitions; then create the Task.
@@ -820,15 +988,23 @@ class TaskAuthoringService:
         The returned Task is version-pinned: concept_id, concept_version,
         condition_id, action_id, and action_version are set at creation and
         never change (enforced by IMMUTABLE_TASK_FIELDS / TaskStore.update()).
+
+        When pre_compiled_concept_id is set, the concept was already registered
+        via POST /concepts/register — concept registration is skipped and the
+        pre_compiled ids are used for the Task's concept_id/concept_version.
         """
         # Namespace: request constraints override the concept's own namespace.
         if request.constraints and request.constraints.namespace:
             ns = request.constraints.namespace.value
-        else:
+        elif concept is not None:
             ns = concept.namespace.value if concept.namespace else "personal"
+        else:
+            ns = "personal"
 
-        # Register concept (runs _freeze_check: validate_schema + validate_types).
-        await self._definition_registry.register(concept, namespace=ns)
+        # Register concept only when it was LLM-generated (not pre-compiled).
+        if concept is not None:
+            # Runs _freeze_check: validate_schema + validate_types.
+            await self._definition_registry.register(concept, namespace=ns)
 
         # Register condition (freeze check is skipped for non-concept types).
         await self._definition_registry.register(
@@ -844,11 +1020,15 @@ class TaskAuthoringService:
             definition_type="action",
         )
 
+        # Determine concept_id/version: pre-compiled or LLM-generated.
+        task_concept_id      = pre_compiled_concept_id      or concept.concept_id
+        task_concept_version = pre_compiled_concept_version or concept.version
+
         # Build the version-pinned Task and persist it.
         task = Task(
             intent=request.intent,
-            concept_id=concept.concept_id,
-            concept_version=concept.version,
+            concept_id=task_concept_id,
+            concept_version=task_concept_version,
             condition_id=condition.condition_id,
             condition_version=condition.version,
             action_id=action.action_id,
@@ -868,8 +1048,8 @@ class TaskAuthoringService:
         log.info(
             "task_created",
             task_id=created_task.task_id,
-            concept_id=concept.concept_id,
-            concept_version=concept.version,
+            concept_id=task_concept_id,
+            concept_version=task_concept_version,
             condition_id=condition.condition_id,
             condition_version=condition.version,
             action_id=action.action_id,

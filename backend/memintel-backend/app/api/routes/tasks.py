@@ -39,6 +39,8 @@ import structlog
 
 import asyncpg
 from fastapi import APIRouter, Depends, Query, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 
 from app.api.deps import require_api_key
 from app.models.errors import NotFoundError
@@ -107,7 +109,7 @@ async def get_task_authoring_service(
 async def create_task(
     req: CreateTaskRequest,
     service: TaskAuthoringService = Depends(get_task_authoring_service),
-) -> Task | DryRunResult:
+) -> JSONResponse:
     """
     Submit a natural language intent to the LLM pipeline.
 
@@ -117,6 +119,9 @@ async def create_task(
 
     Pass dry_run=true to preview the resolved definitions without persisting.
     Returns a DryRunResult when dry_run=true, a Task otherwise.
+
+    Returns a JSONResponse with exclude_none=True so that optional fields
+    such as reasoning_trace are absent (not null) when not set (Hard Rule 3).
 
     HTTP 400 — validation error in the request body.
     HTTP 422 — intent could not be resolved (primitive not found, no valid
@@ -128,7 +133,10 @@ async def create_task(
         dry_run=req.dry_run,
     )
     result = await service.create_task(req)
-    return result
+    return JSONResponse(
+        content=jsonable_encoder(result, exclude_none=True),
+        status_code=200,
+    )
 
 
 # ── GET /tasks ─────────────────────────────────────────────────────────────────
