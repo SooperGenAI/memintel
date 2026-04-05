@@ -32,6 +32,9 @@ import asyncio
 import os
 import subprocess
 
+# ── V7 shared mock fixtures (LLMMockClient, loan fixtures) ────────────────────
+pytest_plugins = ["tests.integration.conftest_v7"]
+
 import asyncpg
 import pytest
 
