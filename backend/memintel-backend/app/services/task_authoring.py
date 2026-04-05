@@ -65,6 +65,7 @@ from app.models.context import ApplicationContext
 from app.models.concept import MAX_VOCABULARY_IDS, VocabularyContext
 from app.models.errors import (
     ConceptNotFoundError,
+    ConflictError,
     ErrorType,
     MemintelError,
     NotFoundError,
@@ -358,6 +359,17 @@ class TaskAuthoringService:
                 raise VocabularyMismatchError(
                     f"LLM selected concept '{generated_cid}' which is not in "
                     "vocabulary_context.available_concept_ids.",
+                )
+
+        if (
+            request.vocabulary_context is not None
+            and request.vocabulary_context.available_condition_ids
+        ):
+            generated_condition_id = condition_dict.get("condition_id", "")
+            if generated_condition_id not in request.vocabulary_context.available_condition_ids:
+                raise VocabularyMismatchError(
+                    f"LLM selected condition '{generated_condition_id}' which is not in "
+                    "vocabulary_context.available_condition_ids.",
                 )
 
         step2 = ReasoningStep(
@@ -1116,23 +1128,34 @@ class TaskAuthoringService:
             ns = "personal"
 
         # Register concept only when it was LLM-generated (not pre-compiled).
+        # ConflictError means a concurrent request already registered the same
+        # (id, version) — safe to ignore because definitions are immutable.
         if concept is not None:
             # Runs _freeze_check: validate_schema + validate_types.
-            await self._definition_registry.register(concept, namespace=ns)
+            try:
+                await self._definition_registry.register(concept, namespace=ns)
+            except ConflictError:
+                pass  # already registered by a concurrent request
 
         # Register condition (freeze check is skipped for non-concept types).
-        await self._definition_registry.register(
-            condition.model_dump(),
-            namespace=ns,
-            definition_type="condition",
-        )
+        try:
+            await self._definition_registry.register(
+                condition.model_dump(),
+                namespace=ns,
+                definition_type="condition",
+            )
+        except ConflictError:
+            pass  # already registered by a concurrent request
 
         # Register action.
-        await self._definition_registry.register(
-            action.model_dump(),
-            namespace=ns,
-            definition_type="action",
-        )
+        try:
+            await self._definition_registry.register(
+                action.model_dump(),
+                namespace=ns,
+                definition_type="action",
+            )
+        except ConflictError:
+            pass  # already registered by a concurrent request
 
         # Determine concept_id/version: pre-compiled or LLM-generated.
         task_concept_id      = pre_compiled_concept_id      or concept.concept_id

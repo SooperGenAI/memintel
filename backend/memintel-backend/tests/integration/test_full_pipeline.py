@@ -1355,10 +1355,14 @@ def test_definition_immutability() -> None:
     first_task = run(task_svc.create_task(request))
     assert isinstance(first_task, Task)
 
-    # Second call with same intent → same fixture → same (id, version) pairs
-    # The concept registration will fail with ConflictError
-    with pytest.raises(ConflictError):
-        run(task_svc.create_task(request))
+    # Second call with same intent → same fixture → same (id, version) pairs.
+    # Definitions are immutable, but creating a second task referencing the
+    # same already-registered definitions is valid (idempotent registration).
+    second_task = run(task_svc.create_task(request))
+    assert isinstance(second_task, Task)
+    # Both tasks share the same concept/condition/action definitions
+    assert second_task.concept_id == first_task.concept_id
+    assert second_task.condition_id == first_task.condition_id
 
     # ── Token reuse raises PARAMETER_ERROR (immutability of single-use tokens) ──
     (_, _, _, _, _, task_svc_t, fb_svc_t, cal_svc_t, _) = _make_services()
