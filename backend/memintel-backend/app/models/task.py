@@ -33,7 +33,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -102,6 +102,53 @@ IMMUTABLE_TASK_FIELDS: frozenset[str] = frozenset({
     "action_id",
     "action_version",
 })
+
+
+# ── V7 deferred import ────────────────────────────────────────────────────────
+# concept.py imports Namespace from this module. To avoid a circular import,
+# VocabularyContext must be imported AFTER Namespace is defined above.
+# With `from __future__ import annotations`, all annotations in this file are
+# lazy strings; Pydantic resolves them at model-use time, by which point both
+# modules are fully loaded and VocabularyContext is in this module's namespace.
+from app.models.concept import VocabularyContext  # noqa: E402
+
+
+# ── V7 reasoning trace models ─────────────────────────────────────────────────
+
+class ReasoningStep(BaseModel):
+    """
+    A single step in the Chain of Reasoning (CoR) trace.
+
+    Produced by both POST /tasks (agent CoR) and POST /concepts/compile
+    (concept CoR). Each step records what was evaluated, what alternatives
+    were considered, and whether the step was accepted, skipped, or failed.
+
+    outcome values:
+      accepted — step completed and produced a result.
+      skipped  — step was intentionally bypassed (e.g. concept_id shortcut
+                 skips Step 2; the step still appears in the trace with
+                 outcome='skipped' and an explanatory summary).
+      failed   — step could not complete; the pipeline aborts.
+    """
+    step_index: int
+    label:      str
+    summary:    str
+    candidates: list[str] | None = None   # alternatives considered at this step
+    outcome:    Literal["accepted", "skipped", "failed"]
+
+
+class ReasoningTrace(BaseModel):
+    """
+    Full Chain of Reasoning trace for a task compilation or concept compilation.
+
+    Returned in the POST /tasks response when return_reasoning=True, and in
+    the POST /concepts/compile response when return_reasoning=True.
+
+    compilation_duration_ms — wall-clock time for the full CoR pipeline.
+      None when the pipeline was aborted (a step failed before completion).
+    """
+    steps:                   list[ReasoningStep]
+    compilation_duration_ms: int | None = None
 
 
 # ── DeliveryConfig ────────────────────────────────────────────────────────────
@@ -208,6 +255,13 @@ class Task(BaseModel):
     # Stored in the DB.
     guardrails_version: str | None = None
 
+    # ── V7 reasoning trace ────────────────────────────────────────────────────
+    # Populated at task creation time when return_reasoning=True in the request.
+    # Never stored in the DB — absent on all subsequent reads (GET /tasks/{id}).
+    # The route handler must omit this field entirely (not return null) when
+    # return_reasoning=False. See M-5 for response_model_exclude_none handling.
+    reasoning_trace: ReasoningTrace | None = None
+
     # ── Internal DB fields — excluded from API serialisation ──────────────────
     # These fields are written to / read from the DB by the store layer.
     # They must never appear in HTTP responses.
@@ -227,12 +281,30 @@ class CreateTaskRequest(BaseModel):
     constraints is optional — when absent, the LLM uses guardrail defaults.
     dry_run=True returns a DryRunResult (see models/result.py) without
     persisting the task.
+
+    V7 additions (all optional with defaults — existing callers unaffected):
+      concept_id         — bind to a pre-compiled concept registered via
+                           POST /concepts/register. When provided, CoR Step 2
+                           (Concept Selection) is skipped; steps 1, 3, 4 still run.
+      vocabulary_context — bound CoR Step 2 to the provided concept/condition IDs.
+                           Three states: absent=global fallback, empty lists=
+                           vocabulary_mismatch (service-layer error), non-empty=bounded.
+      stream             — when True, response is text/event-stream (SSE). The
+                           synchronous JSON path is used when False (default).
+      return_reasoning   — when True, reasoning_trace is populated in the response.
+                           When False (default), reasoning_trace is absent entirely.
     """
     intent: str
     entity_scope: str
     delivery: DeliveryConfig
     constraints: ConstraintsConfig | None = None
     dry_run: bool = False
+
+    # V7 optional fields — all have defaults so existing callers are unaffected
+    concept_id:         str | None = None
+    vocabulary_context: VocabularyContext | None = None
+    stream:             bool = False
+    return_reasoning:   bool = False
 
 
 class TaskUpdateRequest(BaseModel):

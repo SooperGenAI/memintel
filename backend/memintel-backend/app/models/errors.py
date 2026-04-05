@@ -68,6 +68,13 @@ class ErrorType(str, Enum):
     BOUNDS_EXCEEDED      = "bounds_exceeded"       # Param outside guardrail bounds
     ACTION_BINDING_FAILED = "action_binding_failed" # Action could not be resolved/fired
 
+    # ── V7 — Vocabulary and compile token ─────────────────────────────────────
+    VOCABULARY_MISMATCH          = "vocabulary_mismatch"           # No concept in vocab matched
+    VOCABULARY_CONTEXT_TOO_LARGE = "vocabulary_context_too_large"  # Either list exceeds 500 IDs
+    COMPILE_TOKEN_EXPIRED        = "compile_token_expired"         # Token TTL exceeded
+    COMPILE_TOKEN_NOT_FOUND      = "compile_token_not_found"       # Token not found or malformed
+    COMPILE_TOKEN_CONSUMED       = "compile_token_consumed"        # Token already used
+
 
 # ── HTTP status code mapping ──────────────────────────────────────────────────
 
@@ -86,6 +93,16 @@ _HTTP_STATUS: dict[ErrorType, int] = {
     ErrorType.RATE_LIMIT_EXCEEDED:   429,
     ErrorType.BOUNDS_EXCEEDED:       400,
     ErrorType.ACTION_BINDING_FAILED: 400,
+
+    # V7 — Vocabulary and compile token
+    ErrorType.VOCABULARY_MISMATCH:          422,
+    ErrorType.VOCABULARY_CONTEXT_TOO_LARGE: 422,
+    # COMPILE_TOKEN_EXPIRED → 400, NOT 410.
+    # Cross-team contract: Canvas consumer is written against 400.
+    # Do not change to 410 on the basis of HTTP semantics.
+    ErrorType.COMPILE_TOKEN_EXPIRED:        400,
+    ErrorType.COMPILE_TOKEN_NOT_FOUND:      404,
+    ErrorType.COMPILE_TOKEN_CONSUMED:       409,
 }
 
 
@@ -370,6 +387,90 @@ class ExecutionTimeoutError(MemintelError):
     """Concept execution exceeded its time limit → HTTP 504."""
     def __init__(self, message: str = "Execution timed out") -> None:
         super().__init__(ErrorType.EXECUTION_TIMEOUT, message)
+
+
+# ── V7 typed subclasses ───────────────────────────────────────────────────────
+
+class VocabularyMismatchError(MemintelError):
+    """
+    No concept in vocabulary_context matched the intent → HTTP 422.
+
+    Raised before the LLM when vocabulary_context is present but
+    both available_concept_ids and available_condition_ids are empty,
+    or after Step 2 when no concept in the vocabulary matched.
+    """
+    def __init__(
+        self,
+        message: str = "None of the available concepts match this intent.",
+        *,
+        suggestion: str | None = "Review the module vocabulary or rephrase the agent intent.",
+    ) -> None:
+        super().__init__(
+            ErrorType.VOCABULARY_MISMATCH,
+            message,
+            suggestion=suggestion,
+        )
+
+
+class VocabularyContextTooLargeError(MemintelError):
+    """
+    Either available_concept_ids or available_condition_ids exceeds
+    MAX_VOCABULARY_IDS (500 per list) → HTTP 422.
+
+    The cap is per-list, not combined.
+    """
+    def __init__(
+        self,
+        message: str = "vocabulary_context exceeds the maximum of 500 IDs per list.",
+        *,
+        suggestion: str | None = (
+            "Reduce the number of installed modules or filter the vocabulary before sending."
+        ),
+    ) -> None:
+        super().__init__(
+            ErrorType.VOCABULARY_CONTEXT_TOO_LARGE,
+            message,
+            suggestion=suggestion,
+        )
+
+
+class CompileTokenExpiredError(MemintelError):
+    """
+    compile_token TTL exceeded → HTTP 400.
+
+    NOTE: HTTP 400, not 410. This is a deliberate cross-team contract
+    decision — the Canvas consumer is written against 400 for expired
+    tokens. Do not change to 410 on the basis of HTTP semantics.
+    """
+    def __init__(
+        self,
+        message: str = "compile_token has expired. Call POST /concepts/compile again.",
+    ) -> None:
+        super().__init__(ErrorType.COMPILE_TOKEN_EXPIRED, message)
+
+
+class CompileTokenNotFoundError(MemintelError):
+    """compile_token not found or malformed → HTTP 404."""
+    def __init__(
+        self,
+        message: str = "compile_token not found.",
+    ) -> None:
+        super().__init__(ErrorType.COMPILE_TOKEN_NOT_FOUND, message)
+
+
+class CompileTokenConsumedError(MemintelError):
+    """compile_token has already been used → HTTP 409."""
+    def __init__(
+        self,
+        message: str = "compile_token has already been consumed.",
+        *,
+        suggestion: str | None = "Call POST /concepts/compile to obtain a new token.",
+    ) -> None:
+        super().__init__(
+            ErrorType.COMPILE_TOKEN_CONSUMED,
+            message,
+            suggestion=suggestion,
+        )
 
 
 # ── 4. FastAPI exception handler ──────────────────────────────────────────────

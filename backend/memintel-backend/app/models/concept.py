@@ -66,6 +66,59 @@ from app.models.task import Namespace
 
 # ── Memintel type vocabulary ──────────────────────────────────────────────────
 
+# ── V7 vocabulary context ─────────────────────────────────────────────────────
+
+#: Maximum number of IDs allowed in either list of VocabularyContext.
+#: The cap is per-list, NOT combined (499 concept IDs + 499 condition IDs = valid;
+#: 501 concept IDs + 0 condition IDs = invalid).
+MAX_VOCABULARY_IDS: int = 500
+
+
+class VocabularyContext(BaseModel):
+    """
+    Scopes Memintel CoR Step 2 (Concept Selection) to a bounded vocabulary.
+
+    Canvas assembles this from the concept_ids and condition_ids belonging to
+    the org's allowed modules and passes it in POST /tasks. Memintel never
+    receives Canvas identity fields (user_id, org_id, module_id) — only the
+    opaque Memintel-registered identifiers that form the vocabulary.
+
+    Three distinct states (enforced at the service layer, NOT here):
+      Field absent (None)      → global fallback, existing behaviour unchanged.
+      Both lists empty         → vocabulary_mismatch error (before LLM call).
+      Non-empty list(s)        → CoR Step 2 restricted to provided IDs.
+
+    Validator: each list is independently capped at MAX_VOCABULARY_IDS (500).
+    The cap applies per list, not to the combined total.
+      499 concept IDs + 499 condition IDs = valid (998 total).
+      501 concept IDs +   0 condition IDs = invalid (per-list cap exceeded).
+    """
+    available_concept_ids:   list[str]
+    available_condition_ids: list[str]
+
+    @field_validator("available_concept_ids")
+    @classmethod
+    def _cap_concept_ids(cls, v: list[str]) -> list[str]:
+        if len(v) > MAX_VOCABULARY_IDS:
+            raise ValueError(
+                f"available_concept_ids exceeds the maximum of {MAX_VOCABULARY_IDS} entries. "
+                f"Got {len(v)}. Reduce the number of installed modules or filter the vocabulary."
+            )
+        return v
+
+    @field_validator("available_condition_ids")
+    @classmethod
+    def _cap_condition_ids(cls, v: list[str]) -> list[str]:
+        if len(v) > MAX_VOCABULARY_IDS:
+            raise ValueError(
+                f"available_condition_ids exceeds the maximum of {MAX_VOCABULARY_IDS} entries. "
+                f"Got {len(v)}. Reduce the number of installed modules or filter the vocabulary."
+            )
+        return v
+
+
+# ── Memintel type vocabulary ──────────────────────────────────────────────────
+
 class MemintelType:
     """
     Authoritative type string constants for the Memintel type system v1.1.
