@@ -624,8 +624,9 @@ class MockExecuteService:
         if strategy.type == StrategyType.COMPOSITE:
             operator = strategy.params.operator.value
             operand_results: list[bool] = []
-            for sub_condition_id in strategy.params.operands:
-                sub_body = await self._registry.get(sub_condition_id, "1.0")
+            for operand in strategy.params.operands:
+                # operand is an OperandRef (condition_id, condition_version) after M-10
+                sub_body = await self._registry.get(operand.condition_id, operand.condition_version)
                 sub_condition = ConditionDefinition.model_validate(sub_body)
                 sub_result = await self._evaluate_strategy(sub_condition, entity, visiting)
                 operand_results.append(bool(sub_result))
