@@ -135,6 +135,14 @@ class ReasoningStep(BaseModel):
     summary:    str
     candidates: list[str] | None = None   # alternatives considered at this step
     outcome:    Literal["accepted", "skipped", "failed"]
+    # Structured decision data — populated by the pipeline, absent when step was skipped
+    concept_id:    str   | None = None   # Step 2: concept selected
+    output_type:   str   | None = None   # Step 2: concept output type
+    strategy_type: str   | None = None   # Step 3: strategy chosen (e.g. "threshold")
+    direction:     str   | None = None   # Step 3: above/below/top/bottom/any
+    threshold:     float | None = None   # Step 3: numeric cutoff (threshold/z_score only)
+    channel:       str   | None = None   # Step 4: delivery channel (notification/webhook/…)
+    action_type:   str   | None = None   # Step 4: action execution type
 
 
 class ReasoningTrace(BaseModel):

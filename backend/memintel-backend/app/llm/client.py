@@ -9,7 +9,7 @@ the ANTHROPIC_API_KEY environment variable.
 Interface mirrors LLMFixtureClient so TaskAuthoringService can swap clients
 without branching (USE_LLM_FIXTURES=false activates this client).
 
-generate_task(intent, context) → dict
+generate_task(intent, context) -> dict
   Builds a system prompt from the context dict (type_system, guardrails,
   application context, etc.), adds the user intent, calls the Anthropic
   Messages API, and parses the JSON response.
@@ -58,14 +58,70 @@ You are a task authoring assistant for the Memintel platform.
 Given an intent description and context, produce a JSON object with exactly
 three top-level keys: "concept", "condition", and "action".
 
+=== FIELD SCHEMAS — READ CAREFULLY BEFORE GENERATING ===
+
+"concept" fields:
+  - concept_id: string
+  - version: string (e.g. "1.0")
+  - namespace: MUST be exactly one of: "personal", "team", "org", "global".
+      "personal" = per-user/individual metric.
+      "org" = organisation-wide metric.
+      NEVER output "default" or any other value.
+  - output_type: one of: "float", "int", "boolean", "string", "categorical",
+      "time_series<float>", "time_series<int>"
+  - description: string
+  - primitives: MUST be a JSON OBJECT (dict), NOT a list.
+      Keys = primitive names. Values = objects with:
+        "type": the Memintel type string (e.g. "float", "int")
+        "missing_data_policy": one of "null", "zero", "forward_fill",
+          "backward_fill" (optional, defaults to "null")
+      CRITICAL: For FLOAT or INT primitives, ALWAYS use missing_data_policy "zero".
+        Using "null" makes the type nullable (float?) which causes a type error when
+        combined with operators like normalize, z_score_op, or percentile_op that
+        expect non-nullable float. NEVER use "null" for float or int primitives.
+      Example:
+        "primitives": {
+          "user.feature_adoption_score": {"type": "float", "missing_data_policy": "zero"}
+        }
+  - features: MUST be a JSON OBJECT (dict), NOT a list. MUST have at least one entry.
+      Keys = feature node names. Values = FeatureNode objects with:
+        "op": operator name — use one of the operators from the type system.
+          For FLOAT primitives: ALWAYS use "normalize". NEVER use "passthrough".
+          For TIME_SERIES<FLOAT> primitives: use "mean", "sum", "min", "max".
+          For CATEGORICAL/STRING primitives: use "passthrough".
+          passthrough is ONLY valid for categorical and string types.
+        "inputs": dict mapping slot names to primitive or feature names
+        "params": dict of operator params (use {} if none)
+      Example for a float primitive exposed directly:
+        "features": {
+          "score": {
+            "op": "normalize",
+            "inputs": {"input": "user.feature_adoption_score"},
+            "params": {}
+          }
+        }
+  - output_feature: MUST be exactly one of the keys present in "features".
+      Copy the key name EXACTLY as written — do not paraphrase or shorten it.
+      In the example above, features has key "score", so output_feature MUST be "score".
+
+"condition" fields:
+  - condition_id, version, concept_id, concept_version: strings
+  - namespace: MUST be exactly one of: "personal", "team", "org", "global"
+  - strategy: object with "type" (from the type system) and "params" (dict)
+
+"action" fields:
+  - action_id, version: strings
+  - namespace: MUST be exactly one of: "personal", "team", "org", "global"
+  - config: MUST be one of these exact shapes (discriminated by "type"):
+      Webhook:      {"type": "webhook", "endpoint": "https://..."}
+      Notification: {"type": "notification", "channel": "default-channel"}
+      Workflow:     {"type": "workflow", "workflow_id": "..."}
+    Default to webhook type. "channel" is required for notification type.
+  - trigger: MUST have these three fields:
+      {"fire_on": "true", "condition_id": "...", "condition_version": "1.0"}
+    fire_on MUST be one of: "true", "false", "any" (lowercase strings, NOT booleans).
+
 Rules:
-- "concept" must be a valid ConceptDefinition (concept_id, version, namespace,
-  output_type, description, primitives, features, output_feature).
-- "condition" must be a valid ConditionDefinition (condition_id, version,
-  concept_id, concept_version, namespace, strategy).
-  strategy MUST include "type" and "params".
-- "action" must be a valid ActionDefinition (action_id, version, namespace,
-  config, trigger).
 - Use ONLY the strategies listed in the type system.
 - Respond with ONLY the raw JSON object — no markdown fences, no explanation.
 """
@@ -127,6 +183,20 @@ def _build_system_prompt(context: dict[str, Any]) -> str:
         parts.append("=== REQUEST CONSTRAINTS ===")
         parts.append(json.dumps(context["request_constraints"], indent=2))
         parts.append("=== END REQUEST CONSTRAINTS ===")
+
+    # Vocabulary context — MUST come last so the LLM sees it immediately before
+    # generating its response. When present, concept_id and condition_id in the
+    # output MUST be taken verbatim from these lists; do NOT invent new identifiers.
+    if context.get("vocabulary_context"):
+        vc = context["vocabulary_context"]
+        parts.append("=== VOCABULARY CONTEXT ===")
+        parts.append(json.dumps(vc, indent=2))
+        parts.append(
+            "IMPORTANT: The concept_id you output MUST be one of the identifiers "
+            "listed in available_concept_ids above. Do NOT invent a new identifier. "
+            "Choose the entry that best matches the intent."
+        )
+        parts.append("=== END VOCABULARY CONTEXT ===")
 
     return "\n\n".join(parts)
 

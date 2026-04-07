@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import bisect
 
+import structlog
+
 from app.compiler.type_checker import OPERATOR_REGISTRY
 from app.compiler.type_checker import GraphNode as TCGraphNode
 from app.compiler.type_checker import TypeChecker
@@ -31,6 +33,7 @@ from app.models.condition import TYPE_STRATEGY_COMPATIBILITY
 from app.models.errors import ErrorType, MemintelError, ValidationErrorItem
 from app.models.result import MissingDataPolicy
 
+log = structlog.get_logger(__name__)
 
 # ── Module-level helpers (also imported by dag_builder) ────────────────────────
 
@@ -269,6 +272,17 @@ class Validator:
 
         if inferred_final != definition.output_type:
             if not MemintelType.is_assignable(inferred_final, definition.output_type):
+                log.warning(
+                    "output_feature_type_mismatch",
+                    output_feature=definition.output_feature,
+                    features_keys=list(definition.features.keys()),
+                    inferred_type=inferred_final,
+                    declared_output_type=definition.output_type,
+                    primitives={
+                        k: {"type": v.type, "missing_data_policy": str(v.missing_data_policy)}
+                        for k, v in definition.primitives.items()
+                    },
+                )
                 raise _type_error(
                     f"Output feature '{definition.output_feature}' inferred type "
                     f"'{inferred_final}' is not assignable to declared "

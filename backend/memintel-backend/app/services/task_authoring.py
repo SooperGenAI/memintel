@@ -356,9 +356,22 @@ class TaskAuthoringService:
         ):
             generated_cid = concept_dict.get("concept_id", "")
             if generated_cid not in request.vocabulary_context.available_concept_ids:
+                log.warning(
+                    "vocab_check_failed",
+                    llm_concept_id=generated_cid,
+                    available=request.vocabulary_context.available_concept_ids,
+                    full_concept_dict=concept_dict,
+                    full_llm_output=llm_output,
+                )
                 raise VocabularyMismatchError(
                     f"LLM selected concept '{generated_cid}' which is not in "
                     "vocabulary_context.available_concept_ids.",
+                )
+            else:
+                log.info(
+                    "vocab_check_passed",
+                    llm_concept_id=generated_cid,
+                    full_concept_dict=concept_dict,
                 )
 
         if (
@@ -372,12 +385,16 @@ class TaskAuthoringService:
                     "vocabulary_context.available_condition_ids.",
                 )
 
+        _step2_concept_id   = pre_compiled_concept_id or concept_dict.get("concept_id")
+        _step2_output_type  = concept_dict.get("output_type") if not skipped else None
         step2 = ReasoningStep(
             step_index=2,
             label="Concept Selection",
             summary="skipped (concept pre-compiled)" if skipped
                     else "Concept selected from intent and registry.",
             outcome="skipped" if skipped else "accepted",
+            concept_id=_step2_concept_id,
+            output_type=_step2_output_type,
         )
         yield step2
 
@@ -419,11 +436,20 @@ class TaskAuthoringService:
                 ),
             ) from exc
 
+        _strat       = condition.strategy
+        _strat_type  = _strat.type.value if hasattr(_strat.type, "value") else str(_strat.type)
+        _params      = _strat.params
+        _direction   = str(getattr(_params, "direction", None) or "")
+        _direction   = _direction.value if hasattr(_direction, "value") else _direction or None
+        _threshold   = getattr(_params, "value", None) or getattr(_params, "threshold", None)
         yield ReasoningStep(
             step_index=3,
             label="Condition Strategy",
             summary="Condition strategy selected and parameters resolved.",
             outcome="accepted",
+            strategy_type=_strat_type,
+            direction=_direction,
+            threshold=float(_threshold) if _threshold is not None else None,
         )
 
         # ── Step 4: Action Binding (guardrails + persist) ──────────────────────
@@ -439,11 +465,15 @@ class TaskAuthoringService:
         if self._guardrails is not None and concept is not None:
             self._validate_primitives_registered(concept)
 
+        _action_type = action.config.type.value if hasattr(action.config.type, "value") else str(action.config.type)
+        _channel     = getattr(action.config, "channel", None)
         yield ReasoningStep(
             step_index=4,
             label="Action Binding",
             summary="Action binding resolved.",
             outcome="accepted",
+            action_type=_action_type,
+            channel=_channel,
         )
 
         # ── Final: dry_run or register + persist ──────────────────────────────

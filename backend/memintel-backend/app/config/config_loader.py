@@ -30,6 +30,9 @@ and enforces the non-empty strategy_registry invariant.
 """
 from __future__ import annotations
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import logging
 import os
 import re
