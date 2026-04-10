@@ -183,7 +183,11 @@ async def get_execute_service(
     config = getattr(request.app.state, "config", None)
     primitive_sources = {}
     if config is not None and config.primitive_sources:
-        primitive_sources = config.primitive_sources
+        primitive_sources = dict(config.primitive_sources)
+    # Merge in any primitives registered dynamically via POST /v1/primitives
+    dynamic = getattr(request.app.state, "dynamic_primitive_sources", None)
+    if dynamic:
+        primitive_sources.update(dynamic)
     return ExecuteService(
         pool=pool,
         connector_registry=connector_registry,

@@ -45,6 +45,7 @@ from app.api.routes import (
     conditions,
     context,
     decisions,
+    dynamic_registry,
     execute,
     feedback,
     guardrails_api,
@@ -167,6 +168,68 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log.warning("guardrails_db_check_failed", reason=str(e))
 
+    # ── Step 6b: Load dynamic registrations from DB ───────────────────────────
+    # Connectors and primitives registered via POST /v1/connectors and
+    # POST /v1/primitives are persisted in registered_connectors /
+    # registered_primitives.  Reload them now so they are available without
+    # a second startup.  Failure here is non-fatal — static config remains
+    # active and a warning is logged.
+    dynamic_primitive_sources: dict = {}
+    try:
+        from app.stores.dynamic_registry import DynamicRegistryStore
+        from app.api.routes.dynamic_registry import (
+            _rebuild_live_connector,
+            _register_dynamic_primitive,
+        )
+        from app.utils.encryption import decrypt
+
+        dyn_store = DynamicRegistryStore(db_pool)
+        connector_rows = await dyn_store.list_connectors_with_params()
+        primitive_rows = await dyn_store.list_primitives()
+
+        # Index primitives by connector_name for efficient lookup
+        by_connector: dict[str, list[dict]] = {}
+        for pr in primitive_rows:
+            cn = pr.get("connector_name")
+            if cn:
+                by_connector.setdefault(cn, []).append(pr)
+
+        import json as _json
+        for cr in connector_rows:
+            try:
+                params = _json.loads(decrypt(cr["params_encrypted"]))
+                await _rebuild_live_connector(
+                    name=cr["name"],
+                    connector_type=cr["connector_type"],
+                    params=params,
+                    primitive_rows=by_connector.get(cr["name"], []),
+                    connector_registry=connector_registry,
+                )
+            except Exception as exc:
+                log.warning(
+                    "dynamic_connector_reload_failed",
+                    name=cr["name"],
+                    error=str(exc),
+                )
+
+        for pr in primitive_rows:
+            try:
+                _register_dynamic_primitive(pr, primitive_registry, dynamic_primitive_sources)
+            except Exception as exc:
+                log.warning(
+                    "dynamic_primitive_reload_failed",
+                    name=pr["name"],
+                    error=str(exc),
+                )
+
+        log.info(
+            "dynamic_registrations_loaded",
+            connectors=len(connector_rows),
+            primitives=len(primitive_rows),
+        )
+    except Exception as exc:
+        log.warning("dynamic_registrations_load_failed", error=str(exc))
+
     # ── Step 7: Redis client ───────────────────────────────────────────────────
     try:
         redis = await create_redis_client(os.environ["REDIS_URL"])
@@ -181,6 +244,7 @@ async def lifespan(app: FastAPI):
     app.state.guardrails_store = guardrails_store
     app.state.primitive_registry = primitive_registry
     app.state.connector_registry = connector_registry
+    app.state.dynamic_primitive_sources = dynamic_primitive_sources
     # Elevated key for internal platform endpoints — read from environment.
     # Absent → all elevated endpoints return HTTP 403.
     app.state.elevated_key = os.environ.get("MEMINTEL_ELEVATED_KEY")
@@ -320,10 +384,11 @@ async def generic_exception_handler(request: Request, exc: Exception) -> JSONRes
 
 # ── Route registration ──────────────────────────────────────────────────────
 # evaluate_router is registered at /evaluate (not /execute) per developer_api.yaml.
-app.include_router(execute.evaluate_router, prefix="/evaluate",   tags=["Execution"])
-app.include_router(execute.router,          prefix="/execute",    tags=["Execution"])
-app.include_router(compile.router,          prefix="/compile",    tags=["Compiler"])
-app.include_router(registry.router,         prefix="/registry",   tags=["Registry"])
+app.include_router(execute.evaluate_router,          prefix="/evaluate",   tags=["Execution"])
+app.include_router(execute.router,                   prefix="/execute",    tags=["Execution"])
+app.include_router(compile.router,                   prefix="/compile",    tags=["Compiler"])
+app.include_router(registry.router,                  prefix="/registry",   tags=["Registry"])
+app.include_router(dynamic_registry.router,          prefix="/v1",         tags=["Dynamic Registry"])
 app.include_router(agents.router,           prefix="/agents",     tags=["Agents"])
 app.include_router(concepts.router,                               tags=["Concepts"])
 app.include_router(tasks.router,                                  tags=["Tasks"])

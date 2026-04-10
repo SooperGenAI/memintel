@@ -87,6 +87,15 @@ class ConnectorRegistry:
 
         return cls(registry)
 
+    def register(self, name: str, connector: Any) -> None:
+        """
+        Add or replace a connector in the live registry.
+
+        Used by the dynamic registration API (POST /v1/connectors) to make a
+        newly registered connector available without a restart.
+        """
+        self._registry[name] = connector
+
     def get(self, connector_name: str) -> Any:
         """
         Return the connector instance for connector_name.

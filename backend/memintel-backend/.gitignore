@@ -1,4 +1,4 @@
-# Python
+	# Python
 __pycache__/
 *.pyc
 *.pyo
@@ -37,3 +37,4 @@ Thumbs.db
 start_server.bat
 start_server.ps1
 start_server.sh
+.env 
