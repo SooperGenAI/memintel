@@ -31,3 +31,4 @@ package-lock.json
 Thumbs.db
 
 Claude API Key.txt
+backend/start_memintel_local.bat
