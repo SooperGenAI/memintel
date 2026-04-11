@@ -48,7 +48,7 @@ class MockIntegrationLLM:
     def __init__(self, formula_variant: str = "ratio") -> None:
         self._formula_variant = formula_variant
 
-    def generate_task(self, prompt: str, context: dict) -> dict:
+    def generate_compile_step(self, prompt: str, context: dict) -> dict:
         step = context.get("step", 0)
         identifier = context.get("identifier", "test.concept")
         signal_names: list[str] = context.get("signal_names") or ["sig_a", "sig_b"]

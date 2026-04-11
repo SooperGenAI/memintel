@@ -369,7 +369,7 @@ async def test_compile_stream_timeout_emits_cor_error():
 
     class _TimeoutCompileLLM:
         """LLM that times out on step 1."""
-        def generate_task(self, intent, context):
+        def generate_compile_step(self, intent, context):
             raise asyncio.TimeoutError("step_1_timed_out")
 
     svc = _make_compile_service(llm_client=_TimeoutCompileLLM())
@@ -404,7 +404,7 @@ async def test_compile_stream_cor_error_payload():
     """concept compiler cor_error must contain failure_reason and failed_at_step."""
 
     class _ErrLLM:
-        def generate_task(self, intent, context):
+        def generate_compile_step(self, intent, context):
             raise asyncio.TimeoutError("timeout at step 2")
 
     svc = _make_compile_service(llm_client=_ErrLLM())

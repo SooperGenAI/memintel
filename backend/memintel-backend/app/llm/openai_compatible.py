@@ -42,7 +42,7 @@ import structlog
 from pydantic import ValidationError as PydanticValidationError
 
 from app.llm.base import LLMClientBase
-from app.llm.client import LLMError, _build_system_prompt
+from app.llm.client import LLMError, _build_system_prompt, _COMPILE_STEP_INSTRUCTIONS
 
 log = structlog.get_logger(__name__)
 
@@ -196,3 +196,106 @@ class OpenAICompatibleClient(LLMClientBase):
 
         log.info("openai_compatible_response_ok", model=self._model)
         return validated.model_dump()
+
+    def generate_compile_step(self, prompt: str, context: dict) -> dict:
+        """
+        Generate a single CoR compile step via the OpenAI-compatible endpoint.
+
+        Uses _COMPILE_STEP_INSTRUCTIONS as the system prompt.
+
+        Raises LLMError on connection error, timeout, HTTP error, invalid JSON,
+        or missing 'summary' key in the response.
+        """
+        step = context.get("step", 0)
+        context_json = json.dumps(context, indent=2)
+        user_message = (
+            f"Execute Step {step} of the compilation pipeline.\n\n"
+            f"Step context:\n{context_json}\n\n"
+            f"Prompt: {prompt}"
+        )
+
+        log.info(
+            "openai_compatible_compile_step_request",
+            model=self._model,
+            base_url=self._base_url,
+            step=step,
+        )
+
+        payload: dict[str, Any] = {
+            "model": self._model,
+            "messages": [
+                {"role": "system", "content": _COMPILE_STEP_INSTRUCTIONS},
+                {"role": "user", "content": user_message},
+            ],
+            "temperature": 0,
+        }
+
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+
+        url = f"{self._base_url}/chat/completions"
+
+        try:
+            with httpx.Client(
+                timeout=self._timeout,
+                verify=self._ssl_verify,
+            ) as client:
+                response = client.post(url, json=payload, headers=headers)
+                response.raise_for_status()
+        except httpx.TimeoutException as exc:
+            raise LLMError(
+                f"OpenAI-compatible endpoint timed out at compile step {step}: {exc}"
+            ) from exc
+        except httpx.HTTPStatusError as exc:
+            raise LLMError(
+                f"OpenAI-compatible endpoint returned HTTP {exc.response.status_code} "
+                f"at compile step {step}: {exc.response.text[:200]}"
+            ) from exc
+        except httpx.ConnectError as exc:
+            raise LLMError(
+                f"Cannot connect to OpenAI-compatible endpoint {url}: {exc}"
+            ) from exc
+        except httpx.RequestError as exc:
+            raise LLMError(
+                f"Request error at compile step {step} calling {url}: {exc}"
+            ) from exc
+
+        try:
+            resp_body = response.json()
+        except Exception as exc:
+            raise LLMError(
+                f"OpenAI-compatible endpoint returned non-JSON at compile step {step}: {exc}"
+            ) from exc
+
+        try:
+            raw_text = resp_body["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise LLMError(
+                f"Unexpected response shape at compile step {step} "
+                f"(missing choices[0].message.content): {exc}"
+            ) from exc
+
+        raw_text = _strip_code_fences(raw_text.strip())
+
+        try:
+            result = json.loads(raw_text)
+        except json.JSONDecodeError as exc:
+            raise LLMError(
+                f"Compile step {step}: response is not valid JSON: {exc}. "
+                f"Raw (first 500 chars): {raw_text[:500]!r}"
+            ) from exc
+
+        if not isinstance(result, dict):
+            raise LLMError(
+                f"Compile step {step}: response must be a JSON object; "
+                f"got {type(result).__name__}"
+            )
+
+        if "summary" not in result:
+            raise LLMError(
+                f"Compile step {step}: response missing required 'summary' key."
+            )
+
+        log.info("openai_compatible_compile_step_ok", model=self._model, step=step)
+        return result

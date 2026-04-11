@@ -1,0 +1,11 @@
+{
+  "summary": "Selected weighted delinquency severity formula combining bounce count and missed payments, scaled by days past due, normalised to 0–1.",
+  "outcome": "accepted",
+  "formula_summary": "Weighted sum of emi_bounce_count and missed_payment_count scaled by days_past_due as a stress multiplier, normalised to the range 0.0–1.0.",
+  "signal_bindings": [
+    {"signal_name": "emi_bounce_count", "role": "input"},
+    {"signal_name": "missed_payment_count", "role": "input"},
+    {"signal_name": "days_past_due", "role": "weight"}
+  ],
+  "output_range": "0.0 to 1.0 (normalised float)"
+}

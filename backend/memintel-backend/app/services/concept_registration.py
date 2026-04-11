@@ -123,6 +123,10 @@ class ConceptRegistrationService:
             "version": version,
             "output_type": token.output_type,
         }
+        if token.formula_summary:
+            body["formula_summary"] = token.formula_summary
+        if token.signal_bindings:
+            body["signal_bindings"] = token.signal_bindings
 
         try:
             defn = await definition_store.register(

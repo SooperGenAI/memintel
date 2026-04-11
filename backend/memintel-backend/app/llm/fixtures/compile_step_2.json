@@ -1,0 +1,9 @@
+{
+  "summary": "Identified 3 signals covering payment failure frequency, cumulative missed obligations, and delinquency duration — all directly relevant to repayment behaviour.",
+  "outcome": "accepted",
+  "signal_rationale": {
+    "emi_bounce_count": "measures frequency of EMI payment failures — higher values indicate worse repayment behaviour",
+    "missed_payment_count": "tracks cumulative number of missed payment obligations over the observation window",
+    "days_past_due": "captures both recency and duration of delinquency — a key indicator of current credit stress"
+  }
+}

@@ -41,10 +41,8 @@ class _MockIntegrationLLM:
     """Routes LLM responses by context step (concept compiler) or always returns
     a valid task output (task authoring)."""
 
-    def generate_task(self, intent: str, context: dict) -> dict:
-        step = context.get("step")
-
-        # ── Concept compiler steps ─────────────────────────────────────────
+    def generate_compile_step(self, intent: str, context: dict) -> dict:
+        step = context.get("step", 1)
         if step == 1:
             return {"summary": "Intent: measure repayment ratio", "outcome": "accepted"}
         if step == 2:
@@ -59,10 +57,9 @@ class _MockIntegrationLLM:
                     {"signal_name": "payments_due", "role": "denominator"},
                 ],
             }
-        if step == 4:
-            return {"summary": "Type float is valid", "outcome": "accepted"}
+        return {"summary": "Type float is valid", "outcome": "accepted"}
 
-        # ── Task authoring (no step key) ───────────────────────────────────
+    def generate_task(self, intent: str, context: dict) -> dict:
         return {
             "concept": {
                 "concept_id": "integration.churn_risk",
@@ -114,6 +111,9 @@ class _TimeoutLLM:
     """Simulates a step timeout by raising asyncio.TimeoutError."""
 
     def generate_task(self, intent: str, context: dict) -> dict:
+        raise asyncio.TimeoutError("integration_test_timeout")
+
+    def generate_compile_step(self, intent: str, context: dict) -> dict:
         raise asyncio.TimeoutError("integration_test_timeout")
 
 

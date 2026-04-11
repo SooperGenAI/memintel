@@ -72,7 +72,7 @@ class MockConceptCompilerLLM:
     def __init__(self, step4_outcome: str = "accepted") -> None:
         self._step4_outcome = step4_outcome
 
-    def generate_task(self, prompt: str, context: dict) -> dict:
+    def generate_compile_step(self, prompt: str, context: dict) -> dict:
         step = context.get("step", 0)
         signal_names: list[str] = context.get("signal_names") or ["signal_a", "signal_b"]
         identifier: str = context.get("identifier", "test.concept")
@@ -372,7 +372,7 @@ class TestCompileRoute:
         """POST /concepts/compile returns HTTP 422 when CoR Step 1 fails."""
 
         class _FailStep1LLM:
-            def generate_task(self, prompt: str, context: dict) -> dict:
+            def generate_compile_step(self, prompt: str, context: dict) -> dict:
                 # Step 1 returns outcome "failed" — triggers CompilationError
                 if context.get("step") == 1:
                     return {"summary": "could not parse intent", "outcome": "failed"}

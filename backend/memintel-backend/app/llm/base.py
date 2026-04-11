@@ -54,3 +54,32 @@ class LLMClientBase(ABC):
             On delivery failure, invalid JSON response, or missing required keys.
         """
         ...
+
+    @abstractmethod
+    def generate_compile_step(self, prompt: str, context: dict) -> dict:
+        """
+        Generate a single CoR compile step output.
+
+        Parameters
+        ----------
+        prompt:
+            Natural language prompt describing what this step should do.
+        context:
+            Step context dict. Must include 'step' (int 1–4) plus step-specific
+            fields (e.g. signal_names for step 2, output_type for step 4).
+
+        Returns
+        -------
+        dict
+            Step output. Always contains 'summary' (str) and 'outcome' (str).
+            Step 2 adds 'signal_rationale' (dict keyed by signal name).
+            Step 3 adds 'formula_summary' (str), 'signal_bindings' (list),
+            and 'output_range' (str).
+            Step 4 adds 'compatible' (bool) and 'reason' (str).
+
+        Raises
+        ------
+        LLMError (from app.llm.client)
+            On delivery failure, invalid JSON response, or missing 'summary' key.
+        """
+        ...

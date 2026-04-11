@@ -62,9 +62,11 @@ from app.models.concept_compile import (
     RegisterConceptRequest,
     RegisterConceptResponse,
 )
+from app.models.errors import ErrorType, MemintelError
 from app.persistence.db import get_db
 from app.services.concept_compiler import ConceptCompilerService
 from app.services.concept_registration import ConceptRegistrationService
+from app.stores.definition import DefinitionStore
 
 log = structlog.get_logger(__name__)
 
@@ -193,3 +195,38 @@ async def register_concept(
         identifier=req.identifier,
     )
     return await service.register(req, pool)
+
+
+# ── GET /concepts/{identifier} ────────────────────────────────────────────────
+
+@router.get(
+    "/{identifier}",
+    summary="Get a registered concept by identifier",
+    status_code=200,
+)
+async def get_concept(
+    identifier: str,
+    version: str = "1.0.0",
+    pool: asyncpg.Pool = Depends(get_db),
+    _: None = Depends(require_api_key),
+) -> dict:
+    """
+    Return the body JSONB for a registered concept.
+
+    version defaults to "1.0.0" (the only version created by POST /concepts/register).
+    Pass ?version=<v> to retrieve a different version if one exists.
+
+    HTTP 200 — concept found; returns body dict including formula_summary and
+               signal_bindings when the concept was registered after migration 0014.
+    HTTP 404 — concept not found.
+    """
+    log.info("get_concept_request", identifier=identifier, version=version)
+    store = DefinitionStore(pool)
+    body = await store.get(identifier, version)
+    if body is None:
+        raise MemintelError(
+            ErrorType.NOT_FOUND,
+            f"Concept '{identifier}' version '{version}' not found.",
+            location=identifier,
+        )
+    return body

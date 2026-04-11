@@ -45,6 +45,10 @@ _FIXTURE_FILES = {
     "agent_define_condition": _FIXTURES_DIR / "agent_define_condition.json",
     "agent_semantic_refine":  _FIXTURES_DIR / "agent_semantic_refine.json",
     "agent_compile_workflow": _FIXTURES_DIR / "agent_compile_workflow.json",
+    "compile_step_1":         _FIXTURES_DIR / "compile_step_1.json",
+    "compile_step_2":         _FIXTURES_DIR / "compile_step_2.json",
+    "compile_step_3":         _FIXTURES_DIR / "compile_step_3.json",
+    "compile_step_4":         _FIXTURES_DIR / "compile_step_4.json",
 }
 
 # Keywords that override the default (threshold) fixture.
@@ -94,6 +98,25 @@ class LLMFixtureClient(LLMClientBase):
     def generate_workflow(self, description: str, context: dict) -> dict:
         """Return a fixture ExecutionPlan for a natural language workflow description."""
         return self._load("agent_compile_workflow")
+
+    # ── Compile step method ────────────────────────────────────────────────────
+
+    def generate_compile_step(self, prompt: str, context: dict) -> dict:
+        """
+        Return fixture output for a single CoR compile step, routed by context['step'].
+
+        Parameters
+        ----------
+        prompt:
+            Accepted but unused — fixtures are static.
+        context:
+            Must contain 'step' (int 1–4). Unknown step values fall back to step 1.
+        """
+        step = context.get("step", 1)
+        fixture_key = f"compile_step_{step}"
+        if fixture_key not in _FIXTURE_FILES:
+            fixture_key = "compile_step_1"
+        return self._load(fixture_key)
 
     # ── Task method ────────────────────────────────────────────────────────────
 

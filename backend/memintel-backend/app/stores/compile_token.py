@@ -49,6 +49,7 @@ created_at    created_at
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 
 import asyncpg
@@ -87,9 +88,10 @@ class CompileTokenStore:
             row = await self._pool.fetchrow(
                 """
                 INSERT INTO compile_tokens (
-                    token_id, token_string, identifier, ir_hash, output_type, expires_at
+                    token_id, token_string, identifier, ir_hash, output_type, expires_at,
+                    formula_summary, signal_bindings
                 )
-                VALUES ($1, $2, $3, $4, $5, $6)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
                 RETURNING *
                 """,
                 token.token_id,
@@ -98,6 +100,8 @@ class CompileTokenStore:
                 token.ir_hash,
                 token.output_type,
                 token.expires_at,
+                token.formula_summary,
+                json.dumps(token.signal_bindings) if token.signal_bindings is not None else None,
             )
         except asyncpg.UniqueViolationError as exc:
             raise ConflictError(
@@ -206,6 +210,10 @@ def _row_to_token(row: asyncpg.Record) -> CompileToken:
     asyncpg returns TIMESTAMPTZ columns as timezone-aware datetime objects,
     so no manual UTC coercion is needed.
     """
+    raw_bindings = row["signal_bindings"]
+    signal_bindings = (
+        json.loads(raw_bindings) if isinstance(raw_bindings, str) else raw_bindings
+    )
     return CompileToken(
         token_id=str(row["token_id"]),
         token_string=row["token_string"],
@@ -215,4 +223,6 @@ def _row_to_token(row: asyncpg.Record) -> CompileToken:
         expires_at=row["expires_at"],
         used=row["used"],
         created_at=row["created_at"],
+        formula_summary=row["formula_summary"],
+        signal_bindings=signal_bindings,
     )

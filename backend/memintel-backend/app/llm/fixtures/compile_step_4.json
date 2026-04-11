@@ -1,0 +1,6 @@
+{
+  "summary": "Output type 'float' is compatible with the normalised delinquency severity formula — expected output range is 0.0 to 1.0.",
+  "outcome": "accepted",
+  "compatible": true,
+  "reason": "The normalised weighted-sum formula produces a float in [0.0, 1.0], which is correctly typed as float."
+}

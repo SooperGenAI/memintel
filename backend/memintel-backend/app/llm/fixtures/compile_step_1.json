@@ -1,0 +1,7 @@
+{
+  "summary": "Parsed concept as a ratio-based financial metric measuring the proportion of timely loan repayments over a rolling observation window.",
+  "outcome": "accepted",
+  "intent_label": "Loan Repayment Ratio",
+  "metric_type": "ratio",
+  "measurement": "Proportion of EMI payments made on time relative to total obligations due"
+}

@@ -179,14 +179,16 @@ class CompileToken(BaseModel):
 
     used defaults to False — set to True atomically on successful consumption.
     """
-    token_id:     str
-    token_string: str      # opaque token returned to the caller
-    identifier:   str      # locked at compile time
-    ir_hash:      str      # SHA-256 of the compiled concept IR
-    output_type:  str      # declared at compile time; carried forward to Phase 2
-    expires_at:   datetime
-    used:         bool = False
-    created_at:   datetime
+    token_id:         str
+    token_string:     str            # opaque token returned to the caller
+    identifier:       str            # locked at compile time
+    ir_hash:          str            # SHA-256 of the compiled concept IR
+    output_type:      str            # declared at compile time; carried forward to Phase 2
+    expires_at:       datetime
+    used:             bool = False
+    created_at:       datetime
+    formula_summary:  str | None = None   # plain-English formula description (Step 3)
+    signal_bindings:  list[dict] | None = None  # [{signal_name, role}] (Step 3)
 
 
 # ── SSE event payload models ──────────────────────────────────────────────────

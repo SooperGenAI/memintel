@@ -284,9 +284,12 @@ class TestScenario2VocabularyBounded:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class _FailLLM:
-    """Raises RuntimeError on every generate_task call — triggers cor_error."""
+    """Raises RuntimeError on every LLM call — triggers cor_error."""
 
     def generate_task(self, intent: str, context: dict) -> dict:
+        raise RuntimeError("forced_failure_for_sse_error_test")
+
+    def generate_compile_step(self, intent: str, context: dict) -> dict:
         raise RuntimeError("forced_failure_for_sse_error_test")
 
 

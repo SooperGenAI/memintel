@@ -345,11 +345,10 @@ class LLMMockClient(LLMClientBase):
     def reset_call_count(self) -> None:
         self.call_count = 0
 
-    def generate_task(self, intent: str, context: dict) -> dict:
+    def generate_compile_step(self, intent: str, context: dict) -> dict:
         self.call_count += 1
-        step = context.get("step")
+        step = context.get("step", 1)
 
-        # ── Concept compiler path ──────────────────────────────────────────────
         if step in (1, 2):
             return {"summary": f"Step {step} completed.", "outcome": "accepted"}
 
@@ -360,9 +359,11 @@ class LLMMockClient(LLMClientBase):
                     return resp
             return _STEP3_GENERIC
 
-        if step == 4:
-            return {"summary": "Type validation passed.", "outcome": "accepted"}
+        # step 4
+        return {"summary": "Type validation passed.", "outcome": "accepted"}
 
+    def generate_task(self, intent: str, context: dict) -> dict:
+        self.call_count += 1
         # ── Task authoring path ────────────────────────────────────────────────
         intent_lower = intent.lower()
         for keyword, resp in _TASK_MAP.items():

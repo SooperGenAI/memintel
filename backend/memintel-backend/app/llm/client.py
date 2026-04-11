@@ -201,6 +201,80 @@ def _build_system_prompt(context: dict[str, Any]) -> str:
     return "\n\n".join(parts)
 
 
+# ── Compile step system prompt ─────────────────────────────────────────────────
+
+_COMPILE_STEP_INSTRUCTIONS = """\
+You are a concept compilation assistant for the Memintel platform.
+
+You are executing one step of a 4-step Chain of Reasoning (CoR) that compiles
+a concept description into a formula specification.
+
+Every response MUST be a JSON object containing at minimum:
+  "summary"  — a concise plain-English sentence describing what this step concluded.
+  "outcome"  — exactly "accepted" or "failed". Use "failed" only if the step
+               cannot logically proceed (e.g. no valid signal found, type incompatible).
+               Default to "accepted" when the step completes normally.
+
+The remaining fields depend on which step is being executed:
+
+=== STEP 1 — Intent Parsing ===
+Parse the concept identifier and description to extract structured intent.
+Return:
+{
+  "summary":      "One sentence describing the concept intent",
+  "outcome":      "accepted",
+  "intent_label": "Short human-readable label (e.g. 'Loan Repayment Ratio')",
+  "metric_type":  "What kind of metric this is (e.g. 'ratio', 'count', 'score', 'flag')",
+  "measurement":  "What quantity is being measured"
+}
+
+=== STEP 2 — Signal Identification ===
+Analyse each signal name to understand what it represents and why it is relevant
+to the concept being compiled.
+Return:
+{
+  "summary": "One sentence describing which signals were identified and their roles",
+  "outcome": "accepted",
+  "signal_rationale": {
+    "<signal_name>": "<concise reason this signal is relevant to the concept>",
+    ...
+  }
+}
+CRITICAL: "signal_rationale" MUST be a JSON object (dict) keyed by signal name.
+Do NOT use a list or array. Each value is a concise string — one sentence maximum.
+Include one entry for every signal_name in the request context.
+
+=== STEP 3 — DAG Construction ===
+Select the formula strategy and produce the complete formula specification.
+Return:
+{
+  "summary":         "One sentence describing the formula structure",
+  "outcome":         "accepted",
+  "formula_summary": "Plain-English description of what the formula computes and how (e.g. 'missed_payment_count weighted by days_past_due, normalised to 0–1')",
+  "signal_bindings": [
+    {"signal_name": "<name>", "role": "<numerator|denominator|input|weight|threshold>"},
+    ...
+  ],
+  "output_range":    "Expected output range (e.g. '0.0 to 1.0', 'non-negative integer', 'true or false')"
+}
+
+=== STEP 4 — Type Validation ===
+Confirm that the declared output_type is compatible with the formula produced in Step 3.
+Return:
+{
+  "summary":    "One sentence confirming or flagging the type compatibility",
+  "outcome":    "accepted" or "failed",
+  "compatible": true or false,
+  "reason":     "Concise explanation of why the output_type is or is not compatible"
+}
+
+Rules:
+- Respond with ONLY the raw JSON object — no markdown fences, no explanation text.
+- Include only the fields listed for the current step plus "summary" and "outcome".
+- Never invent field names not listed above.
+"""
+
+
 # ── AnthropicClient ────────────────────────────────────────────────────────────
 
 class AnthropicClient(LLMClientBase):
@@ -360,3 +434,90 @@ class AnthropicClient(LLMClientBase):
 
         log.info("anthropic_response_ok", model=self._model)
         return validated.model_dump()
+
+    def generate_compile_step(self, prompt: str, context: dict) -> dict:
+        """
+        Generate a single CoR compile step output.
+
+        Uses _COMPILE_STEP_INSTRUCTIONS as the system prompt. Returns a dict
+        containing at minimum 'summary' and 'outcome'. Step-specific fields
+        (signal_rationale, formula_summary, signal_bindings, etc.) are also
+        present when the LLM produces them.
+
+        Parameters
+        ----------
+        prompt:
+            Natural language prompt describing what this step should do.
+        context:
+            Step context dict. Must include 'step' (int 1–4).
+
+        Raises
+        ------
+        LLMError
+            On Anthropic API failure, invalid JSON, or missing 'summary' key.
+        """
+        step = context.get("step", 0)
+        context_json = json.dumps(context, indent=2)
+        user_message = (
+            f"Execute Step {step} of the compilation pipeline.\n\n"
+            f"Step context:\n{context_json}\n\n"
+            f"Prompt: {prompt}"
+        )
+
+        log.info("anthropic_compile_step_request", model=self._model, step=step)
+
+        try:
+            message = self._client.messages.create(
+                model=self._model,
+                max_tokens=1024,
+                temperature=self._temperature,
+                system=_COMPILE_STEP_INSTRUCTIONS,
+                messages=[{"role": "user", "content": user_message}],
+            )
+        except self._anthropic.APIError as exc:
+            raise LLMError(f"Anthropic API error at compile step {step}: {exc}") from exc
+        except Exception as exc:
+            raise LLMError(f"Unexpected error at compile step {step}: {exc}") from exc
+
+        raw_text = ""
+        for block in message.content:
+            if hasattr(block, "text"):
+                raw_text += block.text
+
+        raw_text = raw_text.strip()
+
+        if raw_text.startswith("```"):
+            lines = raw_text.splitlines()
+            inner = []
+            in_block = False
+            for line in lines:
+                if line.startswith("```") and not in_block:
+                    in_block = True
+                    continue
+                if line.startswith("```") and in_block:
+                    break
+                if in_block:
+                    inner.append(line)
+            raw_text = "\n".join(inner).strip()
+
+        try:
+            result = json.loads(raw_text)
+        except json.JSONDecodeError as exc:
+            raise LLMError(
+                f"Compile step {step}: response is not valid JSON: {exc}. "
+                f"Raw (first 500 chars): {raw_text[:500]!r}"
+            ) from exc
+
+        if not isinstance(result, dict):
+            raise LLMError(
+                f"Compile step {step}: response must be a JSON object; "
+                f"got {type(result).__name__}"
+            )
+
+        if "summary" not in result:
+            raise LLMError(
+                f"Compile step {step}: response missing required 'summary' key."
+            )
+
+        log.info("anthropic_compile_step_ok", model=self._model, step=step)
+        return result

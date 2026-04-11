@@ -91,6 +91,53 @@ class MockLLMClient(LLMClientBase):
         suffix = f"{self._counter:04d}"
         return self._build(scenario, suffix)
 
+    # ── generate_compile_step ────────────────────────────────────────────────
+
+    def generate_compile_step(self, prompt: str, context: dict) -> dict:
+        """
+        Return a step-appropriate compile step response routed by context['step'].
+
+        Used when MockLLMClient is injected into ConceptCompilerService in tests.
+        """
+        step = context.get("step", 1)
+        signal_names: list[str] = context.get("signal_names") or ["signal_a", "signal_b"]
+        identifier: str = context.get("identifier", "test.concept")
+        output_type: str = context.get("output_type", "float")
+
+        if step == 1:
+            return {
+                "summary": f"Parsed intent: measure {identifier}",
+                "outcome": "accepted",
+                "intent_label": identifier.replace(".", " ").title(),
+                "metric_type": "ratio",
+                "measurement": f"Value of {identifier}",
+            }
+        elif step == 2:
+            return {
+                "summary": "Identified signals for formula construction",
+                "outcome": "accepted",
+                "signal_rationale": {
+                    sig: f"provides input data for {identifier}" for sig in signal_names
+                },
+            }
+        elif step == 3:
+            bindings = [{"signal_name": sig, "role": "input"} for sig in signal_names]
+            formula = " + ".join(signal_names[:2]) if len(signal_names) >= 2 else identifier
+            return {
+                "summary": "Selected additive formula strategy",
+                "outcome": "accepted",
+                "formula_summary": f"{formula} computed as {output_type}",
+                "signal_bindings": bindings,
+                "output_range": "0.0 to 1.0",
+            }
+        else:  # step 4
+            return {
+                "summary": f"Output type '{output_type}' is compatible",
+                "outcome": "accepted",
+                "compatible": True,
+                "reason": f"{output_type} matches the formula output type",
+            }
+
     # ── generate_semantic_refine ──────────────────────────────────────────────
 
     def generate_semantic_refine(

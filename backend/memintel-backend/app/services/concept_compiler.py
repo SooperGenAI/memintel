@@ -158,6 +158,11 @@ class ConceptCompilerService:
             expires_at=expires_at,
             used=False,
             created_at=now,
+            formula_summary=compiled_concept.formula_summary,
+            signal_bindings=[
+                {"signal_name": b.signal_name, "role": b.role}
+                for b in compiled_concept.signal_bindings
+            ],
         )
 
         store = self._token_store if self._token_store is not None else CompileTokenStore(pool)
@@ -226,6 +231,11 @@ class ConceptCompilerService:
                 expires_at=expires_at,
                 used=False,
                 created_at=now,
+                formula_summary=compiled_concept.formula_summary,
+                signal_bindings=[
+                    {"signal_name": b.signal_name, "role": b.role}
+                    for b in compiled_concept.signal_bindings
+                ],
             )
             store = (
                 self._token_store
@@ -427,6 +437,14 @@ class ConceptCompilerService:
             ],
         }
         result["formula_data"] = formula_data
+
+        log.info(
+            "concept_compile_result",
+            signals_resolved=len(signal_bindings),
+            formula_structure=formula_summary,
+            output_range=formula_output.get("output_range", ""),
+        )
+
         yield step3
 
         # ── Step 4: Type Validation ────────────────────────────────────────────
@@ -496,7 +514,7 @@ class ConceptCompilerService:
         failed_at_step=step_index.
         """
         try:
-            raw_output = self._llm.generate_task(llm_prompt, context or {})
+            raw_output = self._llm.generate_compile_step(llm_prompt, context or {})
         except asyncio.TimeoutError:
             raise  # Propagate without wrapping — _run_pipeline catches it
         except Exception as exc:
@@ -513,6 +531,14 @@ class ConceptCompilerService:
             )
 
         self._step_outputs[step_index] = raw_output
+
+        log.info(
+            "concept_compile_step_raw",
+            step_index=step_index,
+            label=label,
+            summary=raw_output.get("summary", ""),
+            outcome=raw_output.get("outcome", ""),
+        )
 
         summary = raw_output.get("summary") or f"{label} complete"
         raw_candidates = raw_output.get("candidates")
