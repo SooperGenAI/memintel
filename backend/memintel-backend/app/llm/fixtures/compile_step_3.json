@@ -1,11 +1,32 @@
 {
-  "summary": "Selected weighted delinquency severity formula combining bounce count and missed payments, scaled by days past due, normalised to 0–1.",
+  "summary": "Selected weighted delinquency severity formula with four signals; weights sum to 1.0.",
   "outcome": "accepted",
-  "formula_summary": "Weighted sum of emi_bounce_count and missed_payment_count scaled by days_past_due as a stress multiplier, normalised to the range 0.0–1.0.",
+  "formula_summary": "Weighted sum: emi_bounce_count (35%) + missed_payment_count (30%) + days_past_due as severity multiplier (25%), normalized by monthly_outflow (10%), clamped to 0\u20131 range",
   "signal_bindings": [
-    {"signal_name": "emi_bounce_count", "role": "input"},
-    {"signal_name": "missed_payment_count", "role": "input"},
-    {"signal_name": "days_past_due", "role": "weight"}
+    {
+      "signal_name": "emi_bounce_count",
+      "role": "numerator",
+      "weight": 0.35,
+      "rationale": "Primary indicator \u2014 direct evidence of recurring payment failure events"
+    },
+    {
+      "signal_name": "missed_payment_count",
+      "role": "numerator",
+      "weight": 0.30,
+      "rationale": "Cumulative payment discipline breakdown across the observation window"
+    },
+    {
+      "signal_name": "days_past_due",
+      "role": "severity_multiplier",
+      "weight": 0.25,
+      "rationale": "Amplifies score when delinquency is prolonged \u2014 captures both recency and duration"
+    },
+    {
+      "signal_name": "monthly_outflow",
+      "role": "denominator",
+      "weight": 0.10,
+      "rationale": "Normalization context \u2014 higher outflow relative to obligations reduces distress score"
+    }
   ],
   "output_range": "0.0 to 1.0 (normalised float)"
 }

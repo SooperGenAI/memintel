@@ -91,25 +91,36 @@ class MockConceptCompilerLLM:
             return {
                 "summary": "Signals imply ratio-based calculation",
                 "outcome": "accepted",
-                "domain_context": "payment domain",
+                "signal_rationale": {
+                    sig: f"{sig} is relevant to the concept"
+                    for sig in signal_names
+                },
             }
         elif step == 3:
-            bindings = []
-            if len(signal_names) >= 2:
-                bindings = [
-                    {"signal_name": signal_names[0], "role": "numerator"},
-                    {"signal_name": signal_names[1], "role": "denominator"},
-                ]
+            n = len(signal_names)
+            if n == 0:
+                bindings = []
+            elif n == 1:
+                bindings = [{"signal_name": signal_names[0], "role": "input", "weight": 1.0, "rationale": "sole signal"}]
             else:
+                # Distribute weights: first two split 0.9, rest share 0.1
+                primary_w = round(0.9 / 2, 4)
+                remainder = round(1.0 - primary_w * 2, 4) if n == 2 else 0.1
                 bindings = [
-                    {"signal_name": sig, "role": "input"} for sig in signal_names
+                    {"signal_name": signal_names[0], "role": "numerator",   "weight": primary_w,  "rationale": f"{signal_names[0]} primary contribution"},
+                    {"signal_name": signal_names[1], "role": "denominator", "weight": primary_w,  "rationale": f"{signal_names[1]} normalization factor"},
                 ]
-            formula_parts = " / ".join(signal_names[:2]) if len(signal_names) >= 2 else identifier
+                for i, sig in enumerate(signal_names[2:], start=2):
+                    w = round(remainder / max(1, n - 2), 4)
+                    bindings.append({"signal_name": sig, "role": "input", "weight": w, "rationale": f"{sig} supporting signal"})
+            sig_parts = " / ".join(signal_names[:2]) if n >= 2 else identifier
+            pct_parts = " + ".join(f"{b['signal_name']} ({int(b['weight']*100)}%)" for b in bindings)
             return {
-                "summary": "Selected ratio formula strategy",
+                "summary": "Selected weighted formula strategy with explicit signal weights.",
                 "outcome": "accepted",
-                "formula_summary": f"{formula_parts}, 90-day rolling window",
+                "formula_summary": f"Weighted sum: {pct_parts}, clamped to 0–1 range",
                 "signal_bindings": bindings,
+                "output_range": "0.0 to 1.0",
             }
         else:  # step 4
             return {

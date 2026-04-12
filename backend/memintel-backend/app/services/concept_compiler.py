@@ -160,7 +160,12 @@ class ConceptCompilerService:
             created_at=now,
             formula_summary=compiled_concept.formula_summary,
             signal_bindings=[
-                {"signal_name": b.signal_name, "role": b.role}
+                {
+                    "signal_name": b.signal_name,
+                    "role": b.role,
+                    "weight": b.weight,
+                    "rationale": b.rationale,
+                }
                 for b in compiled_concept.signal_bindings
             ],
         )
@@ -364,7 +369,14 @@ class ConceptCompilerService:
             )
         yield step2
 
-        signal_context = self._step_outputs.get(2, {})
+        step2_output = self._step_outputs.get(2, {})
+        if "signal_rationale" not in step2_output:
+            log.warning(
+                "signal_rationale_missing",
+                step=2,
+                keys=list(step2_output.keys()),
+            )
+        signal_context = step2_output
 
         # ── Step 3: DAG Construction ───────────────────────────────────────────
         try:
@@ -415,6 +427,8 @@ class ConceptCompilerService:
             SignalBinding(
                 signal_name=b["signal_name"],
                 role=b.get("role", "input"),
+                weight=b.get("weight"),
+                rationale=b.get("rationale"),
             )
             if isinstance(b, dict)
             else SignalBinding(signal_name=str(b), role="input")
@@ -427,12 +441,36 @@ class ConceptCompilerService:
                 for sig in request.signal_names
             ]
 
+        # Warn if any binding is missing weight — the Step 3 prompt requires it.
+        missing_weights = [b.signal_name for b in signal_bindings if b.weight is None]
+        if missing_weights:
+            log.warning(
+                "signal_binding_weights_missing",
+                signals=missing_weights,
+                step=3,
+            )
+
+        # Warn if any binding has an invalid role — prompt allows exactly three values.
+        _VALID_ROLES = {"numerator", "denominator", "severity_multiplier"}
+        for b in signal_bindings:
+            if b.role not in _VALID_ROLES:
+                log.warning(
+                    "signal_binding_invalid_role",
+                    signal=b.signal_name,
+                    role=b.role,
+                )
+
         formula_data: dict = {
             "identifier": request.identifier,
             "output_type": request.output_type,
             "formula_summary": formula_summary,
             "signal_bindings": [
-                {"signal_name": b.signal_name, "role": b.role}
+                {
+                    "signal_name": b.signal_name,
+                    "role": b.role,
+                    "weight": b.weight,
+                    "rationale": b.rationale,
+                }
                 for b in signal_bindings
             ],
         }
@@ -443,6 +481,7 @@ class ConceptCompilerService:
             signals_resolved=len(signal_bindings),
             formula_structure=formula_summary,
             output_range=formula_output.get("output_range", ""),
+            weights=[b.weight for b in signal_bindings],
         )
 
         yield step3
@@ -546,12 +585,19 @@ class ConceptCompilerService:
         raw_outcome = raw_output.get("outcome", "accepted")
         outcome: str = raw_outcome if raw_outcome in ("accepted", "skipped", "failed") else "accepted"
 
+        # Extract signal_rationale from step 2 output — must be a dict keyed by
+        # signal name. Passed through to ReasoningStep so Canvas can read it from
+        # the streaming event / response trace.
+        raw_sr = raw_output.get("signal_rationale")
+        signal_rationale: dict[str, str] | None = raw_sr if isinstance(raw_sr, dict) else None
+
         return ReasoningStep(
             step_index=step_index,
             label=label,
             summary=summary,
             candidates=candidates,
             outcome=outcome,
+            signal_rationale=signal_rationale,
         )
 
     # ── Helpers ──────────────────────────────────────────────────────────────────

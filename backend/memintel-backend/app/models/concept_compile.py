@@ -86,11 +86,14 @@ class SignalBinding(BaseModel):
     """
     A single signal→role binding in a compiled concept.
 
-    Records which signal name was used and what role it plays in the formula
-    (e.g. "numerator", "denominator", "input", "weight").
+    Records which signal name was used, what role it plays in the formula,
+    its relative weight (0–1, summing to 1.0 across all signals), and a
+    one-sentence rationale explaining its contribution.
     """
     signal_name: str
     role:        str
+    weight:      float | None = None   # 0–1; all weights sum to 1.0
+    rationale:   str   | None = None   # Why this signal contributes to the formula
 
 
 class CompiledConcept(BaseModel):
@@ -187,8 +190,8 @@ class CompileToken(BaseModel):
     expires_at:       datetime
     used:             bool = False
     created_at:       datetime
-    formula_summary:  str | None = None   # plain-English formula description (Step 3)
-    signal_bindings:  list[dict] | None = None  # [{signal_name, role}] (Step 3)
+    formula_summary:  str | None = None   # plain-English formula with % weights (Step 3)
+    signal_bindings:  list[dict] | None = None  # [{signal_name, role, weight, rationale}] (Step 3)
 
 
 # ── SSE event payload models ──────────────────────────────────────────────────

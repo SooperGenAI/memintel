@@ -231,32 +231,95 @@ Return:
 === STEP 2 — Signal Identification ===
 Analyse each signal name to understand what it represents and why it is relevant
 to the concept being compiled.
-Return:
+
+Your response MUST be a JSON object containing ALL FIVE of these keys:
+  step_index, label, summary, outcome, signal_rationale
+
+signal_rationale is NOT optional. Omitting it is an error.
+signal_rationale MUST be a JSON object (dict) keyed by signal name — one entry
+per signal_name in the request context. Each value is one sentence.
+
+Example response (copy this structure exactly):
 {
-  "summary": "One sentence describing which signals were identified and their roles",
+  "step_index": 2,
+  "label": "Signal Identification",
+  "summary": "Selected 4 signals covering payment failures and delinquency duration.",
   "outcome": "accepted",
   "signal_rationale": {
-    "<signal_name>": "<concise reason this signal is relevant to the concept>",
-    ...
+    "emi_bounce_count": "measures frequency of EMI payment failures",
+    "missed_payment_count": "tracks cumulative missed payment obligations",
+    "days_past_due": "captures recency and duration of delinquency",
+    "monthly_outflow": "indicates overall cash flow pressure"
   }
 }
-CRITICAL: "signal_rationale" MUST be a JSON object (dict) keyed by signal name.
-Do NOT use a list or array. Each value is a concise string — one sentence maximum.
-Include one entry for every signal_name in the request context.
+
+Do NOT use a list or array for signal_rationale. Do NOT omit signal_rationale.
 
 === STEP 3 — DAG Construction ===
-Select the formula strategy and produce the complete formula specification.
-Return:
+Select the formula strategy and produce the complete formula specification with
+explicit numerical weights for every signal.
+
+Your response MUST be valid JSON with EXACTLY these keys at the top level:
+  summary, outcome, formula_summary, output_range, signal_bindings
+
+signal_bindings MUST be an array where every entry has EXACTLY these four keys:
+  signal_name, role, weight, rationale
+
+role MUST be one of exactly these three values:
+  "numerator"            — signal adds directly to the score
+  "denominator"          — signal normalises or scales the score
+  "severity_multiplier"  — signal amplifies other signals
+
+weight MUST be a number between 0.0 and 1.0.
+All weights MUST sum to exactly 1.0.
+Do NOT omit weight. Do NOT use strings for weight.
+
+rationale MUST be a one-sentence plain English explanation of why this signal
+has this role and weight.
+
+Example of a correct response:
 {
-  "summary":         "One sentence describing the formula structure",
-  "outcome":         "accepted",
-  "formula_summary": "Plain-English description of what the formula computes and how (e.g. 'missed_payment_count weighted by days_past_due, normalised to 0–1')",
+  "summary": "Selected weighted sum formula with four signals, weights summing to 1.0.",
+  "outcome": "accepted",
+  "formula_summary": "Weighted sum: emi_bounce_count (35%) + missed_payment_count (30%), amplified by days_past_due severity (25%), normalised by monthly_outflow (10%), clamped to 0-1 range",
+  "output_range": "0.0 to 1.0",
   "signal_bindings": [
-    {"signal_name": "<name>", "role": "<numerator|denominator|input|weight|threshold>"},
-    ...
-  ],
-  "output_range":    "Expected output range (e.g. '0.0 to 1.0', 'non-negative integer', 'true or false')"
+    {
+      "signal_name": "emi_bounce_count",
+      "role": "numerator",
+      "weight": 0.35,
+      "rationale": "Primary indicator of payment failure frequency"
+    },
+    {
+      "signal_name": "missed_payment_count",
+      "role": "numerator",
+      "weight": 0.30,
+      "rationale": "Cumulative measure of payment discipline breakdown"
+    },
+    {
+      "signal_name": "days_past_due",
+      "role": "severity_multiplier",
+      "weight": 0.25,
+      "rationale": "Amplifies score when delinquency is prolonged"
+    },
+    {
+      "signal_name": "monthly_outflow",
+      "role": "denominator",
+      "weight": 0.10,
+      "rationale": "Normalisation context — scales score by cash pressure"
+    }
+  ]
 }
+
+formula_summary MUST explicitly state the percentage weight of each signal inline.
+
+If the concept description or feedback contains explicit percentage weights for signals
+(e.g. "signal_x: 40%"), you MUST use those exact weights. Do not approximate or
+redistribute. The weights you assign MUST match any explicit instructions in the
+description exactly.
+
+Do NOT produce any other JSON structure. Do NOT omit any of the four keys from
+any signal_bindings entry.
 
 === STEP 4 — Type Validation ===
 Confirm that the declared output_type is compatible with the formula produced in Step 3.
@@ -271,7 +334,7 @@ Return:
 Rules:
 - Respond with ONLY the raw JSON object — no markdown fences, no explanation text.
 - Include only the fields listed for the current step plus "summary" and "outcome".
-- Never invent field names not listed above.
+- All fields shown in the example responses above are required — do not omit any.
 """
 
 
@@ -470,7 +533,7 @@ class AnthropicClient(LLMClientBase):
             message = self._client.messages.create(
                 model=self._model,
                 max_tokens=1024,
-                temperature=self._temperature,
+                temperature=0,
                 system=_COMPILE_STEP_INSTRUCTIONS,
                 messages=[{"role": "user", "content": user_message}],
             )
@@ -513,6 +576,15 @@ class AnthropicClient(LLMClientBase):
                 f"Compile step {step}: response must be a JSON object; "
                 f"got {type(result).__name__}"
             )
+
+        # Diagnostic: log raw LLM output immediately after parsing, before any
+        # field extraction — shows exactly what the LLM returned for each step.
+        log.info(
+            "raw_step_output",
+            step=step,
+            keys=list(result.keys()),
+            full=result,
+        )
 
         if "summary" not in result:
             raise LLMError(
