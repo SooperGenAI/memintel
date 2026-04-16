@@ -18,10 +18,12 @@ Also handles:
 
 Connector note
 ──────────────
-No production data connector (SQL, REST) is implemented yet.  All execution
-paths use MockConnector with empty data — primitives return None and the null
-missing_data_policy applies.  Wire a real connector here when the connector
-layer is built.
+PostgresConnector is wired into the async execution path via _make_resolver().
+When PRIMITIVE_DB_URL is set, _make_resolver() builds a PostgresConnector for
+the canvas database and registers it as 'postgres.canvas' in async_connector_registry,
+alongside primitive_sources entries for credit_metrics primitives.
+MockConnector (sync fallback) is always preserved — tests that do not set
+PRIMITIVE_DB_URL continue to use MockConnector and are unaffected.
 
 Composite conditions
 ────────────────────
@@ -158,10 +160,15 @@ def _parse_iso_duration(duration: str) -> timedelta:
 
 def _make_connector() -> MockConnector:
     """
-    Return the data connector for primitive fetching.
+    Return the sync ConnectorBase fallback for primitive fetching.
 
-    No production connector is implemented yet.  MockConnector with empty data
-    is used — all primitives return None; null missing_data_policy applies.
+    This is the sync path used by DataResolver.fetch() (non-async).
+    MockConnector is always returned here so that tests without PRIMITIVE_DB_URL
+    continue to work unchanged.
+
+    PostgresConnector (async) is wired separately in _make_resolver() via
+    async_connector_registry — it cannot be returned here because ConnectorBase
+    is a synchronous interface and PostgresConnector.fetch() is a coroutine.
     """
     return MockConnector(data={})
 
@@ -304,14 +311,69 @@ class ExecuteService:
 
         A new instance resets the request-scoped primitive cache so separate
         execute() calls do not share fetched primitive values.
+
+        When PRIMITIVE_DB_URL is set, wires a PostgresConnector for the canvas
+        database as 'postgres.canvas' in async_connector_registry, and registers
+        primitive_sources entries for credit_metrics primitives.  This is the
+        async path used by DataResolver.afetch() during aexecute_graph().
+
+        When PRIMITIVE_DB_URL is not set (tests), only MockConnector is used.
         """
-        async_registry = {}
+        import os
+
+        # Copy to avoid mutating the shared registry dict.
+        async_registry: dict = {}
         if self._connector_registry is not None:
-            async_registry = self._connector_registry._registry
+            async_registry = dict(self._connector_registry._registry)
+
+        primitive_sources = dict(self._primitive_sources)
+
+        db_url = os.environ.get("PRIMITIVE_DB_URL")
+        if db_url and "postgres.canvas" not in async_registry:
+            try:
+                from urllib.parse import urlparse
+                from app.connectors.postgres import PostgresConnector
+                from app.models.config import ConnectorConfig, PrimitiveSourceConfig
+
+                parsed = urlparse(db_url)
+                # model_construct bypasses the ${ENV_VAR} password validator so
+                # we can pass the resolved password directly from the URL.
+                config = ConnectorConfig.model_construct(
+                    type="postgres",
+                    host=parsed.hostname or "localhost",
+                    port=parsed.port or 5432,
+                    database=(parsed.path or "/").lstrip("/"),
+                    user=parsed.username or "",
+                    password=parsed.password or "",
+                    pool_min=2,
+                    pool_max=10,
+                    timeout_ms=10000,
+                    retry_max=3,
+                )
+                # Queries use :entity_id → $1 and :as_of → $2 (NULL = no time filter).
+                # Column is customer_id in credit_metrics (not entity_id).
+                _PRIM_QUERIES: dict[str, str] = {
+                    "payment.failure_rate_30d":    "SELECT emi_bounce_count::float / 30.0 FROM credit_metrics WHERE customer_id = :entity_id AND (:as_of::timestamptz IS NULL OR recorded_at <= :as_of::timestamptz) ORDER BY recorded_at DESC LIMIT 1",
+                    "customer.credit_utilisation": "SELECT credit_utilisation FROM credit_metrics WHERE customer_id = :entity_id AND (:as_of::timestamptz IS NULL OR recorded_at <= :as_of::timestamptz) ORDER BY recorded_at DESC LIMIT 1",
+                    "customer.days_past_due":      "SELECT days_past_due::float FROM credit_metrics WHERE customer_id = :entity_id AND (:as_of::timestamptz IS NULL OR recorded_at <= :as_of::timestamptz) ORDER BY recorded_at DESC LIMIT 1",
+                    "customer.emi_bounce_count":   "SELECT emi_bounce_count::float FROM credit_metrics WHERE customer_id = :entity_id AND (:as_of::timestamptz IS NULL OR recorded_at <= :as_of::timestamptz) ORDER BY recorded_at DESC LIMIT 1",
+                    "customer.missed_payment_count":"SELECT missed_payment_count::float FROM credit_metrics WHERE customer_id = :entity_id AND (:as_of::timestamptz IS NULL OR recorded_at <= :as_of::timestamptz) ORDER BY recorded_at DESC LIMIT 1",
+                    "customer.repayment_ratio":    "SELECT repayment_ratio FROM credit_metrics WHERE customer_id = :entity_id AND (:as_of::timestamptz IS NULL OR recorded_at <= :as_of::timestamptz) ORDER BY recorded_at DESC LIMIT 1",
+                }
+                prim_sources = {
+                    name: PrimitiveSourceConfig(connector="postgres.canvas", query=q)
+                    for name, q in _PRIM_QUERIES.items()
+                }
+                pg = PostgresConnector(config, prim_sources)
+                async_registry["postgres.canvas"] = pg
+                primitive_sources.update(prim_sources)
+            except Exception as exc:
+                log.warning("primitive_db_wiring_failed", error=str(exc))
+
         return DataResolver(
             connector=_make_connector(),
             backoff_base=0.0,
-            primitive_sources=self._primitive_sources,
+            primitive_sources=primitive_sources,
             async_connector_registry=async_registry,
         )
 
@@ -819,6 +881,7 @@ class ExecuteService:
                 actions_triggered=[],
                 reason=decision.reason,
                 history_count=decision.history_count,
+                concept_value=concept_result.value,
             ))
 
         log.info(

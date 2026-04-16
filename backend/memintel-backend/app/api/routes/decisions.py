@@ -104,7 +104,10 @@ async def get_explanation_service(
     config = getattr(request.app.state, "config", None)
     primitive_sources = {}
     if config is not None and config.primitive_sources:
-        primitive_sources = config.primitive_sources
+        primitive_sources = dict(config.primitive_sources)
+    dynamic = getattr(request.app.state, "dynamic_primitive_sources", None)
+    if dynamic:
+        primitive_sources.update(dynamic)
     async_registry = {}
     if connector_registry is not None:
         async_registry = connector_registry._registry

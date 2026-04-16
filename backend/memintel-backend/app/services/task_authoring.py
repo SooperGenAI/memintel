@@ -442,6 +442,10 @@ class TaskAuthoringService:
         _direction   = str(getattr(_params, "direction", None) or "")
         _direction   = _direction.value if hasattr(_direction, "value") else _direction or None
         _threshold   = getattr(_params, "value", None) or getattr(_params, "threshold", None)
+        try:
+            _threshold_float = float(_threshold) if _threshold is not None else None
+        except (TypeError, ValueError):
+            _threshold_float = None  # equals/categorical strategies have non-numeric values
         yield ReasoningStep(
             step_index=3,
             label="Condition Strategy",
@@ -449,7 +453,7 @@ class TaskAuthoringService:
             outcome="accepted",
             strategy_type=_strat_type,
             direction=_direction,
-            threshold=float(_threshold) if _threshold is not None else None,
+            threshold=_threshold_float,
         )
 
         # ── Step 4: Action Binding (guardrails + persist) ──────────────────────

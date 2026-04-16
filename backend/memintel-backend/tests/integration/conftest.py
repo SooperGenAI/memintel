@@ -33,7 +33,8 @@ import os
 import subprocess
 
 # ── V7 shared mock fixtures (LLMMockClient, loan fixtures) ────────────────────
-pytest_plugins = ["tests.integration.conftest_v7"]
+# NOTE: pytest_plugins moved to root conftest.py (non-top-level declarations
+# are deprecated in pytest and affect the entire test suite unexpectedly).
 
 import asyncpg
 import pytest

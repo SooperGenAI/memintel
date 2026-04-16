@@ -293,6 +293,9 @@ class DecisionResult(BaseModel):
       "no_match"             — equals strategy: result label did not match target.
     history_count reflects how many historical results were found (0 if the
     query failed). Set only when reason is also set.
+    concept_value is the raw numeric output of the concept (ψ layer) at the
+    time of condition evaluation. Populated when the concept produces a scalar
+    value. None for boolean concepts or when the value is unavailable.
     """
     value: bool | str | None
     type: DecisionType
@@ -303,6 +306,7 @@ class DecisionResult(BaseModel):
     actions_triggered: list[ActionTriggered] = Field(default_factory=list)
     reason: str | None = None
     history_count: int | None = None
+    concept_value: float | int | bool | str | None = None
 
 
 class FullPipelineResult(BaseModel):

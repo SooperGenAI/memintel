@@ -201,6 +201,28 @@ def _build_system_prompt(context: dict[str, Any]) -> str:
     return "\n\n".join(parts)
 
 
+# ── Semantic refine system prompt ─────────────────────────────────────────────
+
+_SEMANTIC_REFINE_INSTRUCTIONS = """\
+You are a definition refinement assistant for the Memintel platform.
+
+Given an existing definition body (concept, condition, or action) and a
+refinement instruction, produce a revised definition and a list of changes.
+
+Return a JSON object with exactly three top-level keys:
+  "proposed" — the full revised definition body (same structure as the input).
+  "changes"  — a JSON array of change records. Each record must have:
+                  "field":  the field or section that changed (string)
+                  "from":   brief description of the old value (string)
+                  "to":     brief description of the new value (string)
+                  "reason": why the change was made (string)
+  "breaking" — true if the revision changes the output type, removes required
+               fields, or is otherwise backwards-incompatible; false otherwise.
+
+Output only the JSON object — no markdown fences, no commentary.
+"""
+
+
 # ── Compile step system prompt ─────────────────────────────────────────────────
 
 _COMPILE_STEP_INSTRUCTIONS = """\
@@ -592,4 +614,95 @@ class AnthropicClient(LLMClientBase):
             )
 
         log.info("anthropic_compile_step_ok", model=self._model, step=step)
+        return result
+
+    def generate_semantic_refine(
+        self, definition_body: dict, instruction: str, context: dict
+    ) -> dict:
+        """
+        Refine an existing definition body according to a natural language instruction.
+
+        Parameters
+        ----------
+        definition_body:
+            The current definition (concept, condition, or action) as a dict.
+        instruction:
+            Natural language instruction describing the desired refinement.
+        context:
+            Additional context dict (currently unused; reserved for future use).
+
+        Returns
+        -------
+        dict
+            Keys: ``proposed`` (dict), ``changes`` (list), ``breaking`` (bool).
+
+        Raises
+        ------
+        LLMError
+            On Anthropic API failure, invalid JSON, or missing required keys.
+        """
+        definition_json = json.dumps(definition_body, indent=2)
+        user_message = (
+            f"Refine the following definition according to the instruction.\n\n"
+            f"Instruction: {instruction}\n\n"
+            f"Current definition:\n{definition_json}"
+        )
+
+        log.info("anthropic_semantic_refine_request", model=self._model)
+
+        try:
+            message = self._client.messages.create(
+                model=self._model,
+                max_tokens=2048,
+                temperature=0,
+                system=_SEMANTIC_REFINE_INSTRUCTIONS,
+                messages=[{"role": "user", "content": user_message}],
+            )
+        except self._anthropic.APIError as exc:
+            raise LLMError(f"Anthropic API error in semantic_refine: {exc}") from exc
+        except Exception as exc:
+            raise LLMError(f"Unexpected error in semantic_refine: {exc}") from exc
+
+        raw_text = ""
+        for block in message.content:
+            if hasattr(block, "text"):
+                raw_text += block.text
+
+        raw_text = raw_text.strip()
+
+        if raw_text.startswith("```"):
+            lines = raw_text.splitlines()
+            inner = []
+            in_block = False
+            for line in lines:
+                if line.startswith("```") and not in_block:
+                    in_block = True
+                    continue
+                if line.startswith("```") and in_block:
+                    break
+                if in_block:
+                    inner.append(line)
+            raw_text = "\n".join(inner).strip()
+
+        try:
+            result = json.loads(raw_text)
+        except json.JSONDecodeError as exc:
+            raise LLMError(
+                f"semantic_refine: response is not valid JSON: {exc}. "
+                f"Raw (first 500 chars): {raw_text[:500]!r}"
+            ) from exc
+
+        if not isinstance(result, dict):
+            raise LLMError(
+                f"semantic_refine: response must be a JSON object; "
+                f"got {type(result).__name__}"
+            )
+
+        for key in ("proposed", "changes", "breaking"):
+            if key not in result:
+                raise LLMError(
+                    f"semantic_refine: response missing required key '{key}'."
+                )
+
+        log.info("anthropic_semantic_refine_ok", model=self._model)
         return result

@@ -67,6 +67,7 @@ from app.models.task import (
     TaskUpdateRequest,
 )
 from app.models.decision import DecisionRecord
+from app.llm.fixtures import LLMFixtureClient
 from app.registry.definitions import DefinitionRegistry
 from app.services.calibration import CalibrationService
 from app.services.feedback import FeedbackService
@@ -696,6 +697,7 @@ def _make_services(
     task_svc = TaskAuthoringService(
         task_store=task_store,
         definition_registry=registry,
+        llm_client=LLMFixtureClient(),
     )
     fb_svc = FeedbackService(
         feedback_store=fb_store,

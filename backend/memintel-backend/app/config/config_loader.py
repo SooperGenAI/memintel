@@ -84,9 +84,13 @@ class ConfigLoader:
         Steps:
           1. Reject .md paths immediately (format no longer supported).
           2. Read and parse the YAML file directly.
-          3. Validate parsed dict against ConfigSchema (raises ConfigError on failure).
-          4. Resolve all ${ENV_VAR} references (raises ConfigError if any unset).
-          5. Return the fully resolved, validated ConfigSchema.
+          3. Scan client primitive yaml files and deep-merge any primitives: and
+             primitive_sources: blocks found into the base dict. Directory is
+             resolved from CLIENT_CONFIG_DIR env var, falling back to
+             config/clients/ relative to the config file. Missing dir is skipped.
+          4. Validate merged dict against ConfigSchema (raises ConfigError on failure).
+          5. Resolve all ${ENV_VAR} references (raises ConfigError if any unset).
+          6. Return the fully resolved, validated ConfigSchema.
 
         Raises ConfigError if the file has a .md extension, is missing,
         malformed, schema-invalid, or references an unset environment variable.
@@ -113,6 +117,10 @@ class ConfigLoader:
 
         if not isinstance(raw, dict):
             raise ConfigError("Config file must contain a YAML mapping at the top level.")
+
+        # Merge per-client primitive configs before validation so that cross-reference
+        # checks (primitive → connector) see the full merged set in one pass.
+        raw = self._merge_client_configs(raw, config_path)
 
         return self._validate_and_resolve(raw)
 
@@ -184,6 +192,65 @@ class ConfigLoader:
         return guardrails
 
     # ── Internal helpers ────────────────────────────────────────────────────────
+
+    def _merge_client_configs(self, raw: dict, config_path: str) -> dict:
+        """
+        Scan client primitive yaml files and append any primitives: and
+        primitive_sources: entries found into raw.
+
+        The directory to scan is resolved in this order:
+          1. CLIENT_CONFIG_DIR environment variable (absolute path to a folder).
+          2. Fallback: <config_dir>/config/clients/ relative to the config file.
+
+        Rules:
+          - Missing or empty directory → log and return raw unchanged.
+          - Files are processed in sorted order for deterministic merging.
+          - Only primitives: (list) and primitive_sources: (dict) keys are merged;
+            all other keys in client files are ignored.
+          - Duplicate primitive names across client files will be caught later by
+            ConfigSchema._validate_unique_names.
+
+        Raises ConfigError if a client file cannot be read or is not valid YAML.
+        """
+        client_dir_env = os.environ.get("CLIENT_CONFIG_DIR")
+        if client_dir_env:
+            clients_dir = Path(client_dir_env)
+        else:
+            clients_dir = Path(config_path).parent / "config" / "clients"
+
+        if not clients_dir.is_dir():
+            log.info("no_client_config_dir path=%s", str(clients_dir))
+            return raw
+
+        for client_file in sorted(clients_dir.glob("*.yaml")):
+            try:
+                text = client_file.read_text(encoding="utf-8")
+            except OSError as e:
+                raise ConfigError(
+                    f"Cannot read client config '{client_file}': {e}"
+                ) from e
+
+            try:
+                client_raw = yaml.safe_load(text) or {}
+            except yaml.YAMLError as e:
+                raise ConfigError(
+                    f"YAML parse error in client config '{client_file}': {e}"
+                ) from e
+
+            if not isinstance(client_raw, dict):
+                continue
+
+            if "primitives" in client_raw:
+                if not isinstance(raw.get("primitives"), list):
+                    raw["primitives"] = []
+                raw["primitives"].extend(client_raw["primitives"])
+
+            if "primitive_sources" in client_raw:
+                if not isinstance(raw.get("primitive_sources"), dict):
+                    raw["primitive_sources"] = {}
+                raw["primitive_sources"].update(client_raw["primitive_sources"])
+
+        return raw
 
     def _validate_and_resolve(self, raw: dict) -> ConfigSchema:
         """Schema-validate, then resolve env vars, then re-validate."""

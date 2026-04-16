@@ -128,7 +128,7 @@ class PrimitiveResponse(BaseModel):
     connector_name: str | None
     query: str | None
     json_path: str | None
-    created_at: datetime
+    created_at: datetime | None = None  # absent for yaml-loaded primitives
 
 
 # ── Internal helpers shared with main.py ──────────────────────────────────────
@@ -428,14 +428,36 @@ async def register_primitive(
     status_code=status.HTTP_200_OK,
 )
 async def list_primitives(
-    pool: asyncpg.Pool = Depends(get_db),
+    request: Request,
     _: None = Depends(require_api_key),
 ) -> list[PrimitiveResponse]:
     """
-    List all dynamically registered primitives.
+    List all primitives available at runtime — yaml-loaded (from
+    memintel_config.yaml or CLIENT_CONFIG_DIR) and dynamically registered
+    via POST /v1/primitives.
+
+    Reads from the in-memory PrimitiveRegistry on app.state, which is
+    populated at startup and is the authoritative source in demo mode
+    (CLIENT_CONFIG_DIR set). Does not query the registered_primitives DB
+    table, so it is fast and works correctly when no DB primitives exist.
     """
-    rows = await DynamicRegistryStore(pool).list_primitives()
-    return [PrimitiveResponse(**r) for r in rows]
+    registry = getattr(request.app.state, "primitive_registry", None)
+    if registry is None:
+        return []
+
+    dynamic_sources = getattr(request.app.state, "dynamic_primitive_sources", None) or {}
+    result = []
+    for prim in registry.list_all():
+        src = dynamic_sources.get(prim.name)
+        result.append(PrimitiveResponse(
+            name=prim.name,
+            primitive_type=prim.type,
+            connector_name=src.connector if src else None,
+            query=src.query if src else None,
+            json_path=src.json_path if src else None,
+            created_at=None,
+        ))
+    return result
 
 
 # ── DELETE /v1/primitives/{name} ──────────────────────────────────────────────

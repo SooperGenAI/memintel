@@ -278,8 +278,8 @@ def app_client(_database_setup):
     try:
         with TestClient(app, raise_server_exceptions=True) as client:
             yield client, app
-    except RuntimeError as exc:
-        if "Cannot connect" in str(exc):
+    except (RuntimeError, TimeoutError) as exc:
+        if isinstance(exc, TimeoutError) or "Cannot connect" in str(exc):
             pytest.skip(f"Test database unavailable: {exc}")
             return
         raise
