@@ -350,7 +350,8 @@ class DataResolver:
         backoff_base: float = _BACKOFF_BASE,
         primitive_sources: dict[str, PrimitiveSourceConfig] | None = None,
         connector_registry: dict[str, ConnectorBase] | None = None,
-        async_connector_registry: dict[str, Any] | None = None,   # NEW: async connectors
+        async_connector_registry: dict[str, Any] | None = None,
+        org_id: str | None = None,
     ) -> None:
         self._connector = connector
         self._default_policy = missing_policy
@@ -359,6 +360,9 @@ class DataResolver:
         self._primitive_sources: dict[str, PrimitiveSourceConfig] = primitive_sources or {}
         self._connector_registry: dict[str, ConnectorBase] = connector_registry or {}
         self._async_connector_registry: dict[str, Any] = async_connector_registry or {}
+        # Tenant scope — passed to PostgresConnector.fetch() as org_id so it can
+        # resolve account_id for :account_id SQL placeholders.
+        self._org_id: str | None = org_id
         # Request-scoped cache: dict keyed by (primitive_name, entity_id, timestamp).
         # Discarded when the DataResolver instance goes out of scope.
         self._cache: dict[tuple[str, str, str | None], PrimitiveValue] = {}
@@ -555,7 +559,7 @@ class DataResolver:
             async_conn = self._async_connector_registry.get(source.connector)
             if async_conn is not None:
                 try:
-                    pv = await async_conn.fetch(primitive_name, entity_id, timestamp)
+                    pv = await async_conn.fetch(primitive_name, entity_id, timestamp, org_id=self._org_id)
                     if pv.value is None:
                         resolved = await self._aapply_fill_policy(
                             primitive_name, entity_id, timestamp, effective_policy, async_conn

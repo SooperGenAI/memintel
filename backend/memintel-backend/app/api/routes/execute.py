@@ -178,6 +178,9 @@ async def get_execute_service(
     Injects connector_registry and primitive_sources from app.state when
     available so real data connectors (Postgres, REST) are used on the
     execution path.
+
+    X-Org-ID is forwarded to the service so PostgresConnector can resolve
+    :account_id placeholders for tenant-isolated SQL queries.
     """
     connector_registry = getattr(request.app.state, "connector_registry", None)
     config = getattr(request.app.state, "config", None)
@@ -188,10 +191,12 @@ async def get_execute_service(
     dynamic = getattr(request.app.state, "dynamic_primitive_sources", None)
     if dynamic:
         primitive_sources.update(dynamic)
+    org_id = request.headers.get("x-org-id")
     return ExecuteService(
         pool=pool,
         connector_registry=connector_registry,
         primitive_sources=primitive_sources,
+        org_id=org_id,
     )
 
 

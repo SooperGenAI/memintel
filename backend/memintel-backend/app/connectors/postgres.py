@@ -50,9 +50,15 @@ def _resolve_env_var_str(value: str) -> str:
 
 
 def _translate_placeholders(query: str) -> str:
-    """Translate :entity_id → $1 and :as_of → $2 for asyncpg positional params."""
+    """Translate named placeholders to asyncpg positional params.
+
+    :entity_id  → $1
+    :as_of      → $2
+    :account_id → $3  (tenant isolation filter; value sourced from org_id at fetch time)
+    """
     query = query.replace(':entity_id', '$1')
     query = query.replace(':as_of', '$2')
+    query = query.replace(':account_id', '$3')
     return query
 
 
@@ -84,6 +90,9 @@ class PostgresConnector:
         self._pool_max = max(1, config.pool_max)
         self._primitive_sources = primitive_sources
         self._pool: asyncpg.Pool | None = None
+        # Per-instance cache: org_id (e.g. "canvas-org-001") → account_id UUID string.
+        # Avoids a DB round-trip on every primitive fetch for the same org.
+        self._org_account_cache: dict[str, str] = {}
 
     async def connect(self) -> None:
         """
@@ -110,19 +119,49 @@ class PostgresConnector:
         if self._pool is None:
             await self.connect()
 
+    async def _resolve_account_id(self, org_id: str | None) -> str | None:
+        """Look up account_id from the organisations table for a given org_id.
+
+        Result is cached per connector instance to avoid repeated DB round-trips.
+        Returns None when org_id is absent or the lookup fails.
+        """
+        if not org_id:
+            return None
+        if org_id in self._org_account_cache:
+            return self._org_account_cache[org_id]
+        try:
+            await self._ensure_connected()
+            row = await self._pool.fetchrow(  # type: ignore[union-attr]
+                "SELECT account_id::text FROM organisations WHERE org_id = $1 LIMIT 1",
+                org_id,
+            )
+            if row:
+                account_id = str(row["account_id"])
+                self._org_account_cache[org_id] = account_id
+                return account_id
+        except Exception as exc:
+            log.warning(
+                "postgres_connector_account_id_lookup_failed org_id=%s error=%s",
+                org_id, str(exc),
+            )
+        return None
+
     async def fetch(
         self,
         primitive_name: str,
         entity_id: str,
         timestamp: str | None,
+        org_id: str | None = None,
     ) -> PrimitiveValue:
         """
         Fetch the point-in-time value of primitive_name for entity_id.
 
-        Translates :entity_id → $1 and :as_of → $2 in the configured SQL query.
+        Translates :entity_id → $1, :as_of → $2, :account_id → $3.
+        When the query uses :account_id, org_id is resolved to account_id via the
+        organisations table and passed as $3. This enforces tenant isolation.
+
         Returns PrimitiveValue(value=None) when the query returns no rows.
-        Returns PrimitiveValue(value=row[0]) for single and multi-row results;
-        logs a warning when multiple rows are returned.
+        Logs a warning when multiple rows are returned.
 
         Raises ConnectorError when:
           - primitive_name has no configured query in primitive_sources
@@ -134,10 +173,15 @@ class PostgresConnector:
 
         await self._ensure_connected()
 
+        needs_account_id = ':account_id' in source.query
         query = _translate_placeholders(source.query)
 
         try:
-            rows = await self._pool.fetch(query, entity_id, timestamp)  # type: ignore[union-attr]
+            if needs_account_id:
+                account_id = await self._resolve_account_id(org_id)
+                rows = await self._pool.fetch(query, entity_id, timestamp, account_id)  # type: ignore[union-attr]
+            else:
+                rows = await self._pool.fetch(query, entity_id, timestamp)  # type: ignore[union-attr]
         except Exception as exc:
             raise ConnectorError(str(exc)) from exc
 

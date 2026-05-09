@@ -131,6 +131,31 @@ class CompileConceptResponse(BaseModel):
     expires_at:       datetime                    # UTC
 
 
+# ── Direct-register request (no compile step) ─────────────────────────────────
+
+class RegisterDirectConceptRequest(BaseModel):
+    """
+    Request body for POST /concepts/register-direct.
+
+    Registers a concept without the two-phase compile/token flow.
+    Used by deterministic callers (e.g. Agent Builder assembler) that already
+    know the primitive mapping and don't need LLM-assisted compilation.
+
+    identifier          — unique concept name (dot notation: entity.metric_name)
+    description         — plain-English definition of what the concept measures
+    output_type         — Memintel type string (e.g. "float")
+    signal_name         — primitive name to bind as the primary signal
+    signal_type         — type of the primitive (e.g. "float")
+    missing_data_policy — how to handle missing data ("zero", "skip", "error")
+    """
+    identifier:          str
+    description:         str
+    output_type:         str
+    signal_name:         str
+    signal_type:         str = "float"
+    missing_data_policy: str = "zero"
+
+
 # ── Phase 2 request / response ────────────────────────────────────────────────
 
 class RegisterConceptRequest(BaseModel):

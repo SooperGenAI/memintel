@@ -192,6 +192,7 @@ class ExecuteService:
         pool: asyncpg.Pool,
         connector_registry: Any = None,
         primitive_sources: dict | None = None,
+        org_id: str | None = None,
     ) -> None:
         self._pool = pool
         # Shared in-memory result cache — deterministic results survive across
@@ -201,6 +202,9 @@ class ExecuteService:
         self._result_store = ConceptResultStore(pool)
         self._connector_registry = connector_registry  # ConnectorRegistry or None
         self._primitive_sources = primitive_sources or {}
+        # org_id (from X-Org-ID request header) is threaded to the DataResolver so
+        # PostgresConnector can resolve :account_id for tenant-scoped SQL queries.
+        self._org_id = org_id
 
     # ── DB helpers ─────────────────────────────────────────────────────────────
 
@@ -375,6 +379,7 @@ class ExecuteService:
             backoff_base=0.0,
             primitive_sources=primitive_sources,
             async_connector_registry=async_registry,
+            org_id=self._org_id,
         )
 
     async def _store_concept_result(

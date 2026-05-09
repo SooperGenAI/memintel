@@ -48,6 +48,7 @@ main.py — routes do not catch them.
 """
 from __future__ import annotations
 
+import hashlib
 import structlog
 import asyncpg
 
@@ -61,8 +62,9 @@ from app.models.concept_compile import (
     CompileConceptResponse,
     RegisterConceptRequest,
     RegisterConceptResponse,
+    RegisterDirectConceptRequest,
 )
-from app.models.errors import ErrorType, MemintelError
+from app.models.errors import ConflictError, ErrorType, MemintelError
 from app.persistence.db import get_db
 from app.services.concept_compiler import ConceptCompilerService
 from app.services.concept_registration import ConceptRegistrationService
@@ -195,6 +197,96 @@ async def register_concept(
         identifier=req.identifier,
     )
     return await service.register(req, pool)
+
+
+# ── POST /concepts/register-direct ───────────────────────────────────────────
+
+_DIRECT_VERSION = "1.0.0"
+
+
+@router.post(
+    "/register-direct",
+    summary="Register a concept directly (no LLM compile step)",
+    response_model=RegisterConceptResponse,
+    status_code=201,
+)
+async def register_concept_direct(
+    req: RegisterDirectConceptRequest,
+    pool: asyncpg.Pool = Depends(get_db),
+    _: None = Depends(require_api_key),
+) -> RegisterConceptResponse:
+    """
+    Register a concept without the two-phase compile/token flow.
+
+    For deterministic callers that already know the primitive mapping.
+    The concept is stored immediately with version "1.0.0".
+
+    Idempotent: same (identifier, ir_hash) → HTTP 201 with same concept_id.
+    Different ir_hash for an existing identifier → HTTP 409 (conflict).
+
+    HTTP 201 — concept registered (or idempotent re-registration).
+    HTTP 409 — identifier already registered with different content.
+    HTTP 500 — internal_error.
+    """
+    log.info("register_concept_direct_request", identifier=req.identifier)
+
+    ir_hash = hashlib.sha256(
+        f"{req.identifier}|{req.description}|{req.output_type}|{req.signal_name}".encode()
+    ).hexdigest()
+
+    # Build the full ConceptDefinition body that _fetch_concept / evaluate expects.
+    # Pattern mirrors existing pre-built concepts: primitive declared in primitives dict,
+    # single z_score_op feature node as the output (z_score_op is identity at eval time).
+    body = {
+        "concept_id":    req.identifier,
+        "version":       _DIRECT_VERSION,
+        "namespace":     "personal",
+        "output_type":   req.output_type,
+        "description":   req.description,
+        "primitives": {
+            req.signal_name: {
+                "type":                req.signal_type,
+                "missing_data_policy": req.missing_data_policy,
+            },
+        },
+        "features": {
+            "score": {
+                "op":     "z_score_op",
+                "inputs": {"input": req.signal_name},
+                "params": {},
+            },
+        },
+        "output_feature": "score",
+    }
+
+    store = DefinitionStore(pool)
+    try:
+        defn = await store.register(
+            definition_id=req.identifier,
+            version=_DIRECT_VERSION,
+            definition_type="concept",
+            namespace="personal",
+            body=body,
+            ir_hash=ir_hash,
+        )
+        return RegisterConceptResponse(
+            concept_id=req.identifier,
+            identifier=req.identifier,
+            version=defn.version,
+            output_type=req.output_type,
+            registered_at=defn.created_at,
+        )
+    except ConflictError:
+        existing = await store.get_metadata(req.identifier, _DIRECT_VERSION)
+        if existing and existing.ir_hash == ir_hash:
+            return RegisterConceptResponse(
+                concept_id=req.identifier,
+                identifier=req.identifier,
+                version=existing.version,
+                output_type=req.output_type,
+                registered_at=existing.created_at,
+            )
+        raise
 
 
 # ── GET /concepts/{identifier} ────────────────────────────────────────────────

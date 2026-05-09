@@ -35,18 +35,25 @@ main.py — routes do not catch them here.
 """
 from __future__ import annotations
 
+from typing import Any
+
 import structlog
 
 import asyncpg
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from app.api.deps import require_api_key
 from app.api.routes.utils import sse_generator
-from app.models.errors import NotFoundError
+from app.models.action import ActionConfig, ActionDefinition, FireOn, TriggerConfig
+from app.models.condition import ConditionDefinition, StrategyDefinition
+from app.models.errors import ConflictError, MemintelError, ErrorType, NotFoundError
 from app.models.task import (
     CreateTaskRequest,
+    DeliveryConfig,
+    Namespace,
     Task,
     TaskList,
     TaskStatus,
@@ -149,6 +156,182 @@ async def create_task(
     result = await service.create_task(req)
     return JSONResponse(
         content=jsonable_encoder(result, exclude_none=True),
+        status_code=200,
+    )
+
+
+# ── POST /tasks/direct ────────────────────────────────────────────────────────
+
+class _DirectConditionInput(BaseModel):
+    id: str
+    strategy: str
+    params: dict[str, Any]
+
+
+class _DirectActionInput(BaseModel):
+    id: str
+    type: str
+    channel: str | None = None
+    endpoint: str | None = None
+    workflow_id: str | None = None
+    primitive_id: str | None = None
+
+
+class CreateDirectTaskRequest(BaseModel):
+    intent: str
+    entity_scope: str
+    concept_id: str
+    concept_version: str
+    condition: _DirectConditionInput
+    action: _DirectActionInput
+    delivery: DeliveryConfig
+
+
+async def _get_direct_stores(
+    pool: asyncpg.Pool = Depends(get_db),
+) -> tuple[TaskStore, DefinitionStore]:
+    return TaskStore(pool), DefinitionStore(pool)
+
+
+_strategy_ta: TypeAdapter[StrategyDefinition] = TypeAdapter(StrategyDefinition)
+_action_config_ta: TypeAdapter[ActionConfig] = TypeAdapter(ActionConfig)
+
+
+@router.post(
+    "/direct",
+    summary="Create a task from fully pre-defined definitions (no LLM)",
+    response_model=None,
+    status_code=200,
+)
+async def create_direct_task(
+    req: CreateDirectTaskRequest,
+    stores: tuple[TaskStore, DefinitionStore] = Depends(_get_direct_stores),
+) -> JSONResponse:
+    """
+    Register condition + action definitions verbatim and create a task — no LLM.
+
+    Use this when concept, condition strategy, and action are already fully
+    defined (e.g. pre-seeded agents).  Idempotent: if a non-deleted task
+    already exists for the given condition_id, that task is returned unchanged.
+
+    HTTP 404 — concept_id + concept_version not found in the registry.
+    HTTP 400 — invalid strategy params or action config.
+    """
+    task_store, definition_store = stores
+
+    # 1. Validate concept exists in registry
+    concept_body = await definition_store.get(req.concept_id, req.concept_version)
+    if concept_body is None:
+        raise NotFoundError(
+            f"Concept '{req.concept_id}' version '{req.concept_version}' not found.",
+            location="concept_id",
+        )
+
+    # 2. Build and register condition definition (idempotent on ConflictError)
+    try:
+        strategy = _strategy_ta.validate_python(
+            {"type": req.condition.strategy, "params": req.condition.params}
+        )
+    except ValidationError as exc:
+        raise MemintelError(
+            ErrorType.PARAMETER_ERROR,
+            f"Invalid condition params for strategy '{req.condition.strategy}': "
+            f"{exc.errors()[0]['msg']}",
+            location="condition.params",
+        )
+
+    condition_def = ConditionDefinition(
+        condition_id=req.condition.id,
+        version="1.0",
+        concept_id=req.concept_id,
+        concept_version=req.concept_version,
+        strategy=strategy,
+        namespace=Namespace.PERSONAL,
+    )
+    try:
+        await definition_store.register(
+            definition_id=req.condition.id,
+            version="1.0",
+            definition_type="condition",
+            namespace=Namespace.PERSONAL.value,
+            body=condition_def.model_dump(mode="json"),
+        )
+    except ConflictError:
+        pass  # already registered; use existing
+
+    # 3. Build and register action definition (idempotent on ConflictError)
+    action_config_data: dict[str, Any] = {"type": req.action.type}
+    if req.action.channel is not None:
+        action_config_data["channel"] = req.action.channel
+    if req.action.endpoint:  # skip empty string
+        action_config_data["endpoint"] = req.action.endpoint
+    if req.action.workflow_id is not None:
+        action_config_data["workflow_id"] = req.action.workflow_id
+    if req.action.primitive_id is not None:
+        action_config_data["primitive_id"] = req.action.primitive_id
+
+    try:
+        action_config = _action_config_ta.validate_python(action_config_data)
+    except ValidationError as exc:
+        raise MemintelError(
+            ErrorType.PARAMETER_ERROR,
+            f"Invalid action config for type '{req.action.type}': "
+            f"{exc.errors()[0]['msg']}",
+            location="action",
+        )
+
+    action_def = ActionDefinition(
+        action_id=req.action.id,
+        version="1.0",
+        config=action_config,
+        trigger=TriggerConfig(
+            fire_on=FireOn.TRUE,
+            condition_id=req.condition.id,
+            condition_version="1.0",
+        ),
+        namespace=Namespace.PERSONAL,
+    )
+    try:
+        await definition_store.register(
+            definition_id=req.action.id,
+            version="1.0",
+            definition_type="action",
+            namespace=Namespace.PERSONAL.value,
+            body=action_def.model_dump(mode="json"),
+        )
+    except ConflictError:
+        pass  # already registered; use existing
+
+    # 4. Idempotency: return existing task if already created for this condition
+    existing = await task_store.find_by_condition_version(req.condition.id, "1.0")
+    if existing:
+        return JSONResponse(
+            content=jsonable_encoder(existing[0], exclude_none=True),
+            status_code=200,
+        )
+
+    # 5. Create and persist the task
+    task = Task(
+        intent=req.intent,
+        concept_id=req.concept_id,
+        concept_version=req.concept_version,
+        condition_id=req.condition.id,
+        condition_version="1.0",
+        action_id=req.action.id,
+        action_version="1.0",
+        entity_scope=req.entity_scope,
+        delivery=req.delivery,
+    )
+    persisted = await task_store.create(task)
+    log.info(
+        "create_direct_task",
+        task_id=persisted.task_id,
+        concept_id=req.concept_id,
+        condition_id=req.condition.id,
+        strategy=req.condition.strategy,
+    )
+    return JSONResponse(
+        content=jsonable_encoder(persisted, exclude_none=True),
         status_code=200,
     )
 
